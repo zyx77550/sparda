@@ -1,0 +1,608 @@
+# ============================================================
+# SPARDA ROUTER — Auto-generated. DO NOT EDIT.
+# Regenerate: npx sparda-mcp init   •   Remove: npx sparda-mcp remove
+# ============================================================
+from fastapi import APIRouter, Request, Response, HTTPException
+from fastapi.responses import JSONResponse
+import json
+import urllib.request
+import urllib.parse
+import concurrent.futures
+import re
+import asyncio
+import time
+import datetime
+import os
+import zlib
+import threading
+
+# json.loads, not a Python literal: JSON true/false/null are not valid Python (E-009)
+SPARDA_TOOLS = json.loads(__TOOLS_JSON__)
+SPARDA_POLICIES = json.loads(__SPARDING_POLICIES__)
+SPARDA_LOCAL_KEY = "__LOCAL_KEY__"
+SPARDA_PORT = __PORT__
+
+SPARDA_STATS = {}
+SPARDA_EVENTS = []
+SPARDA_SEQ = 0
+SPARDA_START = time.time()
+# immune system: tools that keep failing are quarantined so the AI can't hammer a broken route
+SPARDA_QUARANTINE = {}
+SPARDA_QUARANTINE_MS = int(os.environ.get("SPARDA_QUARANTINE_MS", "60000"))
+# recycling gauge: calls answered from SPARDA's own knowledge vs calls that paid the host route.
+# Day 1 it reads 0% — the circle fills with usage (a measure, never a promise).
+SPARDA_RECYCLE = {"servedByCircle": 0, "paidFull": 0}
+
+# two-phase commit: a write/delete flagged require_human is NOT executed on /invoke.
+# It mints a single-use nonce + a preview contract; the host route is touched only after
+# an explicit /invoke/confirm replays the token.
+SPARDA_PENDING = {}
+SPARDA_CONFIRM_TTL_MS = int(os.environ.get("SPARDA_CONFIRM_TTL_MS", "120000"))
+
+def sparda_nonce():
+    import base64
+    import uuid
+    return "cfm_" + base64.urlsafe_b64encode(uuid.uuid4().bytes).decode("ascii").rstrip("=")
+
+def sparda_sweep_pending():
+    now = time.time() * 1000
+    expired = [k for k, v in SPARDA_PENDING.items() if now > v["expiresAt"]]
+    for k in expired:
+        del SPARDA_PENDING[k]
+
+def sparda_recycle_rate():
+    total = SPARDA_RECYCLE["servedByCircle"] + SPARDA_RECYCLE["paidFull"]
+    return round(SPARDA_RECYCLE["servedByCircle"] * 100 / total) if total else 0
+
+# thermodynamic route classification: a GET whose repeated identical args keep
+# returning identical bodies is observed-pure (its result pre-exists — recyclable);
+# writes erase by definition. Observation only, never a guess.
+SPARDA_PURITY = {}
+
+def sparda_observe_purity(tool, argsig, body_bytes):
+    pu = SPARDA_PURITY.setdefault(tool, {"sigs": {}, "repeats": 0, "mismatches": 0})
+    # memoryview slice is zero-copy: crc32 reads the first 64KB in place, with no
+    # transient 64KB bytes copy per GET+200 (HFT technique 3, the one that fits the
+    # proxy router — same fingerprint, one fewer allocation on the response path).
+    h = zlib.crc32(memoryview(body_bytes)[:65536])  # a fingerprint, not a checksum of megabytes
+    known = pu["sigs"].get(argsig)
+    if known is None:
+        if len(pu["sigs"]) >= 20:  # bounded: enough sigs to judge
+            return
+        pu["sigs"][argsig] = h
+    elif known == h:
+        pu["repeats"] += 1
+    else:
+        pu["mismatches"] += 1
+        pu["sigs"][argsig] = h  # the latest real answer is the truth
+
+def sparda_purity_snapshot():
+    out = {}
+    for name, spec in SPARDA_TOOLS.items():
+        if spec.get("method") != "GET":
+            out[name] = {"class": "erasing", "repeats": 0, "mismatches": 0}
+            continue
+        pu = SPARDA_PURITY.get(name)
+        if not pu:
+            cls = "unknown"
+        elif pu["mismatches"] > 0:
+            cls = "volatile"
+        elif pu["repeats"] >= 3:
+            cls = "pure"
+        else:
+            cls = "unknown"
+        out[name] = {"class": cls, "repeats": pu["repeats"] if pu else 0, "mismatches": pu["mismatches"] if pu else 0}
+    return out
+
+# ── horizontal scale (Brief #2): Quorum Sensing × G-Map CRDT ──────────────────
+# Same mechanism as the Express router, Python side. N replicas gossip their grow-only
+# purity counts so a route observed-pure on ANY replica converges everywhere — no
+# coordinator, no store, stdlib only. Solo (no SPARDA_PEERS) starts no thread, costs
+# nothing. Merge = max() per counter (commutative/associative/idempotent). value-free:
+# only tool NAMES (already public via /tools) and integer counts cross the wire.
+SPARDA_PEERS = [p.strip().rstrip("/") for p in os.environ.get("SPARDA_PEERS", "").split(",") if p.strip().startswith("http")]
+try:
+    SPARDA_GOSSIP_INTERVAL = max(50, int(os.environ.get("SPARDA_GOSSIP_MS", "30000"))) / 1000.0
+except ValueError:
+    SPARDA_GOSSIP_INTERVAL = 30.0
+try:
+    SPARDA_GOSSIP_TIMEOUT = max(1, int(os.environ.get("SPARDA_GOSSIP_TIMEOUT_MS", "2000")) // 1000)
+except ValueError:
+    SPARDA_GOSSIP_TIMEOUT = 2
+
+def sparda_gossip_snapshot():
+    # per-tool {repeats, mismatches} — both monotonic, safe to max-merge.
+    # dict(SPARDA_PURITY) is an atomic C-level copy under the GIL: the push runs on a daemon
+    # thread while the event loop mutates SPARDA_PURITY, so we never iterate the live dict
+    # (that would risk "dictionary changed size during iteration"). The int reads are atomic.
+    return {name: {"repeats": pu["repeats"], "mismatches": pu["mismatches"]} for name, pu in dict(SPARDA_PURITY).items()}
+
+def sparda_merge_gossip(remote):
+    # max() per counter, ONLY for known tools (bounded; unknown/injected keys ignored).
+    # bool is a subclass of int in Python — reject it so a JSON `true` can't pose as a count.
+    if not isinstance(remote, dict):
+        return 0
+    merged = 0
+    for name, rv in remote.items():
+        if name not in SPARDA_TOOLS or not isinstance(rv, dict):
+            continue
+        r = rv.get("repeats")
+        m = rv.get("mismatches")
+        if not isinstance(r, int) or isinstance(r, bool) or r < 0:
+            continue
+        if not isinstance(m, int) or isinstance(m, bool) or m < 0:
+            continue
+        pu = SPARDA_PURITY.setdefault(name, {"sigs": {}, "repeats": 0, "mismatches": 0})
+        if r > pu["repeats"]:
+            pu["repeats"] = r          # grow-only: never shrinks on merge
+        if m > pu["mismatches"]:
+            pu["mismatches"] = m       # a mismatch anywhere → volatile everywhere (safe)
+        merged += 1
+    return merged
+
+def sparda_gossip_push():
+    # one round: push our snapshot to every peer. Fire-and-forget, off the request path.
+    if not SPARDA_PEERS:
+        return
+    payload = json.dumps(sparda_gossip_snapshot()).encode("utf-8")
+    for peer in SPARDA_PEERS:
+        try:
+            req = urllib.request.Request(
+                peer + "/mcp/gossip",
+                data=payload,
+                headers={"content-type": "application/json", "x-sparda-key": SPARDA_LOCAL_KEY},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=SPARDA_GOSSIP_TIMEOUT).close()
+        except Exception:
+            pass  # peer down → silence; the next tick retries (eventual convergence)
+
+def _sparda_gossip_loop():
+    while True:
+        time.sleep(SPARDA_GOSSIP_INTERVAL)
+        sparda_gossip_push()
+
+def sparda_event(source, tool, status, message):
+    global SPARDA_SEQ
+    SPARDA_SEQ += 1
+    SPARDA_EVENTS.append({
+        "seq": SPARDA_SEQ,
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "source": source, "tool": tool, "status": status,
+        "message": str(message or "")[:500],
+    })
+    if len(SPARDA_EVENTS) > 100:
+        SPARDA_EVENTS.pop(0)
+
+def sparda_record(tool, status, ms):
+    st = SPARDA_STATS.setdefault(tool, {"calls": 0, "errors": 0, "clientErrors": 0, "totalMs": 0, "lastStatus": None, "lastTs": None, "consecutive5xx": 0})
+    # innate immunity: latency far beyond the learned baseline is an antigen
+    if st["calls"] >= 5 and ms > max((st["totalMs"] / st["calls"]) * 10, 200):
+        sparda_event("immune", tool, status, f"latency anomaly: {ms}ms vs ~{round(st['totalMs'] / st['calls'])}ms baseline")
+    st["calls"] += 1
+    st["totalMs"] += ms
+    # 5xx = server failure (feeds the immune system); 4xx = a valid client answer (404 etc), tracked apart so the count doesn't lie
+    if status >= 500:
+        st["errors"] += 1
+    elif status >= 400:
+        st["clientErrors"] += 1
+    st["lastStatus"] = status
+    st["lastTs"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if status >= 500:
+        st["consecutive5xx"] = st.get("consecutive5xx", 0) + 1
+    elif status < 400:
+        st["consecutive5xx"] = 0
+    if st.get("consecutive5xx", 0) >= 3 and tool not in SPARDA_QUARANTINE:
+        SPARDA_QUARANTINE[tool] = {
+            "since": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "until": time.time() * 1000 + SPARDA_QUARANTINE_MS,
+            "reason": f"{st['consecutive5xx']} consecutive 5xx",
+        }
+        sparda_event("immune", tool, 503, f"quarantined after {st['consecutive5xx']} consecutive 5xx (cooldown {SPARDA_QUARANTINE_MS}ms)")
+
+def sparda_proof(tool, spec, args):
+    checks = {
+        "knownTool": spec is not None,
+        "enabled": spec.get("enabled", False) if spec else False,
+        "loopSafe": not spec.get("path", "").startswith("/mcp") if spec else False,
+        "methodClass": "read" if spec and spec.get("method") == "GET" else "write",
+        "pathParamsPresent": True,
+        "hasBodyForWrite": True,
+        "reversibleHint": False,
+        "quarantineSafe": True,
+    }
+
+    reasons = []
+
+    if not checks["knownTool"]:
+        reasons.append("unknown tool")
+        return {
+            "version": "sparding-proof/v0.1",
+            "risk": "blocked",
+            "decision": "block",
+            "reasons": reasons,
+            "checks": checks,
+        }
+
+    if not checks["enabled"]:
+        reasons.append("tool disabled (write-safety)")
+    if not checks["loopSafe"]:
+        reasons.append("self-referential tool blocked (loop protection)")
+
+    quarantined = SPARDA_QUARANTINE.get(tool)
+    if quarantined:
+        if (time.time() * 1000) < quarantined["until"]:
+            checks["quarantineSafe"] = False
+            reasons.append(f"tool quarantined (immune system): {quarantined['reason']}")
+        else:
+            del SPARDA_QUARANTINE[tool]
+            if tool in SPARDA_STATS:
+                SPARDA_STATS[tool]["consecutive5xx"] = 2
+
+    for name in spec.get("pathParams", []):
+        if args.get(name) is None:
+            checks["pathParamsPresent"] = False
+            reasons.append(f"missing path param: {name}")
+
+    if checks["methodClass"] == "write":
+        if args.get("body") is None:
+            checks["hasBodyForWrite"] = False
+
+    if spec.get("method") == "GET":
+        checks["reversibleHint"] = True
+    else:
+        checks["reversibleHint"] = any(t.get("method") == "GET" and t.get("path") == spec.get("path") for t in SPARDA_TOOLS.values())
+
+    risk = "low"
+    decision = "allow"
+
+    if not checks["enabled"] or not checks["loopSafe"] or not checks["quarantineSafe"] or not checks["pathParamsPresent"]:
+        decision = "block"
+        risk = "blocked"
+        return {
+            "version": "sparding-proof/v0.1",
+            "risk": risk,
+            "decision": decision,
+            "reasons": reasons,
+            "checks": checks,
+        }
+
+    policies = SPARDA_POLICIES or {}
+    if checks["methodClass"] == "read":
+        read_policy = policies.get("reads", "allow")
+        if read_policy == "block":
+            decision = "block"
+            risk = "blocked"
+            reasons.append("read policy blocks execution")
+        elif read_policy == "require_human":
+            decision = "require_human"
+            risk = "medium"
+            reasons.append("read policy requires human confirmation")
+    else:
+        is_delete = spec.get("method") == "DELETE"
+        delete_policy = policies.get("deletes", "block")
+        write_policy = policies.get("writes", "require_human")
+
+        if is_delete and delete_policy == "block":
+            decision = "block"
+            risk = "blocked"
+            reasons.append("delete policy blocks execution")
+        elif is_delete and delete_policy == "require_human":
+            decision = "require_human"
+            risk = "high"
+            reasons.append("delete operation requires human confirmation")
+        elif is_delete and delete_policy == "allow":
+            decision = "allow"
+            risk = "low"
+        elif write_policy == "block":
+            decision = "block"
+            risk = "blocked"
+            reasons.append("write policy blocks execution")
+        elif write_policy == "require_human":
+            decision = "require_human"
+            risk = "medium"
+            reasons.append("write operation requires human confirmation")
+        else:
+            decision = "allow"
+            risk = "low"
+
+    return {
+        "version": "sparding-proof/v0.1",
+        "risk": risk,
+        "decision": decision,
+        "reasons": reasons,
+        "checks": checks,
+    }
+
+sparda_router = APIRouter()
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+def sync_fetch(url, method, headers, body_bytes):
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            status = response.status
+            content_type = response.headers.get("content-type", "")
+            data = response.read()
+            return status, content_type, data
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("content-type", ""), e.read()
+    except Exception as e:
+        raise e
+
+@sparda_router.get("/tools")
+async def get_tools(request: Request):
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    return SPARDA_TOOLS
+
+@sparda_router.get("/stats")
+async def get_stats(request: Request):
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    return {"uptimeSec": round(time.time() - SPARDA_START), "stats": SPARDA_STATS, "quarantine": SPARDA_QUARANTINE, "recycle": {**SPARDA_RECYCLE, "ratePct": sparda_recycle_rate()}, "purity": sparda_purity_snapshot()}
+
+@sparda_router.get("/events")
+async def get_events(request: Request):
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    try:
+        since = int(request.query_params.get("since", "0"))
+    except ValueError:
+        since = 0
+    return {"seq": SPARDA_SEQ, "events": [e for e in SPARDA_EVENTS if e["seq"] > since]}
+
+@sparda_router.post("/gossip")
+async def gossip(request: Request):
+    # peer-to-peer convergence (Brief #2), behind the same x-sparda-key as every route.
+    # Absorbs a peer's grow-only counts via CRDT max-merge; 204 on success. An unknown tool
+    # or malformed count is silently dropped (bounded, no injection).
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    sparda_merge_gossip(body)
+    return Response(status_code=204)
+
+@sparda_router.post("/invoke")
+async def invoke_tool(request: Request):
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    tool = body.get("tool")
+    args = body.get("args", {})
+    
+    spec = SPARDA_TOOLS.get(tool)
+    proof = sparda_proof(tool, spec, args)
+
+    if proof["decision"] == "block":
+        status = 400
+        error = "bad request"
+        if not proof["checks"]["knownTool"]:
+            status = 404
+            error = f"unknown tool: {tool}"
+        elif not proof["checks"]["enabled"]:
+            status = 403
+            error = f"tool disabled (write-safety): {tool}"
+            return JSONResponse(status_code=status, content={
+                "error": error,
+                "hint": "Enable it in sparda.json, then re-run: npx sparda-mcp init",
+                "spardingProof": proof
+            })
+        elif not proof["checks"]["loopSafe"]:
+            status = 400
+            error = "self-referential tool blocked (loop protection)"
+        elif not proof["checks"]["quarantineSafe"]:
+            status = 503
+            quarantined = SPARDA_QUARANTINE.get(tool)
+            error = f"tool quarantined (immune system): {tool}"
+            SPARDA_RECYCLE["servedByCircle"] += 1
+            return JSONResponse(status_code=status, content={
+                "error": error,
+                "reason": quarantined["reason"] if quarantined else "",
+                "retryInMs": round(quarantined["until"] - time.time() * 1000) if quarantined else 0,
+                "spardingProof": proof
+            })
+        else:
+            status = 400
+            error = proof["reasons"][0] if proof["reasons"] else "blocked"
+            if any("policy blocks execution" in r for r in proof["reasons"]):
+                status = 403
+        return JSONResponse(status_code=status, content={"error": error, "spardingProof": proof})
+
+    if proof["decision"] == "require_human":
+        sparda_sweep_pending()
+        confirm = sparda_nonce()
+        SPARDA_PENDING[confirm] = {
+            "tool": tool,
+            "args": args,
+            "expiresAt": time.time() * 1000 + SPARDA_CONFIRM_TTL_MS,
+            "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        sibling_name = None
+        for n, t in SPARDA_TOOLS.items():
+            if t.get("method") == "GET" and t.get("path") == spec.get("path"):
+                sibling_name = n
+                break
+        # Build the conditional hint OUTSIDE the instruction f-string below: on
+        # Python < 3.12 an f-string expression part may not contain a backslash
+        # or the delimiting quote (PEP 701 lifted this in 3.12). Pre-computing it
+        # here keeps the generated router valid on every supported Python (3.9+).
+        sparda_hint = (
+            f' First call "{sibling_name}" to inspect current state, then'
+            if sibling_name else ' To'
+        )
+        sparda_event("confirm", tool, 202, f"gated, awaiting confirmation (risk: {proof['risk']})")
+        return JSONResponse(status_code=202, content={
+            "status": "awaiting_confirmation",
+            "confirm": confirm,
+            "expiresInMs": SPARDA_CONFIRM_TTL_MS,
+            "preview": {
+                "tool": tool,
+                "method": spec.get("method"),
+                "path": spec.get("path"),
+                "willSendBody": spec.get("method") != "GET" and args.get("body") is not None,
+                "reversibleHint": proof["checks"]["reversibleHint"],
+                "inspectFirst": {"tool": sibling_name, "why": "GET on the same path — read current state before committing this write"} if sibling_name else None,
+            },
+            "instruction": f"NOT EXECUTED. {spec.get('method')} {spec.get('path')} is gated by policy ({proof['reasons'][0] if proof['reasons'] else 'require_human'}); the host route was not touched.{sparda_hint} confirm via POST /invoke/confirm {{ \"confirm\": \"{confirm}\" }}. Single-use, expires in {round(SPARDA_CONFIRM_TTL_MS / 1000)}s.",
+            "spardingProof": proof,
+        })
+
+    t0 = time.time()
+    try:
+        path_params = spec.get("pathParams", [])
+        path = spec.get("path")
+
+        def repl(match):
+            name = match.group(1)
+            val = args.get(name)
+            return urllib.parse.quote(str(val))
+
+        resolved_path = re.sub(r'\{(\w+)\}', repl, path)
+
+        query_params = []
+        for k, v in args.items():
+            if k == 'body' or k in path_params or v is None:
+                continue
+            query_params.append(f"{urllib.parse.quote(k)}={urllib.parse.quote(str(v))}")
+        
+        if query_params:
+            resolved_path += "?" + "&".join(query_params)
+
+        url = f"http://127.0.0.1:{SPARDA_PORT}{resolved_path}"
+        method = spec.get("method", "GET")
+        
+        headers = {}
+        body_bytes = None
+        
+        if method != "GET" and args.get("body") is not None:
+            headers["content-type"] = "application/json"
+            body_bytes = json.dumps(args["body"]).encode("utf-8")
+
+        SPARDA_RECYCLE["paidFull"] += 1  # the host route is about to be exercised — full price
+        loop = asyncio.get_running_loop()
+        status, content_type, data_bytes = await loop.run_in_executor(
+            executor, sync_fetch, url, method, headers, body_bytes
+        )
+        
+        text_data = data_bytes.decode("utf-8", errors="ignore")
+        try:
+            data = json.loads(text_data)
+        except Exception:
+            data = text_data
+
+        sparda_record(tool, status, round((time.time() - t0) * 1000))
+        if method == "GET" and status == 200:
+            # canonical argsig: sorted items, so the AI's argument order never splits a signature
+            argsig = json.dumps(sorted((k, str(v)) for k, v in args.items() if v is not None))
+            sparda_observe_purity(tool, argsig, data_bytes)
+        if status >= 500:
+            sparda_event("invoke", tool, status, text_data[:200])
+        return {"upstreamStatus": status, "data": data, "spardingProof": proof}
+    except Exception as e:
+        sparda_record(tool, 502, round((time.time() - t0) * 1000))
+        sparda_event("invoke", tool, 502, str(e))
+        return JSONResponse(status_code=502, content={"error": str(e), "spardingProof": proof})
+
+@sparda_router.post("/invoke/confirm")
+async def confirm_tool_invocation(request: Request):
+    if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    
+    t0 = time.time()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+        
+    confirm = body.get("confirm")
+    if not isinstance(confirm, str) or not confirm:
+        return JSONResponse(status_code=400, content={"error": "missing confirm token (expected { confirm: \"...\" })"})
+        
+    sparda_sweep_pending()
+    pending = SPARDA_PENDING.get(confirm)
+    if pending:
+        del SPARDA_PENDING[confirm] # consume first
+    
+    if not pending:
+        return JSONResponse(status_code=409, content={"error": "unknown or expired confirmation token", "hint": "re-issue the write via /invoke to mint a fresh token"})
+        
+    if time.time() * 1000 > pending["expiresAt"]:
+        return JSONResponse(status_code=409, content={"error": "confirmation token expired", "hint": "re-issue the write via /invoke"})
+        
+    spec = SPARDA_TOOLS.get(pending["tool"])
+    proof = sparda_proof(pending["tool"], spec, pending["args"])
+    
+    if proof["decision"] == "block":
+        return JSONResponse(status_code=403, content={"error": "confirmation no longer valid", "reason": proof["reasons"][0] if proof["reasons"] else "blocked", "spardingProof": proof})
+        
+    sparda_event("confirm", pending["tool"], 200, "confirmed -> executing")
+    
+    try:
+        path_params = spec.get("pathParams", [])
+        path = spec.get("path")
+
+        def repl(match):
+            name = match.group(1)
+            val = pending["args"].get(name)
+            return urllib.parse.quote(str(val))
+
+        resolved_path = re.sub(r'\{(\w+)\}', repl, path)
+
+        query_params = []
+        for k, v in pending["args"].items():
+            if k == 'body' or k in path_params or v is None:
+                continue
+            query_params.append(f"{urllib.parse.quote(k)}={urllib.parse.quote(str(v))}")
+        
+        if query_params:
+            resolved_path += "?" + "&".join(query_params)
+
+        url = f"http://127.0.0.1:{SPARDA_PORT}{resolved_path}"
+        method = spec.get("method", "GET")
+        
+        headers = {}
+        body_bytes = None
+        
+        if method != "GET" and pending["args"].get("body") is not None:
+            headers["content-type"] = "application/json"
+            body_bytes = json.dumps(pending["args"]["body"]).encode("utf-8")
+
+        SPARDA_RECYCLE["paidFull"] += 1
+        loop = asyncio.get_running_loop()
+        status, content_type, data_bytes = await loop.run_in_executor(
+            executor, sync_fetch, url, method, headers, body_bytes
+        )
+        
+        text_data = data_bytes.decode("utf-8", errors="ignore")
+        try:
+            data = json.loads(text_data)
+        except Exception:
+            data = text_data
+
+        sparda_record(pending["tool"], status, round((time.time() - t0) * 1000))
+        if method == "GET" and status == 200:
+            argsig = json.dumps(sorted((k, str(v)) for k, v in pending["args"].items() if v is not None))
+            sparda_observe_purity(pending["tool"], argsig, data_bytes)
+        if status >= 500:
+            sparda_event("invoke", pending["tool"], status, text_data[:200])
+        return {"upstreamStatus": status, "data": data, "spardingProof": proof}
+    except Exception as e:
+        sparda_record(pending["tool"], 502, round((time.time() - t0) * 1000))
+        sparda_event("invoke", pending["tool"], 502, str(e))
+        return JSONResponse(status_code=502, content={"error": str(e), "spardingProof": proof})
+
+# start gossiping only when peers are configured — solo deployments pay nothing (zero infra).
+# daemon=True: the background thread never blocks interpreter shutdown.
+if SPARDA_PEERS:
+    sparda_event("gossip", None, None, f"horizontal scale: gossiping to {len(SPARDA_PEERS)} peer(s) every {SPARDA_GOSSIP_INTERVAL}s")
+    threading.Thread(target=_sparda_gossip_loop, daemon=True).start()
+

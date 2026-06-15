@@ -1,0 +1,51 @@
+[
+  {
+    "method": "get",
+    "path": "/health",
+    "handlerName": "anonymous_1",
+    "sourceFile": "src/app.ts",
+    "sourceLine": 9,
+    "params": [],
+    "description": "Get current system health status.",
+    "mutating": false,
+    "confidence": "high"
+  },
+  {
+    "method": "post",
+    "path": "/validate",
+    "handlerName": "anonymous_2",
+    "sourceFile": "src/app.ts",
+    "sourceLine": 14,
+    "params": [
+      {
+        "name": "body",
+        "in": "body",
+        "type": "object",
+        "required": false,
+        "description": "JSON body — schema not statically detected"
+      }
+    ],
+    "description": "Create a validation token using zod schema.",
+    "mutating": true,
+    "confidence": "low"
+  },
+  {
+    "method": "get",
+    "path": "/api/users/:id",
+    "handlerName": "anonymous_3",
+    "sourceFile": "src/routes/users.ts",
+    "sourceLine": 6,
+    "params": [
+      {
+        "name": "id",
+        "in": "path",
+        "type": "string",
+        "required": true,
+        "description": "path parameter"
+      }
+    ],
+    "description": "Retrieve a user by their unique identifier.",
+    "mutating": false,
+    "confidence": "high"
+  }
+]

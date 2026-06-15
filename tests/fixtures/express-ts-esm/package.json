@@ -1,0 +1,9 @@
+{
+  "name": "express-ts-esm",
+  "type": "module",
+  "main": "src/app.ts",
+  "dependencies": {
+    "express": "^4.19.0",
+    "zod": "^3.23.0"
+  }
+}

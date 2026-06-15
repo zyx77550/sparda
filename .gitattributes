@@ -1,0 +1,3 @@
+# Deterministic checkouts on every platform: byte-for-byte tests depend on it.
+# Windows runners default to autocrlf=true and would convert fixtures to CRLF.
+* text=auto eol=lf

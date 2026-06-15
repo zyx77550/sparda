@@ -1,0 +1,32 @@
+[
+  {
+    "method": "get",
+    "path": "/health",
+    "handlerName": "anonymous_1",
+    "sourceFile": "src/app.ts",
+    "sourceLine": 7,
+    "params": [],
+    "description": "Health check CJS TS",
+    "mutating": false,
+    "confidence": "high"
+  },
+  {
+    "method": "get",
+    "path": "/api/users/:id",
+    "handlerName": "anonymous_2",
+    "sourceFile": "src/routes/users.ts",
+    "sourceLine": 5,
+    "params": [
+      {
+        "name": "id",
+        "in": "path",
+        "type": "string",
+        "required": true,
+        "description": "path parameter"
+      }
+    ],
+    "description": "Get user details",
+    "mutating": false,
+    "confidence": "high"
+  }
+]

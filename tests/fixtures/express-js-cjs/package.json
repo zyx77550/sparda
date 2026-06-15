@@ -1,0 +1,8 @@
+{
+  "name": "express-js-cjs",
+  "type": "commonjs",
+  "main": "src/app.js",
+  "dependencies": {
+    "express": "^4.19.0"
+  }
+}

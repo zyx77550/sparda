@@ -1,0 +1,39 @@
+[
+  {
+    "method": "get",
+    "path": "/health",
+    "handlerName": "get_health",
+    "sourceFile": "app/main.py",
+    "sourceLine": 7,
+    "params": [],
+    "description": "Health check package",
+    "mutating": false,
+    "confidence": "high"
+  },
+  {
+    "method": "get",
+    "path": "/api/users/{user_id}",
+    "handlerName": "read_user",
+    "sourceFile": "app/routes/users.py",
+    "sourceLine": 7,
+    "params": [
+      {
+        "name": "user_id",
+        "in": "path",
+        "type": "integer",
+        "required": true,
+        "description": "path parameter"
+      },
+      {
+        "name": "q",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "query parameter"
+      }
+    ],
+    "description": "Retrieve package user details",
+    "mutating": false,
+    "confidence": "high"
+  }
+]

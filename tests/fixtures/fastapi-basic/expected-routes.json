@@ -1,0 +1,62 @@
+[
+  {
+    "method": "get",
+    "path": "/health",
+    "handlerName": "get_health",
+    "sourceFile": "main.py",
+    "sourceLine": 13,
+    "params": [],
+    "description": "Get system health.",
+    "mutating": false,
+    "confidence": "high"
+  },
+  {
+    "method": "post",
+    "path": "/items",
+    "handlerName": "create_item",
+    "sourceFile": "main.py",
+    "sourceLine": 18,
+    "params": [
+      {
+        "name": "body",
+        "in": "body",
+        "type": "object",
+        "required": true,
+        "properties": {
+          "name": { "type": "string", "required": true },
+          "price": { "type": "number", "required": true },
+          "is_offer": { "type": "boolean" }
+        }
+      }
+    ],
+    "description": "Create a new item in the store.",
+    "mutating": true,
+    "confidence": "high"
+  },
+  {
+    "method": "get",
+    "path": "/users/{user_id}",
+    "handlerName": "read_user",
+    "sourceFile": "main.py",
+    "sourceLine": 26,
+    "params": [
+      {
+        "name": "user_id",
+        "in": "path",
+        "type": "integer",
+        "required": true,
+        "description": "path parameter"
+      },
+      {
+        "name": "q",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "query parameter"
+      }
+    ],
+    "description": "Get a user by ID.",
+    "mutating": false,
+    "confidence": "high"
+  }
+]

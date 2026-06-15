@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.sparda/
+*.log
+.env
+.env.*
+.DS_Store
+__pycache__/
+*.pyc
+tests/.tmp/
+*.bak
+sparda_test_state_*/
+scratch/

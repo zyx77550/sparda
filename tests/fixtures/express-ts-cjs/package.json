@@ -1,0 +1,8 @@
+{
+  "name": "express-ts-cjs",
+  "type": "commonjs",
+  "main": "src/app.ts",
+  "dependencies": {
+    "express": "^4.19.0"
+  }
+}

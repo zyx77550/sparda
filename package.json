@@ -1,0 +1,45 @@
+{
+  "name": "sparda-mcp",
+  "version": "0.5.2",
+  "description": "Turn any codebase into an MCP server with one command. Express & FastAPI → Claude-ready in 3 minutes.",
+  "type": "module",
+  "bin": {
+    "sparda": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:router": "node tests/router-selftest.cjs",
+    "test:all": "vitest run && node tests/router-selftest.cjs"
+  },
+  "files": [
+    "src",
+    "templates",
+    "!templates/*.bak",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai",
+    "express",
+    "fastapi",
+    "codegen"
+  ],
+  "author": "Residual Labs (residual-labs.fr)",
+  "license": "BUSL-1.1",
+  "dependencies": {
+    "@babel/parser": "7.26.5",
+    "@babel/traverse": "7.26.5",
+    "@clack/prompts": "0.9.1",
+    "@modelcontextprotocol/sdk": "1.29.0"
+  },
+  "devDependencies": {
+    "express": "^4.21.0",
+    "vitest": "^3.2.6"
+  }
+}

@@ -1,0 +1,477 @@
+// ============================================================
+// SPARDA ROUTER — Auto-generated. DO NOT EDIT.
+// Regenerate: npx sparda-mcp init   •   Remove: npx sparda-mcp remove
+// ============================================================
+__IMPORT_LINE__
+
+const SPARDA_TOOLS = __TOOLS_JSON__;
+const SPARDA_POLICIES = __SPARDING_POLICIES__;
+
+const SPARDA_LOCAL_KEY = "__LOCAL_KEY__";
+const SPARDA_PORT = __PORT__;
+
+const SPARDA_STATS__STATS_TYPE__ = {};
+const SPARDA_EVENTS__EVENTS_TYPE__ = [];
+let SPARDA_SEQ = 0;
+// immune system: tools that keep failing are quarantined so the AI can't hammer a broken route
+const SPARDA_QUARANTINE__STATS_TYPE__ = {};
+const SPARDA_QUARANTINE_MS = Number(process.env.SPARDA_QUARANTINE_MS ?? 60000);
+// recycling gauge: calls answered from SPARDA's own knowledge vs calls that paid the host route.
+// Day 1 it reads 0% — the circle fills with usage (a measure, never a promise).
+const SPARDA_RECYCLE__STATS_TYPE__ = { servedByCircle: 0, paidFull: 0 };
+function spardaRecycleRate() {
+  const total = SPARDA_RECYCLE.servedByCircle + SPARDA_RECYCLE.paidFull;
+  return total ? Math.round((SPARDA_RECYCLE.servedByCircle * 100) / total) : 0;
+}
+// thermodynamic route classification: a GET whose repeated identical args keep
+// returning identical bodies is observed-pure (its result pre-exists — recyclable);
+// writes erase by definition. Observation only, never a guess.
+const SPARDA_PURITY__STATS_TYPE__ = {};
+function spardaHash(s__ANY_TYPE__) {
+  let h = 0x811c9dc5; // FNV-1a, capped: a fingerprint, not a checksum of megabytes
+  for (let i = 0; i < s.length && i < 65536; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h;
+}
+function spardaObservePurity(tool__ANY_TYPE__, argsig__ANY_TYPE__, body__ANY_TYPE__) {
+  const pu = SPARDA_PURITY[tool] ?? (SPARDA_PURITY[tool] = { sigs: {}, repeats: 0, mismatches: 0 });
+  const h = spardaHash(body);
+  const known = pu.sigs[argsig];
+  if (known === undefined) {
+    if (Object.keys(pu.sigs).length >= 20) return; // bounded: enough sigs to judge
+    pu.sigs[argsig] = h;
+  } else if (known === h) pu.repeats += 1;
+  else { pu.mismatches += 1; pu.sigs[argsig] = h; } // the latest real answer is the truth
+}
+function spardaPuritySnapshot() {
+  const out__STATS_TYPE__ = {};
+  for (const [name, spec] of Object.entries(SPARDA_TOOLS)) {
+    if (spec.method !== 'GET') { out[name] = { class: 'erasing', repeats: 0, mismatches: 0 }; continue; }
+    const pu = SPARDA_PURITY[name];
+    out[name] = {
+      class: !pu ? 'unknown' : pu.mismatches > 0 ? 'volatile' : pu.repeats >= 3 ? 'pure' : 'unknown',
+      repeats: pu ? pu.repeats : 0,
+      mismatches: pu ? pu.mismatches : 0,
+    };
+  }
+  return out;
+}
+// ── horizontal scale (Brief #2): Quorum Sensing × G-Map CRDT ──────────────────
+// N host replicas each learn purity locally; gossip converges the grow-only counts so a
+// route observed-pure on ANY replica becomes pure on ALL — no coordinator, no shared
+// store, no new dependency. "Zero infra" holds: solo (no SPARDA_PEERS) starts no timer and
+// pays nothing. CRDT merge = max() per counter (commutative, associative, idempotent →
+// eventual convergence). value-free: only tool NAMES (already public via /tools) and integer
+// counts cross the wire — never an argument, never a body.
+const SPARDA_PEERS = (process.env.SPARDA_PEERS ?? '').split(',').map((s__ANY_TYPE__) => s.trim().replace(/\/$/, '')).filter((s__ANY_TYPE__) => /^https?:\/\//.test(s));
+const SPARDA_GOSSIP_MS = Math.max(50, Number(process.env.SPARDA_GOSSIP_MS) || 30000);
+const SPARDA_GOSSIP_TIMEOUT_MS = Math.max(250, Number(process.env.SPARDA_GOSSIP_TIMEOUT_MS) || 2000);
+function spardaGossipSnapshot() {
+  const out__STATS_TYPE__ = {};
+  for (const [name, pu] of Object.entries(SPARDA_PURITY)) out[name] = { repeats: pu.repeats, mismatches: pu.mismatches };
+  return out;
+}
+// merge a peer's snapshot: max() per counter, ONLY for tools we already know (bounded — the
+// map can never grow past the tool count; an unknown or injected key is silently dropped).
+function spardaMergeGossip(remote__ANY_TYPE__) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return 0;
+  let merged = 0;
+  for (const [name, rv] of Object.entries(remote)) {
+    if (!SPARDA_TOOLS[name] || !rv || typeof rv !== 'object') continue;
+    const r = Number(rv.repeats), m = Number(rv.mismatches);
+    if (!Number.isFinite(r) || !Number.isFinite(m) || r < 0 || m < 0) continue;
+    const pu = SPARDA_PURITY[name] ?? (SPARDA_PURITY[name] = { sigs: {}, repeats: 0, mismatches: 0 });
+    if (r > pu.repeats) pu.repeats = r;       // grow-only: a count never shrinks on merge
+    if (m > pu.mismatches) pu.mismatches = m; // a mismatch anywhere → volatile everywhere (safe)
+    merged += 1;
+  }
+  return merged;
+}
+// background tick: push our snapshot to every peer. Fire-and-forget, off the request path,
+// AbortSignal-bounded; a peer being down is silence and the next tick retries (R1).
+function spardaGossipTick() {
+  if (SPARDA_PEERS.length === 0) return;
+  const body = JSON.stringify(spardaGossipSnapshot());
+  for (const peer of SPARDA_PEERS) {
+    fetch(`${peer}/mcp/gossip`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-sparda-key': SPARDA_LOCAL_KEY },
+      body,
+      signal: AbortSignal.timeout(SPARDA_GOSSIP_TIMEOUT_MS),
+    }).catch(() => {}); // peer unreachable → ignore; convergence is eventual, not urgent
+  }
+}
+function spardaEvent(source__ANY_TYPE__, tool__ANY_TYPE__, status__ANY_TYPE__, message__ANY_TYPE__) {
+  SPARDA_EVENTS.push({ seq: ++SPARDA_SEQ, ts: new Date().toISOString(), source, tool, status, message: String(message ?? '').slice(0, 500) });
+  if (SPARDA_EVENTS.length > 100) SPARDA_EVENTS.shift();
+}
+// observe-only: uncaughtExceptionMonitor never changes the host app's crash behavior
+process.on('uncaughtExceptionMonitor', (err__ANY_TYPE__) => spardaEvent('process', null, null, err && err.message ? err.message : err));
+
+// two-phase commit: a write/delete flagged require_human is NOT executed on /invoke.
+// It mints a single-use nonce + a preview contract; the host route is touched only after
+// an explicit /invoke/confirm replays the token. This is the gate the proof always described
+// but never enforced — the difference between a receipt and a contract.
+const SPARDA_PENDING__STATS_TYPE__ = {};
+const SPARDA_CONFIRM_TTL_MS = Number(process.env.SPARDA_CONFIRM_TTL_MS ?? 120000);
+function spardaNonce() {
+  return 'cfm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+function spardaSweepPending() {
+  const now = Date.now();
+  for (const k of Object.keys(SPARDA_PENDING)) if (now > SPARDA_PENDING[k].expiresAt) delete SPARDA_PENDING[k];
+}
+
+function spardaProof(tool__ANY_TYPE__, spec__ANY_TYPE__, args__ANY_TYPE__) {
+  const checks = {
+    knownTool: spec !== undefined,
+    enabled: spec ? spec.enabled : false,
+    loopSafe: spec ? !spec.path.startsWith('/mcp') : false,
+    methodClass: spec ? (spec.method === 'GET' ? 'read' : 'write') : 'read',
+    pathParamsPresent: true,
+    hasBodyForWrite: true,
+    reversibleHint: false,
+    quarantineSafe: true,
+  };
+
+  const reasons = [];
+
+  if (!checks.knownTool) {
+    reasons.push('unknown tool');
+    return {
+      version: 'sparding-proof/v0.1',
+      risk: 'blocked',
+      decision: 'block',
+      reasons,
+      checks,
+    };
+  }
+
+  if (!checks.enabled) {
+    reasons.push('tool disabled (write-safety)');
+  }
+  if (!checks.loopSafe) {
+    reasons.push('self-referential tool blocked (loop protection)');
+  }
+
+  const quarantined = SPARDA_QUARANTINE[tool];
+  if (quarantined) {
+    if (Date.now() < quarantined.until) {
+      checks.quarantineSafe = false;
+      reasons.push(`tool quarantined (immune system): ${quarantined.reason}`);
+    } else {
+      delete SPARDA_QUARANTINE[tool];
+      if (SPARDA_STATS[tool]) SPARDA_STATS[tool].consecutive5xx = 2;
+    }
+  }
+
+  for (const name of spec.pathParams ?? []) {
+    if (args[name] === undefined) {
+      checks.pathParamsPresent = false;
+      reasons.push(`missing path param: ${name}`);
+    }
+  }
+
+  if (checks.methodClass === 'write') {
+    if (args.body === undefined) {
+      checks.hasBodyForWrite = false;
+    }
+  }
+
+  if (spec.method === 'GET') {
+    checks.reversibleHint = true;
+  } else {
+    checks.reversibleHint = Object.values(SPARDA_TOOLS).some((t__ANY_TYPE__) => t.method === 'GET' && t.path === spec.path);
+  }
+
+  let risk = 'low';
+  let decision = 'allow';
+
+  if (!checks.enabled || !checks.loopSafe || !checks.quarantineSafe || !checks.pathParamsPresent) {
+    decision = 'block';
+    risk = 'blocked';
+    return {
+      version: 'sparding-proof/v0.1',
+      risk,
+      decision,
+      reasons,
+      checks,
+    };
+  }
+
+  const policies = SPARDA_POLICIES ?? {};
+  if (checks.methodClass === 'read') {
+    const readPolicy = policies.reads ?? 'allow';
+    if (readPolicy === 'block') {
+      decision = 'block';
+      risk = 'blocked';
+      reasons.push('read policy blocks execution');
+    } else if (readPolicy === 'require_human') {
+      decision = 'require_human';
+      risk = 'medium';
+      reasons.push('read policy requires human confirmation');
+    }
+  } else {
+    const isDelete = spec.method === 'DELETE';
+    const deletePolicy = policies.deletes ?? 'block';
+    const writePolicy = policies.writes ?? 'require_human';
+
+    if (isDelete && deletePolicy === 'block') {
+      decision = 'block';
+      risk = 'blocked';
+      reasons.push('delete policy blocks execution');
+    } else if (isDelete && deletePolicy === 'require_human') {
+      decision = 'require_human';
+      risk = 'high';
+      reasons.push('delete operation requires human confirmation');
+    } else if (isDelete && deletePolicy === 'allow') {
+      decision = 'allow';
+      risk = 'low';
+    } else if (writePolicy === 'block') {
+      decision = 'block';
+      risk = 'blocked';
+      reasons.push('write policy blocks execution');
+    } else if (writePolicy === 'require_human') {
+      decision = 'require_human';
+      risk = 'medium';
+      reasons.push('write operation requires human confirmation');
+    } else {
+      decision = 'allow';
+      risk = 'low';
+    }
+  }
+
+  return {
+    version: 'sparding-proof/v0.1',
+    risk,
+    decision,
+    reasons,
+    checks,
+  };
+}
+
+// captured once so the JSON-middleware placeholder appears a single time in the template
+// (the generator's replace is non-global).
+const SPARDA_JSON_MW__ANY_TYPE__ = __JSON_MW__;
+// SPARDA owns its own endpoints' body parsing AND the parse error: a malformed JSON body
+// returns JSON 400 locally instead of bubbling up to Express' HTML error page (stack leak).
+function SPARDA_JSON(req__REQ_TYPE__, res__RES_TYPE__, next__NEXT_TYPE__) {
+  SPARDA_JSON_MW(req, res, (err__ANY_TYPE__) => {
+    if (err) { spardaEvent('router', null, 400, 'invalid JSON body'); return res.status(400).json({ error: 'invalid JSON body' }); }
+    next();
+  });
+}
+
+// the actual host-route call, shared by the allow-path and the confirm-path so a
+// confirmed write runs through the exact same execution + observation as a direct one.
+async function spardaExecute(tool__ANY_TYPE__, spec__ANY_TYPE__, args__ANY_TYPE__, proof__ANY_TYPE__, t0__ANY_TYPE__, res__RES_TYPE__) {
+  try {
+    let url = spec.path.replace(/:(\w+)/g, (_, name) => encodeURIComponent(String(args[name])));
+    const query = [];
+    for (const [k, v] of Object.entries(args)) {
+      if (k === 'body' || (spec.pathParams ?? []).includes(k) || v === undefined) continue;
+      query.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    }
+    if (query.length) url += `?${query.join('&')}`;
+
+    const init = { method: spec.method, headers: {} };
+    if (spec.method !== 'GET' && args.body !== undefined) {
+      init.headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(args.body);
+    }
+    SPARDA_RECYCLE.paidFull += 1; // the host route is about to be exercised — full price
+    const upstream = await fetch(`http://127.0.0.1:${SPARDA_PORT}${url}`, { ...init, signal: AbortSignal.timeout(30_000) });
+    const text = await upstream.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    spardaRecord(tool, upstream.status, Date.now() - t0);
+    if (spec.method === 'GET' && upstream.status === 200) {
+      // canonical argsig: sorted entries, so the AI's argument order never splits a signature
+      spardaObservePurity(tool, JSON.stringify(Object.entries(args).filter((e__ANY_TYPE__) => e[1] !== undefined).sort()), text);
+    }
+    if (upstream.status >= 500) spardaEvent('invoke', tool, upstream.status, text.slice(0, 200));
+    return res.status(200).json({ upstreamStatus: upstream.status, data, spardingProof: proof });
+  } catch (err__ANY_TYPE__) {
+    spardaRecord(tool, err.status ?? 502, Date.now() - t0);
+    spardaEvent('invoke', tool, err.status ?? 502, err.message);
+    return res.status(err.status ?? 502).json({ error: err.message, spardingProof: proof });
+  }
+}
+
+__ROUTER_DECL__
+
+spardaRouter.use((req__REQ_TYPE__, res__RES_TYPE__, next__NEXT_TYPE__) => {
+  if (req.headers['x-sparda-key'] !== SPARDA_LOCAL_KEY) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+});
+
+spardaRouter.get('/tools', (_req__REQ_TYPE__, res__RES_TYPE__) => res.json(SPARDA_TOOLS));
+
+spardaRouter.get('/stats', (_req__REQ_TYPE__, res__RES_TYPE__) => res.json({ uptimeSec: Math.round(process.uptime()), stats: SPARDA_STATS, quarantine: SPARDA_QUARANTINE, recycle: { servedByCircle: SPARDA_RECYCLE.servedByCircle, paidFull: SPARDA_RECYCLE.paidFull, ratePct: spardaRecycleRate() }, purity: spardaPuritySnapshot() }));
+
+spardaRouter.get('/events', (req__REQ_TYPE__, res__RES_TYPE__) => {
+  const since = Number(req.query.since ?? 0) || 0;
+  res.json({ seq: SPARDA_SEQ, events: SPARDA_EVENTS.filter((e__ANY_TYPE__) => e.seq > since) });
+});
+
+// peer-to-peer convergence (Brief #2). Behind the same x-sparda-key as every route above
+// (replicas share the generated key). Absorbs a peer's grow-only counts via CRDT max-merge;
+// 204 on success. An unknown tool or malformed count is silently dropped (bounded, no injection).
+spardaRouter.post('/gossip', SPARDA_JSON, (req__REQ_TYPE__, res__RES_TYPE__) => {
+  spardaMergeGossip(req.body);
+  res.status(204).end();
+});
+
+spardaRouter.post('/invoke', SPARDA_JSON, async (req__REQ_TYPE__, res__RES_TYPE__) => {
+  const t0 = Date.now();
+  const reqBody = req.body ?? {};
+  const tool = reqBody.tool;
+  // type confusion guard: the old `args = {}` default only caught `undefined`. A `null`
+  // (or array/scalar) slipped through and crashed spardaProof on null[name] → Express HTML
+  // 500 with a full stack trace. We reject non-objects with clean JSON instead.
+  if (reqBody.args !== undefined && (reqBody.args === null || typeof reqBody.args !== 'object' || Array.isArray(reqBody.args))) {
+    return res.status(400).json({ error: 'args must be a JSON object', got: reqBody.args === null ? 'null' : Array.isArray(reqBody.args) ? 'array' : typeof reqBody.args });
+  }
+  const args = reqBody.args ?? {};
+  const spec = SPARDA_TOOLS[tool];
+
+  const proof = spardaProof(tool, spec, args);
+
+  if (proof.decision === 'block') {
+    let status = 400;
+    let error = 'bad request';
+    if (!proof.checks.knownTool) {
+      status = 404;
+      error = `unknown tool: ${tool}`;
+    } else if (!proof.checks.enabled) {
+      status = 403;
+      error = `tool disabled (write-safety): ${tool}`;
+      return res.status(status).json({ error, hint: 'Enable it in sparda.json, then re-run: npx sparda-mcp init', spardingProof: proof });
+    } else if (!proof.checks.loopSafe) {
+      status = 400;
+      error = 'self-referential tool blocked (loop protection)';
+    } else if (!proof.checks.quarantineSafe) {
+      status = 503;
+      const quarantined = SPARDA_QUARANTINE[tool];
+      error = `tool quarantined (immune system): ${tool}`;
+      SPARDA_RECYCLE.servedByCircle += 1;
+      return res.status(status).json({
+        error,
+        reason: quarantined ? quarantined.reason : '',
+        retryInMs: quarantined ? Math.max(0, quarantined.until - Date.now()) : 0,
+        spardingProof: proof
+      });
+    } else {
+      status = 400;
+      error = proof.reasons[0] || 'blocked';
+      if (proof.reasons.some((r__ANY_TYPE__) => r.includes('policy blocks execution'))) {
+        status = 403;
+      }
+    }
+    return res.status(status).json({ error, spardingProof: proof });
+  }
+
+  if (proof.decision === 'require_human') {
+    // THE GATE THE PROOF ALWAYS LACKED.
+    // v0.5.0 had no branch here, so a require_human decision fell straight through to the
+    // host route below: the write happened, THEN the proof said "confirmation required".
+    // We stop here. The host route is not touched. We mint a single-use nonce and a preview
+    // the LLM reads in its tool-result, and only /invoke/confirm replays it.
+    spardaSweepPending();
+    const confirm = spardaNonce();
+    SPARDA_PENDING[confirm] = { tool, args, expiresAt: Date.now() + SPARDA_CONFIRM_TTL_MS, createdAt: new Date().toISOString() };
+    let siblingName = null;
+    for (const [n, t] of Object.entries(SPARDA_TOOLS)) { if (t.method === 'GET' && t.path === spec.path) { siblingName = n; break; } }
+    spardaEvent('confirm', tool, 202, `gated, awaiting confirmation (risk: ${proof.risk})`);
+    return res.status(202).json({
+      status: 'awaiting_confirmation',
+      confirm,
+      expiresInMs: SPARDA_CONFIRM_TTL_MS,
+      preview: {
+        tool,
+        method: spec.method,
+        path: spec.path,
+        willSendBody: spec.method !== 'GET' && args.body !== undefined,
+        reversibleHint: proof.checks.reversibleHint,
+        inspectFirst: siblingName ? { tool: siblingName, why: 'GET on the same path — read current state before committing this write' } : null,
+      },
+      // this string is what the LLM reads: the security decision IS the instruction.
+      instruction: `NOT EXECUTED. ${spec.method} ${spec.path} is gated by policy (${proof.reasons[0] || 'require_human'}); the host route was not touched.${siblingName ? ` First call "${siblingName}" to inspect current state, then` : ' To'} confirm via POST /invoke/confirm { "confirm": "${confirm}" }. Single-use, expires in ${Math.round(SPARDA_CONFIRM_TTL_MS / 1000)}s.`,
+      spardingProof: proof,
+    });
+  }
+
+  // proof.decision === 'allow' — exercise the host route
+  return spardaExecute(tool, spec, args, proof, t0, res);
+});
+
+spardaRouter.post('/invoke/confirm', SPARDA_JSON, async (req__REQ_TYPE__, res__RES_TYPE__) => {
+  const t0 = Date.now();
+  const confirm = (req.body ?? {}).confirm;
+  if (typeof confirm !== 'string' || !confirm) {
+    return res.status(400).json({ error: 'missing confirm token (expected { confirm: "..." })' });
+  }
+  spardaSweepPending();
+  const pending = SPARDA_PENDING[confirm];
+  if (pending) delete SPARDA_PENDING[confirm]; // consume first — a token can never replay
+  if (!pending) {
+    return res.status(409).json({ error: 'unknown or expired confirmation token', hint: 're-issue the write via /invoke to mint a fresh token' });
+  }
+  if (Date.now() > pending.expiresAt) {
+    return res.status(409).json({ error: 'confirmation token expired', hint: 're-issue the write via /invoke' });
+  }
+  const spec = SPARDA_TOOLS[pending.tool];
+  // re-judge at commit time: the tool may have been quarantined or disabled since minting
+  const proof = spardaProof(pending.tool, spec, pending.args);
+  if (proof.decision === 'block') {
+    return res.status(403).json({ error: 'confirmation no longer valid', reason: proof.reasons[0] || 'blocked', spardingProof: proof });
+  }
+  spardaEvent('confirm', pending.tool, 200, 'confirmed -> executing');
+  return spardaExecute(pending.tool, spec, pending.args, proof, t0, res);
+});
+
+// verb safety: any non-POST on the invoke endpoints returns JSON 405 (was bare Express HTML — bug #5)
+spardaRouter.all('/invoke', (req__REQ_TYPE__, res__RES_TYPE__) => res.status(405).json({ error: 'method not allowed', allow: 'POST' }));
+spardaRouter.all('/invoke/confirm', (req__REQ_TYPE__, res__RES_TYPE__) => res.status(405).json({ error: 'method not allowed', allow: 'POST' }));
+
+function spardaRecord(tool__ANY_TYPE__, status__ANY_TYPE__, ms__ANY_TYPE__) {
+  const st = SPARDA_STATS[tool] ?? (SPARDA_STATS[tool] = { calls: 0, errors: 0, clientErrors: 0, totalMs: 0, lastStatus: null, lastTs: null, consecutive5xx: 0 });
+  // innate immunity: latency far beyond the learned baseline is an antigen
+  if (st.calls >= 5 && ms > Math.max((st.totalMs / st.calls) * 10, 200)) {
+    spardaEvent('immune', tool, status, `latency anomaly: ${ms}ms vs ~${Math.round(st.totalMs / st.calls)}ms baseline`);
+  }
+  st.calls += 1;
+  st.totalMs += ms;
+  // 5xx = server failure (feeds the immune system); 4xx = a valid client answer (404 etc), tracked apart so the count doesn't lie
+  if (status >= 500) st.errors += 1;
+  else if (status >= 400) st.clientErrors += 1;
+  st.lastStatus = status;
+  st.lastTs = new Date().toISOString();
+  if (status >= 500) st.consecutive5xx += 1;
+  else if (status < 400) st.consecutive5xx = 0;
+  if (st.consecutive5xx >= 3 && !SPARDA_QUARANTINE[tool]) {
+    SPARDA_QUARANTINE[tool] = { since: new Date().toISOString(), until: Date.now() + SPARDA_QUARANTINE_MS, reason: `${st.consecutive5xx} consecutive 5xx` };
+    spardaEvent('immune', tool, 503, `quarantined after ${st.consecutive5xx} consecutive 5xx (cooldown ${SPARDA_QUARANTINE_MS}ms)`);
+  }
+}
+
+// anything unmatched under the router → JSON 404, never bare Express HTML
+spardaRouter.use((req__REQ_TYPE__, res__RES_TYPE__) => res.status(404).json({ error: 'not found', path: req.path }));
+
+// error envelope (must stay last). body-parser throws SyntaxError on malformed JSON, and
+// anything thrown downstream used to fall through to Express' HTML error page — leaking the
+// internal stack trace. Every response stays JSON; the stack stays server-side, correlated
+// to /events by errorId.
+spardaRouter.use((err__ANY_TYPE__, req__REQ_TYPE__, res__RES_TYPE__, _next__NEXT_TYPE__) => {
+  const errorId = 'err_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  spardaEvent('router', null, (err && err.status) || 500, `[${errorId}] ${err && err.message ? err.message : err}`);
+  const status = err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError) ? 400 : (err && err.status) || 500;
+  res.status(status).json({ error: status === 400 ? 'invalid JSON body' : 'internal error', errorId });
+});
+
+// start gossiping only when peers are configured — solo deployments pay nothing (zero infra).
+// .unref(): the tick timer never keeps the host process alive on its own.
+if (SPARDA_PEERS.length > 0) {
+  spardaEvent('gossip', null, null, `horizontal scale: gossiping to ${SPARDA_PEERS.length} peer(s) every ${SPARDA_GOSSIP_MS}ms`);
+  setInterval(spardaGossipTick, SPARDA_GOSSIP_MS).unref();
+}
