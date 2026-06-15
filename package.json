@@ -1,8 +1,16 @@
 {
   "name": "sparda-mcp",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Turn any codebase into an MCP server with one command. Express & FastAPI → Claude-ready in 3 minutes.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zyx77550/sparda.git"
+  },
+  "homepage": "https://github.com/zyx77550/sparda#readme",
+  "bugs": {
+    "url": "https://github.com/zyx77550/sparda/issues"
+  },
   "bin": {
     "sparda": "./src/index.js"
   },
