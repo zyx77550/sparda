@@ -131,7 +131,7 @@ protocol. The live, per-project tool list always comes from `sparda_get_context`
 runtime, so the guidance never goes stale.
 
 ## Supported frameworks
-Express 4/5 (JS/TS, ESM/CJS) and FastAPI today. More frameworks are on the way.
+Express 4/5 (JS/TS, ESM/CJS) and FastAPI today. We are actively expanding SPARDA internally to support more Node.js environments (including NestJS, Fastify, and Next.js API routes) in the near future.
 
 ## Security posture (honest)
 - 4 runtime dependencies, exact-pinned.
