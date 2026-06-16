@@ -1,5 +1,11 @@
 # SPARDA
 
+<div align="center">
+  <img src="assets/logo-presentation.png" alt="SPARDA Banner" width="800" />
+</div>
+
+<br/>
+
 **Your AI can write code. It still can't operate your app.**
 
 Claude, Cursor & friends read your *files* — not your *running product*. They can
@@ -51,6 +57,12 @@ No OpenAPI spec. No account. No API key. No server to host.
 To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte.
 
 ## The promise — every word is backed by a test in CI
+
+<div align="center">
+  <img src="assets/features-presentation.png" alt="SPARDA Features" width="800" />
+</div>
+
+<br/>
 
 1. **Three minutes, one command.** AST scan, router generation, reversible injection — no config.
 2. **Try it for free, leave for free.** `npx sparda-mcp remove` restores your code **byte-for-byte** (tested on JS, TS, Python, even Windows CRLF files). No trace, no lock-in.
@@ -145,5 +157,11 @@ crippled to upsell you.
 [Business Source License 1.1](./LICENSE) — free to use, including in production.
 You may not resell SPARDA or offer it as a competing commercial service.
 Each version converts to Apache 2.0 four years after its release.
+
+<div align="center">
+  <img src="assets/github-star.png" alt="Leave a Star" width="600" />
+</div>
+
+<br/>
 
 By [Residual Labs](https://residual-labs.fr)
