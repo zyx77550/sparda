@@ -14,7 +14,13 @@
 //     protect (rule #5) — same posture as the router's purity detector.
 
 // bounded memory, same philosophy as antibodies (ADR-010) and circuits.
-export const ENGINE_LIMITS = { MAX_TOOLS: 100, MAX_FIELDS: 60, MAX_TS: 50, MAX_AXONS: 200, MAX_GHOSTS: 200 };
+export const ENGINE_LIMITS = {
+  MAX_TOOLS: 100,
+  MAX_FIELDS: 60,
+  MAX_TS: 50,
+  MAX_AXONS: 200,
+  MAX_GHOSTS: 200,
+};
 
 // FNV-1a 32-bit: collapses a field's value to a fixed token so change can be
 // detected without retaining the value. Non-crypto on purpose — nothing heavy,
@@ -29,7 +35,11 @@ function fnv1a(str) {
 }
 
 function safeStringify(v) {
-  try { return JSON.stringify(v) ?? 'null'; } catch { return String(v); }
+  try {
+    return JSON.stringify(v) ?? 'null';
+  } catch {
+    return String(v);
+  }
 }
 
 // top-level field fingerprints only — bounded, value-free. A non-object body
@@ -71,25 +81,36 @@ export function createPredictiveEngine() {
     const changed = [];
     for (const [k, h] of hashes) {
       const f = rec.fields.get(k);
-      if (!f) { // a field that wasn't there before is itself a change of shape
-        if (rec.fields.size < ENGINE_LIMITS.MAX_FIELDS) rec.fields.set(k, { hash: h, seen: 1, changed: 0 });
+      if (!f) {
+        // a field that wasn't there before is itself a change of shape
+        if (rec.fields.size < ENGINE_LIMITS.MAX_FIELDS)
+          rec.fields.set(k, { hash: h, seen: 1, changed: 0 });
         changed.push(k);
         continue;
       }
       f.seen += 1;
-      if (f.hash !== h) { f.hash = h; f.changed += 1; changed.push(k); }
+      if (f.hash !== h) {
+        f.hash = h;
+        f.changed += 1;
+        changed.push(k);
+      }
     }
     // a field that vanished this call also counts as movement
     for (const k of rec.fields.keys()) if (!hashes.has(k)) changed.push(k);
 
-    if (changed.length === 0) { stats.noChange += 1; return { type: 'NO_CHANGE', tool }; }
+    if (changed.length === 0) {
+      stats.noChange += 1;
+      return { type: 'NO_CHANGE', tool };
+    }
     stats.delta += 1;
     return { type: 'DELTA', tool, changedFields: changed };
   }
 
   // after a write the underlying resource may have moved — drop the model so a
   // stale "stable" reading can't survive it. (Wired later; kept faithful here.)
-  function invalidate(tool) { tools.delete(tool); }
+  function invalidate(tool) {
+    tools.delete(tool);
+  }
 
   // names + counts only — never a value. A field is "stable" once it has been
   // seen more than once without ever changing; "volatile" the moment it moves;
@@ -122,7 +143,7 @@ const RHYTHM = { MIN_TS: 5, REGULARITY_THRESHOLD: 0.25 };
 // only call timestamps (plain numbers — never a payload, never PII), bounded per
 // tool, runtime-only.
 export function createRhythmDetector() {
-  const times = new Map();    // tool -> number[] (ms timestamps, ring)
+  const times = new Map(); // tool -> number[] (ms timestamps, ring)
   const patterns = new Map(); // tool -> { periodMs, confidence, observations, nextPredictedMs }
   const stats = { patternsDetected: 0 };
 
@@ -160,7 +181,10 @@ export function createRhythmDetector() {
     }
   }
 
-  function invalidate(tool) { times.delete(tool); patterns.delete(tool); }
+  function invalidate(tool) {
+    times.delete(tool);
+    patterns.delete(tool);
+  }
 
   // detected patterns only — names + cadence, never a value. nextEstimate is an
   // ISO instant so the reader can see WHEN the next call is expected.
@@ -195,7 +219,7 @@ const MYELIN = { THRESHOLD: 3, MAX_LAYERS: 10 };
 // real latency in the immune system and won't report an invented number.
 export function createMyelinTracker() {
   const axons = new Map(); // "src-->tgt" -> { strength, traversals, lastTs, myelinated }
-  let prev = null;         // the previously observed tool — the chain is the session
+  let prev = null; // the previously observed tool — the chain is the session
 
   function observe(tool, ts) {
     if (prev !== null && prev !== tool) reinforce(`${prev}-->${tool}`, ts); // no self-edges
@@ -220,7 +244,11 @@ export function createMyelinTracker() {
     let victimKey = null;
     let victim = null;
     for (const [k, a] of axons) {
-      if (!victim || a.strength < victim.strength || (a.strength === victim.strength && a.lastTs < victim.lastTs)) {
+      if (
+        !victim ||
+        a.strength < victim.strength ||
+        (a.strength === victim.strength && a.lastTs < victim.lastTs)
+      ) {
         victimKey = k;
         victim = a;
       }
@@ -276,7 +304,7 @@ export function createMyelinTracker() {
 const NOETHER = { MIN_OBS: 5, MIN_STABILITY: 0.85 };
 
 export function createNoetherScanner() {
-  const fields = new Map();     // tool -> Map<field, { first, total, matches }>
+  const fields = new Map(); // tool -> Map<field, { first, total, matches }>
   const writeTools = new Set(); // names of tools observed mutating (bounded)
 
   function observe(tool, result, isWrite) {
@@ -293,7 +321,8 @@ export function createNoetherScanner() {
     for (const [k, h] of fieldHashes(result)) {
       const f = rec.get(k);
       if (!f) {
-        if (rec.size < ENGINE_LIMITS.MAX_FIELDS) rec.set(k, { first: h, total: 1, matches: 1 });
+        if (rec.size < ENGINE_LIMITS.MAX_FIELDS)
+          rec.set(k, { first: h, total: 1, matches: 1 });
         continue;
       }
       f.total += 1;
@@ -301,7 +330,10 @@ export function createNoetherScanner() {
     }
   }
 
-  function invalidate(tool) { fields.delete(tool); writeTools.delete(tool); }
+  function invalidate(tool) {
+    fields.delete(tool);
+    writeTools.delete(tool);
+  }
 
   // conserved fields only — names + rates, never a value. Surfaced solely once writes
   // have been observed, so each invariant is a genuine "stable despite mutation" claim.
@@ -313,7 +345,12 @@ export function createNoetherScanner() {
           if (f.total < NOETHER.MIN_OBS) continue;
           const rate = f.matches / f.total;
           if (rate >= NOETHER.MIN_STABILITY) {
-            invariants.push({ tool, field, stability: Number(rate.toFixed(3)), observations: f.total });
+            invariants.push({
+              tool,
+              field,
+              stability: Number(rate.toFixed(3)),
+              observations: f.total,
+            });
           }
         }
       }
@@ -332,11 +369,11 @@ export function createNoetherScanner() {
 const GHOST = { MIN_OBS: 3, MIN_CORRELATION: 0.7 };
 
 export function createGravitationalLens() {
-  const lastHash = new Map();  // read tool -> last whole-result fingerprint
-  const corr = new Map();      // "W:::G" -> { hits, total }
-  let pendingWrite = null;     // the write whose effect we are still attributing
-  let snap = null;             // fingerprint of every read at the instant W fired
-  let scored = new Set();      // "W:::G" already counted this write episode
+  const lastHash = new Map(); // read tool -> last whole-result fingerprint
+  const corr = new Map(); // "W:::G" -> { hits, total }
+  let pendingWrite = null; // the write whose effect we are still attributing
+  let snap = null; // fingerprint of every read at the instant W fired
+  let scored = new Set(); // "W:::G" already counted this write episode
 
   function observe(tool, result, isWrite) {
     if (isWrite) {
@@ -348,7 +385,8 @@ export function createGravitationalLens() {
     const h = fnv1a(safeStringify(result));
     if (pendingWrite !== null && snap.has(tool)) {
       const key = `${pendingWrite}:::${tool}`;
-      if (!scored.has(key)) { // one vote per write episode — never inflate a repeated read
+      if (!scored.has(key)) {
+        // one vote per write episode — never inflate a repeated read
         scored.add(key);
         let c = corr.get(key);
         if (!c) {
@@ -360,7 +398,8 @@ export function createGravitationalLens() {
         if (snap.get(tool) !== h) c.hits += 1; // the write moved this read
       }
     }
-    if (lastHash.size < ENGINE_LIMITS.MAX_TOOLS || lastHash.has(tool)) lastHash.set(tool, h);
+    if (lastHash.size < ENGINE_LIMITS.MAX_TOOLS || lastHash.has(tool))
+      lastHash.set(tool, h);
   }
 
   // least-observed first; among equals, the least-correlated — same "weakest goes"
@@ -369,7 +408,11 @@ export function createGravitationalLens() {
     let victimKey = null;
     let victim = null;
     for (const [k, c] of corr) {
-      if (!victim || c.total < victim.total || (c.total === victim.total && c.hits < victim.hits)) {
+      if (
+        !victim ||
+        c.total < victim.total ||
+        (c.total === victim.total && c.hits < victim.hits)
+      ) {
         victimKey = k;
         victim = c;
       }
@@ -379,7 +422,10 @@ export function createGravitationalLens() {
 
   function invalidate(tool) {
     lastHash.delete(tool);
-    if (pendingWrite === tool) { pendingWrite = null; snap = null; }
+    if (pendingWrite === tool) {
+      pendingWrite = null;
+      snap = null;
+    }
     for (const k of [...corr.keys()]) {
       const [w, g] = k.split(':::');
       if (w === tool || g === tool) corr.delete(k);
@@ -394,7 +440,12 @@ export function createGravitationalLens() {
       const rate = c.hits / c.total;
       if (rate >= GHOST.MIN_CORRELATION) {
         const [writeTool, affects] = k.split(':::');
-        ghosts.push({ writeTool, affects, correlation: Number(rate.toFixed(3)), observations: c.total });
+        ghosts.push({
+          writeTool,
+          affects,
+          correlation: Number(rate.toFixed(3)),
+          observations: c.total,
+        });
       }
     }
     return { ghosts };
@@ -413,7 +464,10 @@ export function createDependencyMap() {
       noether.observe(tool, result, isWrite);
       lens.observe(tool, result, isWrite);
     },
-    invalidate(tool) { noether.invalidate(tool); lens.invalidate(tool); },
+    invalidate(tool) {
+      noether.invalidate(tool);
+      lens.invalidate(tool);
+    },
     snapshot() {
       const n = noether.snapshot();
       const l = lens.snapshot();
@@ -460,7 +514,9 @@ function canonicalize(v) {
   }
   return v;
 }
-function canonicalArgSig(args) { return safeStringify(canonicalize(args)); }
+function canonicalArgSig(args) {
+  return safeStringify(canonicalize(args));
+}
 
 export function createFlywheel() {
   // entryKey "tool::<fnv1a(argsig)>" -> { tool, hash, hits, value, ts }. The key
@@ -468,7 +524,9 @@ export function createFlywheel() {
   const cache = new Map();
   const stats = { served: 0, misses: 0, evictions: 0 };
 
-  function keyFor(tool, args) { return `${tool}::${fnv1a(canonicalArgSig(args))}`; }
+  function keyFor(tool, args) {
+    return `${tool}::${fnv1a(canonicalArgSig(args))}`;
+  }
 
   // hot-path surface (wired in 5b): return a cached value ONLY when proven pure and
   // fresh. now is injectable so freshness is deterministic in tests.
@@ -494,18 +552,29 @@ export function createFlywheel() {
       cache.set(k, { tool, hash: h, hits: 1, value: result, ts });
       return;
     }
-    if (e.hash === h) e.hits += 1;        // another identical sighting — closer to / past the bar
-    else { e.hash = h; e.hits = 1; }      // the answer moved — restart the proof
-    e.value = result;                     // latest bytes always win
-    e.ts = ts;                            // freshness from this real fetch
+    if (e.hash === h)
+      e.hits += 1; // another identical sighting — closer to / past the bar
+    else {
+      e.hash = h;
+      e.hits = 1;
+    } // the answer moved — restart the proof
+    e.value = result; // latest bytes always win
+    e.ts = ts; // freshness from this real fetch
   }
 
   // oldest fetch goes first — same "weakest goes" shape as circuits/axons/ghosts.
   function evictOldest() {
     let victimKey = null;
     let oldest = Infinity;
-    for (const [k, e] of cache) if (e.ts < oldest) { oldest = e.ts; victimKey = k; }
-    if (victimKey !== null) { cache.delete(victimKey); stats.evictions += 1; }
+    for (const [k, e] of cache)
+      if (e.ts < oldest) {
+        oldest = e.ts;
+        victimKey = k;
+      }
+    if (victimKey !== null) {
+      cache.delete(victimKey);
+      stats.evictions += 1;
+    }
   }
 
   // drop every entry for a tool — used by the spine to purge reads a write moved.
@@ -539,7 +608,9 @@ export function createSpardaEngine() {
     // hot-path serve (R4.3): ask the flywheel for a proven-stable answer before the
     // bridge pays the host. Always safe to call — returns {hit:false} until an organ
     // has proof. The bridge gates the *use* of a hit behind SPARDA_FLYWHEEL (5b).
-    preCall(tool, args) { return flywheel.preCall(tool, args); },
+    preCall(tool, args) {
+      return flywheel.preCall(tool, args);
+    },
     // ts is captured on the hot path (a cheap clock read) and passed in, so the
     // cadence reflects real call times — not whenever the idle harvester drains.
     // isWrite lets Bloc D separate state reads from mutations (a GET can't move the
@@ -554,18 +625,27 @@ export function createSpardaEngine() {
         // ghost map (the slice-4 payoff) instead of nuking the whole cache. Runs in
         // idle, so the bounded ghost scan never touches a request (rule #1).
         flywheel.invalidate(tool);
-        for (const g of deps.snapshot().ghosts) if (g.writeTool === tool) flywheel.invalidate(g.affects);
+        for (const g of deps.snapshot().ghosts)
+          if (g.writeTool === tool) flywheel.invalidate(g.affects);
       } else {
         flywheel.observe(tool, args, result, ts);
       }
       return predictive.observe(tool, result);
     },
-    invalidate(tool) { predictive.invalidate(tool); rhythm.invalidate(tool); myelin.invalidate(tool); deps.invalidate(tool); flywheel.invalidate(tool); },
+    invalidate(tool) {
+      predictive.invalidate(tool);
+      rhythm.invalidate(tool);
+      myelin.invalidate(tool);
+      deps.invalidate(tool);
+      flywheel.invalidate(tool);
+    },
     // structural cache purge (5b): only the bridge knows HTTP paths, so when a write
     // hits a path it asks us to drop the cached GET on that SAME path. Flywheel-only —
     // unlike invalidate(), it must NOT erase the sibling read's learned rhythm/myelin/
     // deps, only its now-stale cached answer.
-    invalidateCache(tool) { flywheel.invalidate(tool); },
+    invalidateCache(tool) {
+      flywheel.invalidate(tool);
+    },
     snapshot() {
       return {
         stability: predictive.snapshot(),

@@ -4,7 +4,7 @@
 
 // SPARDA identity: violet → cyan, same stops as the brand gradient
 const VIOLET = [192, 132, 252]; // #c084fc
-const CYAN = [103, 232, 249];   // #67e8f9
+const CYAN = [103, 232, 249]; // #67e8f9
 const RESET = '\x1b[0m';
 
 // evaluated per call so tests (and runtime env changes) see the truth;
@@ -16,9 +16,13 @@ function enabled() {
 }
 
 function truecolor() {
-  return /truecolor|24bit/i.test(process.env.COLORTERM ?? '') ||
-    ['iTerm.app', 'vscode', 'WezTerm', 'ghostty'].includes(process.env.TERM_PROGRAM ?? '') ||
-    Boolean(process.env.WT_SESSION);
+  return (
+    /truecolor|24bit/i.test(process.env.COLORTERM ?? '') ||
+    ['iTerm.app', 'vscode', 'WezTerm', 'ghostty'].includes(
+      process.env.TERM_PROGRAM ?? '',
+    ) ||
+    Boolean(process.env.WT_SESSION)
+  );
 }
 
 const sgr = (open) => (s) => (enabled() ? `\x1b[${open}m${s}${RESET}` : String(s));
@@ -39,18 +43,23 @@ export function gradient(text) {
   if (!enabled()) return text;
   const chars = [...text];
   if (truecolor()) {
-    const body = chars.map((ch, i) => {
-      const t = chars.length === 1 ? 0 : i / (chars.length - 1);
-      const [r, g, b] = VIOLET.map((v, k) => Math.round(v + (CYAN[k] - v) * t));
-      return `\x1b[1m\x1b[38;2;${r};${g};${b}m${ch}`;
-    }).join('');
+    const body = chars
+      .map((ch, i) => {
+        const t = chars.length === 1 ? 0 : i / (chars.length - 1);
+        const [r, g, b] = VIOLET.map((v, k) => Math.round(v + (CYAN[k] - v) * t));
+        return `\x1b[1m\x1b[38;2;${r};${g};${b}m${ch}`;
+      })
+      .join('');
     return body + RESET;
   }
   const ramp = [177, 141, 147, 153, 117];
-  const body = chars.map((ch, i) => {
-    const step = ramp[Math.min(ramp.length - 1, Math.floor((i / chars.length) * ramp.length))];
-    return `\x1b[1m\x1b[38;5;${step}m${ch}`;
-  }).join('');
+  const body = chars
+    .map((ch, i) => {
+      const step =
+        ramp[Math.min(ramp.length - 1, Math.floor((i / chars.length) * ramp.length))];
+      return `\x1b[1m\x1b[38;5;${step}m${ch}`;
+    })
+    .join('');
   return body + RESET;
 }
 
@@ -58,9 +67,12 @@ export function gradient(text) {
 // one pass on purpose: a second regex pass would chew the ANSI escapes of the first
 export function colorizeJson(json) {
   if (!enabled()) return json;
-  return json.replace(/("(?:[^"\\]|\\.)*")(\s*:)?|([{}[\],])/g, (m, str, colon, punct) => {
-    if (punct) return c.dim(punct);
-    if (colon !== undefined) return c.violet(str) + c.dim(colon);
-    return c.cyan(str);
-  });
+  return json.replace(
+    /("(?:[^"\\]|\\.)*")(\s*:)?|([{}[\],])/g,
+    (m, str, colon, punct) => {
+      if (punct) return c.dim(punct);
+      if (colon !== undefined) return c.violet(str) + c.dim(colon);
+      return c.cyan(str);
+    },
+  );
 }

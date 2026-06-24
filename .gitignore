@@ -1,5 +1,6 @@
 node_modules/
 dist/
+coverage/
 .sparda/
 *.log
 .env
@@ -8,6 +9,7 @@ dist/
 __pycache__/
 *.pyc
 tests/.tmp/
+bench/.tmp/
 *.bak
 sparda_test_state_*/
 scratch/

@@ -71,8 +71,8 @@ function assertNoCRLF(headerName, value) {
       new Error(`context value for "${headerName}" has illegal control chars`),
       {
         code: 'USER',
-        hint: `${headerName} must be a single header line — no CR, LF, or NUL`
-      }
+        hint: `${headerName} must be a single header line — no CR, LF, or NUL`,
+      },
     );
   }
 }
@@ -96,10 +96,10 @@ export function validateConfig(config) {
   if (typeof config !== 'object' || Array.isArray(config)) {
     return {
       valid: false,
-      error: Object.assign(
-        new Error('contextPropagation must be an object'),
-        { code: 'USER', hint: 'Remove the key or provide a valid object' }
-      )
+      error: Object.assign(new Error('contextPropagation must be an object'), {
+        code: 'USER',
+        hint: 'Remove the key or provide a valid object',
+      }),
     };
   }
 
@@ -107,10 +107,10 @@ export function validateConfig(config) {
   if (config.mode !== undefined && config.mode !== 'verbatim') {
     return {
       valid: false,
-      error: Object.assign(
-        new Error('contextPropagation.mode must be "verbatim"'),
-        { code: 'USER', hint: 'Only "verbatim" is supported — SPARDA never interprets context' }
-      )
+      error: Object.assign(new Error('contextPropagation.mode must be "verbatim"'), {
+        code: 'USER',
+        hint: 'Only "verbatim" is supported — SPARDA never interprets context',
+      }),
     };
   }
 
@@ -119,9 +119,14 @@ export function validateConfig(config) {
     return {
       valid: false,
       error: Object.assign(
-        new Error('contextPropagation.from "mcp.session.metadata" is not supported (§0: caller-supplied context is insecure)'),
-        { code: 'USER', hint: 'Remove "from" or set it to "launch". Values come from CLI flag or env vars.' }
-      )
+        new Error(
+          'contextPropagation.from "mcp.session.metadata" is not supported (§0: caller-supplied context is insecure)',
+        ),
+        {
+          code: 'USER',
+          hint: 'Remove "from" or set it to "launch". Values come from CLI flag or env vars.',
+        },
+      ),
     };
   }
 
@@ -131,8 +136,8 @@ export function validateConfig(config) {
       valid: false,
       error: Object.assign(
         new Error('contextPropagation.from must be "launch" or absent'),
-        { code: 'USER', hint: 'Only operator-pinned launch-time context is supported' }
-      )
+        { code: 'USER', hint: 'Only operator-pinned launch-time context is supported' },
+      ),
     };
   }
 
@@ -141,10 +146,10 @@ export function validateConfig(config) {
     if (!Array.isArray(config.headers)) {
       return {
         valid: false,
-        error: Object.assign(
-          new Error('contextPropagation.headers must be an array'),
-          { code: 'USER', hint: 'Provide an array of header name strings' }
-        )
+        error: Object.assign(new Error('contextPropagation.headers must be an array'), {
+          code: 'USER',
+          hint: 'Provide an array of header name strings',
+        }),
       };
     }
 
@@ -153,8 +158,8 @@ export function validateConfig(config) {
         valid: false,
         error: Object.assign(
           new Error(`contextPropagation.headers exceeds max ${MAX_HEADERS} items`),
-          { code: 'USER', hint: `Reduce to ${MAX_HEADERS} headers or fewer` }
-        )
+          { code: 'USER', hint: `Reduce to ${MAX_HEADERS} headers or fewer` },
+        ),
       };
     }
 
@@ -162,10 +167,10 @@ export function validateConfig(config) {
       if (typeof h !== 'string' || h.length === 0) {
         return {
           valid: false,
-          error: Object.assign(
-            new Error('Each header must be a non-empty string'),
-            { code: 'USER', hint: 'Check all items in contextPropagation.headers' }
-          )
+          error: Object.assign(new Error('Each header must be a non-empty string'), {
+            code: 'USER',
+            hint: 'Check all items in contextPropagation.headers',
+          }),
         };
       }
     }
@@ -260,7 +265,7 @@ export function resolveContext({ argv = [], env = {}, config = null } = {}) {
       if (Buffer.byteLength(value, 'utf8') > MAX_VALUE_BYTES) {
         throw Object.assign(
           new Error(`context value for "${headerName}" exceeds ${MAX_VALUE_BYTES} bytes`),
-          { code: 'USER', hint: 'Shorten the value or split across multiple headers' }
+          { code: 'USER', hint: 'Shorten the value or split across multiple headers' },
         );
       }
 
@@ -270,10 +275,10 @@ export function resolveContext({ argv = [], env = {}, config = null } = {}) {
 
   // Bounds: total header count (defensive — already bounded by declaredHeaders.length ≤ 8)
   if (Object.keys(resolved).length > MAX_HEADERS) {
-    throw Object.assign(
-      new Error(`context exceeds max ${MAX_HEADERS} headers`),
-      { code: 'USER', hint: `Declare at most ${MAX_HEADERS} headers in contextPropagation` }
-    );
+    throw Object.assign(new Error(`context exceeds max ${MAX_HEADERS} headers`), {
+      code: 'USER',
+      hint: `Declare at most ${MAX_HEADERS} headers in contextPropagation`,
+    });
   }
 
   return Object.freeze({ headers: Object.freeze(resolved) });
@@ -313,7 +318,7 @@ export function fingerprintContext(ctx) {
   for (const [name, value] of Object.entries(ctx.headers)) {
     fp[name] = {
       present: true,
-      hash: createHash('sha256').update(value).digest('hex').slice(0, 8)
+      hash: createHash('sha256').update(value).digest('hex').slice(0, 8),
     };
   }
   return fp;

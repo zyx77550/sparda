@@ -9,10 +9,14 @@ import { walkPayload } from './condenser.js';
 // crystallizable = every step is an enabled GET and every link knows where to
 // re-feed from. Re-checked at every bridge start: tools change, circuits stay.
 export function eligibleForCrystallization(circuit, toolSpecs) {
-  return Array.isArray(circuit.steps) && circuit.steps.length >= 2 &&
+  return (
+    Array.isArray(circuit.steps) &&
+    circuit.steps.length >= 2 &&
     circuit.steps.every((s) => toolSpecs[s]?.enabled && toolSpecs[s].method === 'GET') &&
-    Array.isArray(circuit.links) && circuit.links.length > 0 &&
-    circuit.links.every((l) => typeof l.fromKey === 'string' && l.fromKey.length > 0);
+    Array.isArray(circuit.links) &&
+    circuit.links.length > 0 &&
+    circuit.links.every((l) => typeof l.fromKey === 'string' && l.fromKey.length > 0)
+  );
 }
 
 // graceful degradation (survival rule): no sampling → a deterministic name and
@@ -30,8 +34,12 @@ export function fallbackComposite(circuit) {
 
 // a sampled name is untrusted input: normalize hard, reject anything shapeless
 export function normalizeCompositeName(raw) {
-  const n = String(raw ?? '').toLowerCase().trim()
-    .replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  const n = String(raw ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
   return /^[a-z][a-z0-9_]{2,}$/.test(n) ? n : null;
 }
 
@@ -43,7 +51,10 @@ export function compositeSchema(circuit, toolSpecs) {
   for (const step of circuit.steps) {
     for (const p of toolSpecs[step]?.params ?? []) {
       if (autoFed.has(`${step}:${p.name}`) || properties[p.name]) continue;
-      properties[p.name] = { type: p.type === 'unknown' ? 'string' : p.type, description: `${p.description ?? p.in} (for ${step})` };
+      properties[p.name] = {
+        type: p.type === 'unknown' ? 'string' : p.type,
+        description: `${p.description ?? p.in} (for ${step})`,
+      };
       if (p.required) required.push(p.name);
     }
   }
@@ -55,7 +66,10 @@ export function compositeSchema(circuit, toolSpecs) {
 export function findByKey(node, key) {
   let found;
   walkPayload(node, (k, v) => {
-    if (k === key) { found = v; return false; }
+    if (k === key) {
+      found = v;
+      return false;
+    }
   });
   return found;
 }
@@ -78,8 +92,17 @@ export async function runComposite({ circuit, args, toolSpecs, invokeFn }) {
     }
     const payload = await invokeFn(step, stepArgs);
     const status = payload?.upstreamStatus;
-    trace.push({ tool: step, upstreamStatus: status ?? null, ...(payload?.error ? { error: payload.error } : {}) });
-    if (!payload || payload.error !== undefined || status === undefined || status >= 400) {
+    trace.push({
+      tool: step,
+      upstreamStatus: status ?? null,
+      ...(payload?.error ? { error: payload.error } : {}),
+    });
+    if (
+      !payload ||
+      payload.error !== undefined ||
+      status === undefined ||
+      status >= 400
+    ) {
       return { ok: false, trace }; // honest failure: stop the chain, show where
     }
     outputs[step] = payload.data;

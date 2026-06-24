@@ -31,16 +31,16 @@ if (!process.env.SPARDA_PROBE) {
 }
 
 function installShim() {
-  const net    = require('net');
+  const net = require('net');
   const Module = require('module');
 
   const IPC_PORT = parseInt(process.env.SPARDA_IPC_PORT, 10) || 0;
 
   // ── Transport: fork IPC or TCP fallback ────────────────────────────────────
 
-  let socket      = null;
+  let socket = null;
   let socketReady = false;
-  const pending   = [];
+  const pending = [];
 
   function connectTcp() {
     if (socket || !IPC_PORT) return;
@@ -50,23 +50,33 @@ function installShim() {
       for (const line of pending) socket.write(line);
       pending.length = 0;
     });
-    socket.on('error', () => { socket = null; socketReady = false; });
+    socket.on('error', () => {
+      socket = null;
+      socketReady = false;
+    });
   }
 
   function sendLine(line) {
     if (typeof process.send === 'function') {
-      try { process.send(JSON.parse(line.trimEnd())); return; } catch {}
+      try {
+        process.send(JSON.parse(line.trimEnd()));
+        return;
+      } catch {}
     }
     connectTcp();
     if (socketReady && socket) socket.write(line);
     else pending.push(line);
   }
 
-  function sendMsg(obj)  { sendLine(JSON.stringify(obj) + '\n'); }
+  function sendMsg(obj) {
+    sendLine(JSON.stringify(obj) + '\n');
+  }
 
   function sendDone() {
     if (typeof process.send === 'function') {
-      try { process.send({ type: '__done__' }); } catch {}
+      try {
+        process.send({ type: '__done__' });
+      } catch {}
       return;
     }
     const finish = () => {
@@ -93,7 +103,17 @@ function installShim() {
 
   // ── HTTP method list ───────────────────────────────────────────────────────
 
-  const HTTP_METHODS = ['get','post','put','patch','delete','del','head','options','all'];
+  const HTTP_METHODS = [
+    'get',
+    'post',
+    'put',
+    'patch',
+    'delete',
+    'del',
+    'head',
+    'options',
+    'all',
+  ];
 
   // ── Core wrapper — works on any target object ──────────────────────────────
   //
@@ -117,7 +137,10 @@ function installShim() {
       };
     }
     try {
-      Object.defineProperty(target, '__sparda_wrapped__', { value: true, configurable: true });
+      Object.defineProperty(target, '__sparda_wrapped__', {
+        value: true,
+        configurable: true,
+      });
     } catch {}
   }
 
@@ -133,20 +156,30 @@ function installShim() {
     if (!appProto || appProto.__sparda_listen_patched__) return;
     if (typeof appProto.listen !== 'function') return;
     try {
-      Object.defineProperty(appProto, '__sparda_listen_patched__', { value: true, configurable: true });
+      Object.defineProperty(appProto, '__sparda_listen_patched__', {
+        value: true,
+        configurable: true,
+      });
     } catch {}
-    const origListen = appProto.listen;
     appProto.listen = function spardaListen(...args) {
       clearTimeout(idleTimer);
       // §ANALYSE §2: call the listen callback so routes registered inside it are captured
-      const cb = args.find(a => typeof a === 'function');
-      if (cb) { try { cb(); } catch {} }
+      const cb = args.find((a) => typeof a === 'function');
+      if (cb) {
+        try {
+          cb();
+        } catch {}
+      }
       sendDone();
       // Do NOT call origListen — no real socket in probe mode
       return {
-        on()      { return this; },
-        close()   {},
-        address() { return { port: 0, address: '127.0.0.1', family: 'IPv4' }; },
+        on() {
+          return this;
+        },
+        close() {},
+        address() {
+          return { port: 0, address: '127.0.0.1', family: 'IPv4' };
+        },
       };
     };
   }
@@ -156,7 +189,10 @@ function installShim() {
   function patchExpress(exp) {
     if (!exp || exp.__sparda_factory_patched__) return;
     try {
-      Object.defineProperty(exp, '__sparda_factory_patched__', { value: true, configurable: true });
+      Object.defineProperty(exp, '__sparda_factory_patched__', {
+        value: true,
+        configurable: true,
+      });
     } catch {}
 
     // Surface 1: express.application — catches app.get/post/... (Express 4 & 5)
@@ -179,7 +215,7 @@ function installShim() {
   // ── Intercept require('express') via Module._load ─────────────────────────
 
   const originalLoad = Module._load;
-  Module._load = function spardaLoad(request, parent, isMain) {
+  Module._load = function spardaLoad(request) {
     const result = originalLoad.apply(this, arguments);
     if (request === 'express') patchExpress(result);
     return result;
@@ -190,8 +226,8 @@ function installShim() {
   // this shim loaded, Module._load hook fires too late. Patch the cached export.
 
   try {
-    const expressPaths = Object.keys(require.cache).filter(
-      k => /[/\\]express[/\\]index\.js$/.test(k)
+    const expressPaths = Object.keys(require.cache).filter((k) =>
+      /[/\\]express[/\\]index\.js$/.test(k),
     );
     for (const p of expressPaths) {
       const cached = require.cache[p];
@@ -201,8 +237,15 @@ function installShim() {
 
   // ── Safety nets ────────────────────────────────────────────────────────────
 
-  process.on('exit',    () => { try { sendDone(); } catch {} });
-  process.on('SIGTERM', () => { sendDone(); setTimeout(() => process.exit(0), 200); });
+  process.on('exit', () => {
+    try {
+      sendDone();
+    } catch {}
+  });
+  process.on('SIGTERM', () => {
+    sendDone();
+    setTimeout(() => process.exit(0), 200);
+  });
 
   module.exports = { record, sendDone };
 }

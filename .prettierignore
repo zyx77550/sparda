@@ -1,0 +1,11 @@
+# Mirror eslint.config.js ignores: never reformat byte-sensitive or rendered code.
+node_modules/
+dist/
+**/.tmp/
+templates/
+tests/fixtures/
+tests/e2e/
+*.bak
+package-lock.json
+bench/results.json
+CHANGELOG.md

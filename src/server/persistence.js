@@ -21,7 +21,6 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -63,7 +62,11 @@ export function atomicWriteFileSync(file, content) {
       return;
     } catch (err) {
       if (!TRANSIENT_LOCK_CODES.has(err.code) || attempt >= RENAME_MAX_ATTEMPTS) {
-        try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+        try {
+          fs.unlinkSync(tmp);
+        } catch {
+          /* best effort */
+        }
         throw err;
       }
       sleepSync(RENAME_BACKOFF_MS * attempt); // 10, 20, 30, 40 ms — clears a brief AV/indexer lock
@@ -128,7 +131,11 @@ export class LocalFileDriver {
     fs.mkdirSync(this.#baseDir, { recursive: true });
   }
   #filePath(instanceId) {
-    const hash = crypto.createHash('sha256').update(instanceId).digest('hex').slice(0, 16);
+    const hash = crypto
+      .createHash('sha256')
+      .update(instanceId)
+      .digest('hex')
+      .slice(0, 16);
     return path.join(this.#baseDir, `sparda_${hash}.json`);
   }
   async save(instanceId, data) {
@@ -194,7 +201,10 @@ export class RedisDriver {
     } catch {
       throw Object.assign(
         new Error('RedisDriver requires the optional "ioredis" package.'),
-        { code: 'USER', hint: 'Run `npm install ioredis`, or use the default file driver.' },
+        {
+          code: 'USER',
+          hint: 'Run `npm install ioredis`, or use the default file driver.',
+        },
       );
     }
     this.#client = new Redis({
@@ -213,7 +223,8 @@ export class RedisDriver {
     try {
       await this.#ready;
       const payload = JSON.stringify(data);
-      if (this.#ttl > 0) await this.#client.setex(this.#key(instanceId), this.#ttl, payload);
+      if (this.#ttl > 0)
+        await this.#client.setex(this.#key(instanceId), this.#ttl, payload);
       else await this.#client.set(this.#key(instanceId), payload);
       return true;
     } catch {

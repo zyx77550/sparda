@@ -17,7 +17,12 @@
   "scripts": {
     "test": "vitest run",
     "test:router": "node tests/router-selftest.cjs",
-    "test:all": "vitest run && node tests/router-selftest.cjs"
+    "test:all": "vitest run && node tests/router-selftest.cjs",
+    "coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{js,cjs,mjs}\"",
+    "format:check": "prettier --check \"**/*.{js,cjs,mjs}\""
   },
   "files": [
     "src",
@@ -47,7 +52,13 @@
     "@modelcontextprotocol/sdk": "1.29.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@vitest/coverage-v8": "^3.2.6",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
     "express": "^4.21.0",
+    "globals": "^15.15.0",
+    "prettier": "^3.8.4",
     "vitest": "^3.2.6"
   }
 }

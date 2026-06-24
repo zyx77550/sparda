@@ -2,7 +2,9 @@
 // SPARDA — Turn any codebase into an MCP server. Residual Labs.
 import { readFileSync } from 'node:fs';
 
-const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const VERSION = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
 const [, , cmd, ...rest] = process.argv;
 
 const flags = new Set(rest.filter((a) => a.startsWith('--')));
@@ -74,6 +76,9 @@ By Residual Labs — residual-labs.fr`);
   console.error(`\n✗ ${err?.message ?? err}`);
   if (err?.hint) console.error(`  → ${err.hint}`);
   if (opts.verbose && err?.stack) console.error(err.stack);
-  else console.error('  (run with --verbose for details — or open an issue: github.com/zyx77550/sparda/issues)');
+  else
+    console.error(
+      '  (run with --verbose for details — or open an issue: github.com/zyx77550/sparda/issues)',
+    );
   process.exit(err?.code === 'USER' ? 1 : 2);
 }

@@ -55,8 +55,8 @@ describe('persistence — atomic manifest writes (ADR-019)', () => {
     writeManifestSync(file, { version: 1, localKey: 'abc', immune: { old: true } });
     expect(mergeManifestKeySync(file, 'immune', { fresh: 1 })).toBe(true);
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(onDisk.localKey).toBe('abc');         // carry-over field untouched
-    expect(onDisk.version).toBe(1);              // untouched
+    expect(onDisk.localKey).toBe('abc'); // carry-over field untouched
+    expect(onDisk.version).toBe(1); // untouched
     expect(onDisk.immune).toEqual({ fresh: 1 }); // only this key replaced
   });
 
@@ -67,7 +67,9 @@ describe('persistence — atomic manifest writes (ADR-019)', () => {
 });
 
 describe('persistence — rename retry on transient Windows locks', () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('retries a transient EPERM on rename, then succeeds (no lost write)', () => {
     const file = path.join(tmpDir, 'sparda.json');
@@ -76,7 +78,7 @@ describe('persistence — rename retry on transient Windows locks', () => {
     vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
       calls += 1;
       if (calls < 3) throw Object.assign(new Error('EPERM: lock'), { code: 'EPERM' }); // AV holds it twice
-      return realRename(from, to);                                                       // then lets go
+      return realRename(from, to); // then lets go
     });
     atomicWriteFileSync(file, 'survived');
     expect(calls).toBe(3);
@@ -92,7 +94,7 @@ describe('persistence — rename retry on transient Windows locks', () => {
       throw Object.assign(new Error('ENOENT: gone'), { code: 'ENOENT' });
     });
     expect(() => atomicWriteFileSync(file, 'x')).toThrow(/ENOENT/);
-    expect(calls).toBe(1);                                   // surfaced immediately, no pointless retries
+    expect(calls).toBe(1); // surfaced immediately, no pointless retries
     expect(fs.existsSync(`${file}.sparda-tmp`)).toBe(false); // temp not left behind
   });
 
@@ -104,7 +106,7 @@ describe('persistence — rename retry on transient Windows locks', () => {
       throw Object.assign(new Error('EBUSY: stuck'), { code: 'EBUSY' });
     });
     expect(() => atomicWriteFileSync(file, 'x')).toThrow(/EBUSY/);
-    expect(calls).toBe(RENAME_MAX_ATTEMPTS);                 // bounded — never an unbounded spin
+    expect(calls).toBe(RENAME_MAX_ATTEMPTS); // bounded — never an unbounded spin
     expect(fs.existsSync(`${file}.sparda-tmp`)).toBe(false);
   });
 });
@@ -170,14 +172,22 @@ describe('persistence — RedisDriver stays optional (hard rule #8)', () => {
 describe('persistence — createStateDriverFromEnv', () => {
   it('maps SPARDA_DRIVER to the right driver, defaulting to file, fail-safe on unknown', async () => {
     const stateDir = path.join(tmpDir, 's'); // keep LocalFileDriver off the repo root
-    expect(createStateDriverFromEnv({ SPARDA_DRIVER: 'memory' })).toBeInstanceOf(MemoryDriver);
+    expect(createStateDriverFromEnv({ SPARDA_DRIVER: 'memory' })).toBeInstanceOf(
+      MemoryDriver,
+    );
 
     const redis = createStateDriverFromEnv({ SPARDA_DRIVER: 'redis' });
     expect(redis).toBeInstanceOf(RedisDriver);
     await redis.load('_'); // consume the lazy-import rejection so it never surfaces as unhandled
 
-    expect(createStateDriverFromEnv({ SPARDA_DRIVER: 'file', SPARDA_STATE_DIR: stateDir })).toBeInstanceOf(LocalFileDriver);
-    expect(createStateDriverFromEnv({ SPARDA_STATE_DIR: stateDir })).toBeInstanceOf(LocalFileDriver);            // default
-    expect(createStateDriverFromEnv({ SPARDA_DRIVER: 'banana', SPARDA_STATE_DIR: stateDir })).toBeInstanceOf(LocalFileDriver); // unknown → file
+    expect(
+      createStateDriverFromEnv({ SPARDA_DRIVER: 'file', SPARDA_STATE_DIR: stateDir }),
+    ).toBeInstanceOf(LocalFileDriver);
+    expect(createStateDriverFromEnv({ SPARDA_STATE_DIR: stateDir })).toBeInstanceOf(
+      LocalFileDriver,
+    ); // default
+    expect(
+      createStateDriverFromEnv({ SPARDA_DRIVER: 'banana', SPARDA_STATE_DIR: stateDir }),
+    ).toBeInstanceOf(LocalFileDriver); // unknown → file
   });
 });

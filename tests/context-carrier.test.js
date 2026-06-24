@@ -22,7 +22,7 @@ import {
   resolveContext,
   injectContext,
   fingerprintContext,
-  validateConfig
+  validateConfig,
 } from '../src/server/context-carrier.js';
 
 // ─── validateConfig ───────────────────────────────────────────────────────────
@@ -37,11 +37,16 @@ describe('validateConfig', () => {
   });
 
   it('accepts minimal valid config', () => {
-    expect(validateConfig({ headers: ['X-Tenant-Id'], mode: 'verbatim' }).valid).toBe(true);
+    expect(validateConfig({ headers: ['X-Tenant-Id'], mode: 'verbatim' }).valid).toBe(
+      true,
+    );
   });
 
   it('accepts config with from: "launch"', () => {
-    expect(validateConfig({ headers: ['X-Tenant-Id'], from: 'launch', mode: 'verbatim' }).valid).toBe(true);
+    expect(
+      validateConfig({ headers: ['X-Tenant-Id'], from: 'launch', mode: 'verbatim' })
+        .valid,
+    ).toBe(true);
   });
 
   it('accepts config without from field (from is optional)', () => {
@@ -76,7 +81,9 @@ describe('validateConfig', () => {
   });
 
   it('rejects too many headers (R1: bounded at 8)', () => {
-    const r = validateConfig({ headers: ['h1','h2','h3','h4','h5','h6','h7','h8','h9'] });
+    const r = validateConfig({
+      headers: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9'],
+    });
     expect(r.valid).toBe(false);
     expect(r.error.code).toBe('USER');
     expect(r.error.message).toMatch(/8/);
@@ -123,7 +130,7 @@ describe('resolveContext — off by default', () => {
     const ctx = resolveContext({
       argv: [],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     const outbound = { 'x-sparda-key': 'abc123' };
     injectContext(outbound, ctx);
@@ -145,7 +152,7 @@ describe('resolveContext — verbatim', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe('acme');
   });
@@ -154,7 +161,7 @@ describe('resolveContext — verbatim', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme-corp'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     const outbound = {};
     injectContext(outbound, ctx);
@@ -165,7 +172,7 @@ describe('resolveContext — verbatim', () => {
     const ctx = resolveContext({
       argv: [],
       env: { SPARDA_CONTEXT_X_Tenant_Id: 'globex' },
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe('globex');
   });
@@ -174,7 +181,7 @@ describe('resolveContext — verbatim', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme'],
       env: { SPARDA_CONTEXT_X_User_Role: 'editor' },
-      config: { headers: ['X-Tenant-Id', 'X-User-Role'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id', 'X-User-Role'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe('acme');
     expect(ctx.headers['X-User-Role']).toBe('editor');
@@ -188,7 +195,7 @@ describe('resolveContext — precedence (CLI > env > absent)', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=from-cli'],
       env: { SPARDA_CONTEXT_X_Tenant_Id: 'from-env' },
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe('from-cli');
   });
@@ -197,7 +204,7 @@ describe('resolveContext — precedence (CLI > env > absent)', () => {
     const ctx = resolveContext({
       argv: [],
       env: { SPARDA_CONTEXT_X_Tenant_Id: 'from-env' },
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe('from-env');
   });
@@ -206,16 +213,23 @@ describe('resolveContext — precedence (CLI > env > absent)', () => {
     const ctx = resolveContext({
       argv: [],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBeUndefined();
   });
 
   it('repeatable --context flags: last one for same key wins', () => {
     const ctx = resolveContext({
-      argv: ['node', 'sparda', '--context', 'X-Tenant-Id=first', '--context', 'X-Tenant-Id=second'],
+      argv: [
+        'node',
+        'sparda',
+        '--context',
+        'X-Tenant-Id=first',
+        '--context',
+        'X-Tenant-Id=second',
+      ],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     // Last write wins (Map insertion order, second overwrites first)
     expect(ctx.headers['X-Tenant-Id']).toBe('second');
@@ -226,11 +240,12 @@ describe('resolveContext — precedence (CLI > env > absent)', () => {
 
 describe('resolveContext — domain-blind', () => {
   it('forwards any value without interpretation — same code path for "acme" vs "globex"', () => {
-    const makeCtx = (tenant) => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${tenant}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    });
+    const makeCtx = (tenant) =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${tenant}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      });
 
     const ctxAcme = makeCtx('acme');
     const ctxGlobex = makeCtx('globex');
@@ -252,7 +267,7 @@ describe('resolveContext — domain-blind', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=nonexistent-tenant-xyz'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     const out = {};
     injectContext(out, ctx);
@@ -263,7 +278,7 @@ describe('resolveContext — domain-blind', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Claim={"role":"superuser"}'],
       env: {},
-      config: { headers: ['X-Claim'], mode: 'verbatim' }
+      config: { headers: ['X-Claim'], mode: 'verbatim' },
     });
     const out = {};
     injectContext(out, ctx);
@@ -275,21 +290,23 @@ describe('resolveContext — domain-blind', () => {
 
 describe('CRLF guard — fail closed at startup', () => {
   const badValues = [
-    ['CR injection',  'acme\rX-Admin: 1'],
-    ['LF injection',  'acme\nX-Admin: 1'],
-    ['CRLF full',     'acme\r\nX-Admin: 1'],
-    ['NUL byte',      'acme\0'],
-    ['LF only',       '\n'],
-    ['CR only',       '\r'],
+    ['CR injection', 'acme\rX-Admin: 1'],
+    ['LF injection', 'acme\nX-Admin: 1'],
+    ['CRLF full', 'acme\r\nX-Admin: 1'],
+    ['NUL byte', 'acme\0'],
+    ['LF only', '\n'],
+    ['CR only', '\r'],
   ];
 
   for (const [label, badValue] of badValues) {
     it(`throws USER at startup — ${label}`, () => {
-      expect(() => resolveContext({
-        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${badValue}`],
-        env: {},
-        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-      })).toThrow(expect.objectContaining({ code: 'USER' }));
+      expect(() =>
+        resolveContext({
+          argv: ['node', 'sparda', '--context', `X-Tenant-Id=${badValue}`],
+          env: {},
+          config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+        }),
+      ).toThrow(expect.objectContaining({ code: 'USER' }));
     });
   }
 
@@ -300,7 +317,7 @@ describe('CRLF guard — fail closed at startup', () => {
       const ctx = resolveContext({
         argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme\r\nX-Admin: 1'],
         env: {},
-        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
       });
       injectContext(outbound, ctx);
     } catch {
@@ -311,11 +328,13 @@ describe('CRLF guard — fail closed at startup', () => {
   });
 
   it('also guards env var values', () => {
-    expect(() => resolveContext({
-      argv: [],
-      env: { SPARDA_CONTEXT_X_Tenant_Id: 'acme\r\nX-Admin: 1' },
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    })).toThrow(expect.objectContaining({ code: 'USER' }));
+    expect(() =>
+      resolveContext({
+        argv: [],
+        env: { SPARDA_CONTEXT_X_Tenant_Id: 'acme\r\nX-Admin: 1' },
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'USER' }));
   });
 
   it('never silently strips — the error must propagate', () => {
@@ -326,7 +345,7 @@ describe('CRLF guard — fail closed at startup', () => {
       result = resolveContext({
         argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme\nX-Injected: evil'],
         env: {},
-        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
       });
     } catch {
       result = null;
@@ -343,14 +362,14 @@ describe('Caller cannot override — AI cannot forge the tenant', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=operator-pinned'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     // The AI (MCP client) sends a tool call with arguments trying to override
-    const maliciousToolArgs = {
+    const _maliciousToolArgs = {
       'X-Tenant-Id': 'ai-chosen-tenant',
       path: '/api/users',
-      method: 'GET'
+      method: 'GET',
     };
 
     // The bridge builds outbound headers and injects context
@@ -369,7 +388,7 @@ describe('Caller cannot override — AI cannot forge the tenant', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=locked'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     // Attempt to mutate the frozen headers object
@@ -385,14 +404,14 @@ describe('Caller cannot override — AI cannot forge the tenant', () => {
     const ctx1 = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=tenant-1'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     // A second call (e.g., if somehow triggered) uses different args
     const ctx2 = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=tenant-2'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     // Each ctx is independent; ctx1 is unaffected
@@ -406,7 +425,7 @@ describe('Caller cannot override — AI cannot forge the tenant', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=operator-pinned'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     const outbound = { 'x-sparda-key': 'secret', 'X-Tenant-Id': 'ai-forged' };
     injectContext(outbound, ctx);
@@ -418,32 +437,40 @@ describe('Caller cannot override — AI cannot forge the tenant', () => {
 
 describe('Bounds — R1', () => {
   it('rejects 9 headers declared in config', () => {
-    expect(() => validateConfig({
-      headers: ['h1','h2','h3','h4','h5','h6','h7','h8','h9'],
-      mode: 'verbatim'
-    })).not.toThrow(); // validateConfig returns {valid:false}, doesn't throw
+    expect(() =>
+      validateConfig({
+        headers: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9'],
+        mode: 'verbatim',
+      }),
+    ).not.toThrow(); // validateConfig returns {valid:false}, doesn't throw
 
-    const r = validateConfig({ headers: ['h1','h2','h3','h4','h5','h6','h7','h8','h9'] });
+    const r = validateConfig({
+      headers: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9'],
+    });
     expect(r.valid).toBe(false);
     expect(r.error.message).toMatch(/8/);
   });
 
   it('throws USER at startup for value > 1024 bytes', () => {
     const longValue = 'x'.repeat(1025);
-    expect(() => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${longValue}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    })).toThrow(expect.objectContaining({ code: 'USER' }));
+    expect(() =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${longValue}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'USER' }));
   });
 
   it('throws USER for value exactly 2KB', () => {
     const twoKB = 'x'.repeat(2048);
-    expect(() => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${twoKB}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    })).toThrow(expect.objectContaining({ code: 'USER' }));
+    expect(() =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${twoKB}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'USER' }));
   });
 
   it('accepts value of exactly 1024 bytes', () => {
@@ -451,7 +478,7 @@ describe('Bounds — R1', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', `X-Tenant-Id=${exactly1024}`],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe(exactly1024);
   });
@@ -468,13 +495,15 @@ describe('Bounds — multibyte byte-length (R1)', () => {
     // '😀' = 2 UTF-16 code units, 4 UTF-8 bytes. 300 of them → length 600 (would
     // pass a .length check) but 1200 bytes (must fail the byte check).
     const emojis = '😀'.repeat(300);
-    expect(emojis.length).toBeLessThanOrEqual(1024);            // a .length guard would let this pass
+    expect(emojis.length).toBeLessThanOrEqual(1024); // a .length guard would let this pass
     expect(Buffer.byteLength(emojis, 'utf8')).toBeGreaterThan(1024);
-    expect(() => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${emojis}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    })).toThrow(expect.objectContaining({ code: 'USER' }));
+    expect(() =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${emojis}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'USER' }));
   });
 
   it('accepts multibyte content up to exactly 1024 bytes, rejects one char past it', () => {
@@ -484,17 +513,19 @@ describe('Bounds — multibyte byte-length (R1)', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', `X-Tenant-Id=${exactly1024Bytes}`],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     expect(ctx.headers['X-Tenant-Id']).toBe(exactly1024Bytes);
 
     // 513 → 1026 bytes → over budget, must throw.
     const over = 'é'.repeat(513);
-    expect(() => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${over}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    })).toThrow(expect.objectContaining({ code: 'USER' }));
+    expect(() =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${over}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'USER' }));
   });
 });
 
@@ -505,7 +536,7 @@ describe('fingerprintContext — value-free', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=secret-tenant-123'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     const fp = fingerprintContext(ctx);
@@ -520,7 +551,7 @@ describe('fingerprintContext — value-free', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=tenant-a'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
     const fp1 = fingerprintContext(ctx);
     const fp2 = fingerprintContext(ctx);
@@ -528,11 +559,12 @@ describe('fingerprintContext — value-free', () => {
   });
 
   it('different values produce different hashes', () => {
-    const make = (v) => resolveContext({
-      argv: ['node', 'sparda', '--context', `X-Tenant-Id=${v}`],
-      env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
-    });
+    const make = (v) =>
+      resolveContext({
+        argv: ['node', 'sparda', '--context', `X-Tenant-Id=${v}`],
+        env: {},
+        config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
+      });
     const fpA = fingerprintContext(make('tenant-a'));
     const fpB = fingerprintContext(make('tenant-b'));
     expect(fpA['X-Tenant-Id'].hash).not.toBe(fpB['X-Tenant-Id'].hash);
@@ -549,9 +581,16 @@ describe('fingerprintContext — value-free', () => {
 describe('Write-safety — orthogonal to context (R3)', () => {
   it('pinning a tenant context does NOT flip any write-safety flag', () => {
     const ctx = resolveContext({
-      argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme', '--context', 'X-Admin=true'],
+      argv: [
+        'node',
+        'sparda',
+        '--context',
+        'X-Tenant-Id=acme',
+        '--context',
+        'X-Admin=true',
+      ],
       env: {},
-      config: { headers: ['X-Tenant-Id', 'X-Admin'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id', 'X-Admin'], mode: 'verbatim' },
     });
 
     // Context is present
@@ -568,7 +607,7 @@ describe('Write-safety — orthogonal to context (R3)', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     const outbound = { 'x-sparda-key': 'abc', 'x-write-safe': 'true' };
@@ -584,13 +623,16 @@ describe('Write-safety — orthogonal to context (R3)', () => {
     const isWriteTool = (toolConfig) => toolConfig?.write === true;
     const isWriteEnabled = (spardaConfig) => spardaConfig?.writeSafety === false;
 
-    const spardaConfig = { writeSafety: true, tools: { getUser: { write: false, enabled: true } } };
+    const spardaConfig = {
+      writeSafety: true,
+      tools: { getUser: { write: false, enabled: true } },
+    };
 
     // Gate 2: context (checked here)
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=acme'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     // Both gates independent
@@ -610,7 +652,7 @@ describe('Performance — hot path', () => {
     const ctx = resolveContext({
       argv: ['node', 'sparda', '--context', 'X-Tenant-Id=perf-tenant'],
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' },
     });
 
     const start = process.hrtime.bigint();
@@ -623,16 +665,32 @@ describe('Performance — hot path', () => {
 
   it('fingerprintContext completes in < 1ms for 8 headers', () => {
     const argv = [
-      'node', 'sparda',
-      '--context', 'X-H1=v1', '--context', 'X-H2=v2',
-      '--context', 'X-H3=v3', '--context', 'X-H4=v4',
-      '--context', 'X-H5=v5', '--context', 'X-H6=v6',
-      '--context', 'X-H7=v7', '--context', 'X-H8=v8',
+      'node',
+      'sparda',
+      '--context',
+      'X-H1=v1',
+      '--context',
+      'X-H2=v2',
+      '--context',
+      'X-H3=v3',
+      '--context',
+      'X-H4=v4',
+      '--context',
+      'X-H5=v5',
+      '--context',
+      'X-H6=v6',
+      '--context',
+      'X-H7=v7',
+      '--context',
+      'X-H8=v8',
     ];
     const ctx = resolveContext({
       argv,
       env: {},
-      config: { headers: ['X-H1','X-H2','X-H3','X-H4','X-H5','X-H6','X-H7','X-H8'], mode: 'verbatim' }
+      config: {
+        headers: ['X-H1', 'X-H2', 'X-H3', 'X-H4', 'X-H5', 'X-H6', 'X-H7', 'X-H8'],
+        mode: 'verbatim',
+      },
     });
 
     // Warm up crypto/JIT compilation
@@ -660,7 +718,7 @@ describe('Memory bounded — R1', () => {
     const ctx = resolveContext({
       argv,
       env: {},
-      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' } // only X-Tenant-Id declared
+      config: { headers: ['X-Tenant-Id'], mode: 'verbatim' }, // only X-Tenant-Id declared
     });
 
     // Only the declared header is in the frozen context

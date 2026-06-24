@@ -38,6 +38,9 @@ SPARDA_RECYCLE = {"servedByCircle": 0, "paidFull": 0}
 # an explicit /invoke/confirm replays the token.
 SPARDA_PENDING = {}
 SPARDA_CONFIRM_TTL_MS = int(os.environ.get("SPARDA_CONFIRM_TTL_MS", "120000"))
+# body cap on POST routes — mirrors express.json({ limit: '64kb' }) so neither
+# framework lets an oversized payload pressure the host's memory (hard rule #1).
+SPARDA_MAX_BODY = 64 * 1024
 
 def sparda_nonce():
     import base64
@@ -330,6 +333,34 @@ def sync_fetch(url, method, headers, body_bytes):
     except Exception as e:
         raise e
 
+async def sparda_read_json(request):
+    # Bound the request body before parsing so an oversized POST can't pressure host
+    # memory. Streams with a hard cap so a chunked body (no Content-Length header) can't
+    # slip past either. Mirrors the Express side's express.json({ limit: '64kb' }).
+    # Returns (body, error_response): error_response is a 413 JSONResponse when too large,
+    # else None; a malformed or empty body yields ({}, None) like the old behavior.
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            if int(cl) > SPARDA_MAX_BODY:
+                return None, JSONResponse(status_code=413, content={"error": "payload too large"})
+        except ValueError:
+            pass
+    total = 0
+    chunks = []
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > SPARDA_MAX_BODY:
+            return None, JSONResponse(status_code=413, content={"error": "payload too large"})
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    if not raw:
+        return {}, None
+    try:
+        return json.loads(raw), None
+    except Exception:
+        return {}, None
+
 @sparda_router.get("/tools")
 async def get_tools(request: Request):
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
@@ -359,10 +390,9 @@ async def gossip(request: Request):
     # or malformed count is silently dropped (bounded, no injection).
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body, err = await sparda_read_json(request)
+    if err is not None:
+        return err
     sparda_merge_gossip(body)
     return Response(status_code=204)
 
@@ -371,10 +401,9 @@ async def invoke_tool(request: Request):
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
 
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body, err = await sparda_read_json(request)
+    if err is not None:
+        return err
 
     tool = body.get("tool")
     args = body.get("args", {})
@@ -518,11 +547,10 @@ async def confirm_tool_invocation(request: Request):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     
     t0 = time.time()
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-        
+    body, err = await sparda_read_json(request)
+    if err is not None:
+        return err
+
     confirm = body.get("confirm")
     if not isinstance(confirm, str) or not confirm:
         return JSONResponse(status_code=400, content={"error": "missing confirm token (expected { confirm: \"...\" })"})

@@ -8,7 +8,11 @@ const DANGEROUS = [
 ];
 
 export function sanitizeDescription(raw, fallback) {
-  let text = String(raw ?? '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 300);
+  let text = String(raw ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 300);
   const flagged = DANGEROUS.some((rx) => rx.test(text));
   if (flagged) text = '';
   text = text.replace(/[<>{}]/g, '');
