@@ -6,10 +6,15 @@
 // cross-platform dialog builder + the headless fail-closed path — without spawning anything.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  initiateWrite, preapproveWrite, confirmWrite, buildDialogSpawn, _confirmTestHooks,
+  initiateWrite,
+  preapproveWrite,
+  confirmWrite,
+  buildDialogSpawn,
+  _confirmTestHooks,
 } from '../src/server/confirmation.js';
 
-const { setDialogProvider, clearDialogProvider, getPendingCount, clearAll, MAX_PENDING } = _confirmTestHooks;
+const { setDialogProvider, clearDialogProvider, getPendingCount, clearAll, MAX_PENDING } =
+  _confirmTestHooks;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const approve = async () => true;
@@ -17,8 +22,14 @@ const deny = async () => false;
 const slowHuman = () => sleep(200).then(() => true); // a human who hasn't clicked yet
 const tick = () => sleep(10); // let setImmediate fire requestSignal2
 
-beforeEach(() => { clearAll(); });
-afterEach(async () => { clearDialogProvider(); clearAll(); await sleep(0); }); // drain stray setImmediates
+beforeEach(() => {
+  clearAll();
+});
+afterEach(async () => {
+  clearDialogProvider();
+  clearAll();
+  await sleep(0);
+}); // drain stray setImmediates
 
 describe('confirmation — two-signal state machine (the forge is closed)', () => {
   it('the AI holding the token is NOT enough — confirmWrite is awaiting_human until the click', async () => {
@@ -55,7 +66,10 @@ describe('confirmation — two-signal state machine (the forge is closed)', () =
   });
 
   it('a token the bridge never armed is unknown — an AI-invented token cannot pass', () => {
-    expect(confirmWrite('deadbeef'.repeat(8))).toEqual({ ok: false, reason: 'unknown_token' });
+    expect(confirmWrite('deadbeef'.repeat(8))).toEqual({
+      ok: false,
+      reason: 'unknown_token',
+    });
   });
 
   it('rejects malformed input before touching the map', () => {
@@ -76,7 +90,8 @@ describe('confirmation — R1: the hot path never pays for Signal 2', () => {
 
   it('is bounded: the pending map caps at MAX_PENDING, evicting the oldest', () => {
     setDialogProvider(approve);
-    for (let i = 0; i < MAX_PENDING + 5; i++) initiateWrite({ token: `tok_${i}`, label: 'POST /x' });
+    for (let i = 0; i < MAX_PENDING + 5; i++)
+      initiateWrite({ token: `tok_${i}`, label: 'POST /x' });
     expect(getPendingCount()).toBe(MAX_PENDING); // never grows past the cap
   });
 
@@ -103,7 +118,8 @@ describe('confirmation — elicitation pre-approval (no double prompt)', () => {
 });
 
 describe('confirmation — cross-platform OS dialog (built, never spawned)', () => {
-  const MSG = 'POST /api/products\nToken: abc123def456…\n\nAllow this write on your live app?';
+  const MSG =
+    'POST /api/products\nToken: abc123def456…\n\nAllow this write on your live app?';
   const TITLE = 'SPARDA — Write confirmation';
 
   it('win32 → Windows PowerShell MessageBox, default Deny, message via env (no interpolation)', () => {

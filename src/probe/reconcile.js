@@ -37,9 +37,9 @@ export function reconcile(staticRoutes, probedRoutes) {
   if (!probedRoutes || probedRoutes.length === 0) {
     const sorted = sortRoutes([...staticRoutes]);
     return {
-      routes:       sorted,
-      gaps:         [],
-      staticCount:  staticRoutes.length,
+      routes: sorted,
+      gaps: [],
+      staticCount: staticRoutes.length,
       dynamicCount: 0,
     };
   }
@@ -66,11 +66,11 @@ export function reconcile(staticRoutes, probedRoutes) {
     } else {
       // Gap: probe found something the AST missed
       const gap = {
-        method:     (dyn.method ?? 'GET').toUpperCase(),
-        path:       normalizeFastAPIParams(dyn.path ?? '/'),
+        method: (dyn.method ?? 'GET').toUpperCase(),
+        path: normalizeFastAPIParams(dyn.path ?? '/'),
         pathParams: extractPathParams(dyn.path ?? '/'),
-        source:     'dynamic',
-        confirmed:  false,
+        source: 'dynamic',
+        confirmed: false,
         writeClass: dyn.writeClass ?? inferWriteClass(dyn.method),
       };
       gaps.push(gap);
@@ -82,9 +82,9 @@ export function reconcile(staticRoutes, probedRoutes) {
   const sorted = sortRoutes(union);
 
   return {
-    routes:       sorted,
+    routes: sorted,
     gaps,
-    staticCount:  staticRoutes.length,
+    staticCount: staticRoutes.length,
     dynamicCount: gaps.length,
   };
 }
@@ -97,7 +97,7 @@ export function reconcile(staticRoutes, probedRoutes) {
  */
 function routeKey(route) {
   const method = (route.method ?? 'GET').toUpperCase();
-  const path   = normalizePath(route.path ?? '/');
+  const path = normalizePath(route.path ?? '/');
   return `${method} ${path}`;
 }
 
@@ -106,14 +106,15 @@ function routeKey(route) {
  * Used only for comparison (key generation).
  */
 function normalizePath(path) {
-  return (path ?? '/')
-    .replace(/\{[^}]+\}/g,    ':param')   // FastAPI {id}
-    .replace(/:[a-zA-Z_]\w*/g, ':param')  // Express :id
-    .replace(/\*\*[^/]*/g,    ':wildcard') // FastAPI **rest
-    .replace(/\/+/g, '/')
-    .replace(/\/$/, '') // strip trailing slash (except root)
-    .toLowerCase()
-    || '/';
+  return (
+    (path ?? '/')
+      .replace(/\{[^}]+\}/g, ':param') // FastAPI {id}
+      .replace(/:[a-zA-Z_]\w*/g, ':param') // Express :id
+      .replace(/\*\*[^/]*/g, ':wildcard') // FastAPI **rest
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '') // strip trailing slash (except root)
+      .toLowerCase() || '/'
+  );
 }
 
 /**
@@ -121,10 +122,11 @@ function normalizePath(path) {
  * Express :param style is already canonical.
  */
 function normalizeFastAPIParams(path) {
-  return (path ?? '/')
-    .replace(/\{([^}]+)\}/g, ':$1')  // {id} → :id
-    .replace(/\/+/g, '/')
-    || '/';
+  return (
+    (path ?? '/')
+      .replace(/\{([^}]+)\}/g, ':$1') // {id} → :id
+      .replace(/\/+/g, '/') || '/'
+  );
 }
 
 /** Extract ordered param names from a path (Express or FastAPI style). */

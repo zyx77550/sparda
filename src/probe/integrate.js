@@ -17,7 +17,7 @@
  */
 
 import { probeRoutes } from './probe.js';
-import { reconcile }   from './reconcile.js';
+import { reconcile } from './reconcile.js';
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -40,21 +40,31 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  */
 export function gapToStaticRoute(gap, framework) {
   const method = (gap.method ?? 'GET').toUpperCase();
-  const lower  = method.toLowerCase();
-  const mutating = gap.writeClass ? gap.writeClass === 'write' : WRITE_METHODS.has(method);
+  const lower = method.toLowerCase();
+  const mutating = gap.writeClass
+    ? gap.writeClass === 'write'
+    : WRITE_METHODS.has(method);
 
-  const path = framework === 'fastapi'
-    ? (gap.path ?? '/').replace(/:([a-zA-Z_]\w*)/g, '{$1}')
-    : (gap.path ?? '/');
+  const path =
+    framework === 'fastapi'
+      ? (gap.path ?? '/').replace(/:([a-zA-Z_]\w*)/g, '{$1}')
+      : (gap.path ?? '/');
 
   // Path params, in the exact param object the static parser uses.
   const params = (gap.pathParams ?? []).map((name) => ({
-    name, in: 'path', type: 'string', required: true, description: 'path parameter',
+    name,
+    in: 'path',
+    type: 'string',
+    required: true,
+    description: 'path parameter',
   }));
   // Mirror the static parser: mutating routes get a body param (schema unknown).
   if (mutating) {
     params.push({
-      name: 'body', in: 'body', type: 'object', required: false,
+      name: 'body',
+      in: 'body',
+      type: 'object',
+      required: false,
       description: 'JSON body — schema not statically detected',
     });
   }
@@ -68,7 +78,7 @@ export function gapToStaticRoute(gap, framework) {
     params,
     description: 'Discovered at runtime via --probe; not found by static analysis.',
     mutating,
-    confidence: 'low',   // never statically verified → always low
+    confidence: 'low', // never statically verified → always low
     source: 'dynamic',
   };
 }
@@ -84,9 +94,15 @@ export function gapToStaticRoute(gap, framework) {
  *   gaps        — the raw minimal gaps (stored in the scan-report for provenance)
  *   probedCount — how many routes the probe observed (0 ⇒ probe degraded / nothing seen)
  */
-export async function discoverDynamicRoutes({ framework, entryFile, projectRoot, staticRoutes, timeoutMs = 8000 }) {
+export async function discoverDynamicRoutes({
+  framework,
+  entryFile,
+  projectRoot,
+  staticRoutes,
+  timeoutMs = 8000,
+}) {
   const probed = await probeRoutes({ framework, entryFile, projectRoot, timeoutMs });
-  const { gaps, staticCount, dynamicCount } = reconcile(staticRoutes, probed);
+  const { gaps, staticCount } = reconcile(staticRoutes, probed);
 
   // Defensive: the probe should not emit duplicate (method, path) pairs, but
   // reconcile does not dedup gaps among themselves. Collapse here so we never
@@ -100,5 +116,11 @@ export async function discoverDynamicRoutes({ framework, entryFile, projectRoot,
   });
 
   const added = uniqueGaps.map((g) => gapToStaticRoute(g, framework));
-  return { added, gaps: uniqueGaps, staticCount, dynamicCount: added.length, probedCount: probed.length };
+  return {
+    added,
+    gaps: uniqueGaps,
+    staticCount,
+    dynamicCount: added.length,
+    probedCount: probed.length,
+  };
 }

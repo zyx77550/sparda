@@ -16,7 +16,12 @@ export function carryOverManifest(cwd, tools) {
   }
   for (const [name, t] of Object.entries(tools)) {
     const old = prev?.tools?.[name];
-    if (old && typeof old.enabled === 'boolean' && old.method === t.method && old.path === t.path) {
+    if (
+      old &&
+      typeof old.enabled === 'boolean' &&
+      old.method === t.method &&
+      old.path === t.path
+    ) {
       t.enabled = old.enabled;
     }
   }
@@ -24,16 +29,18 @@ export function carryOverManifest(cwd, tools) {
 }
 
 export function defaultSpardingMemory(prev) {
-  return prev?.sparding ?? {
-    version: 1,
-    policies: {
-      reads: 'allow',
-      writes: 'require_human',
-      deletes: 'block',
-      requireProofAfterWrite: true,
-    },
-    events: [],
-    failures: {},
-    toolFingerprints: {},
-  };
+  return (
+    prev?.sparding ?? {
+      version: 1,
+      policies: {
+        reads: 'allow',
+        writes: 'require_human',
+        deletes: 'block',
+        requireProofAfterWrite: true,
+      },
+      events: [],
+      failures: {},
+      toolFingerprints: {},
+    }
+  );
 }

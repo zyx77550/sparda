@@ -12,15 +12,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MARK_START = '# >>> sparda-injection (do not edit this block) >>>';
 const MARK_END = '# <<< sparda-injection <<<';
 
-export function generateFastAPI({ cwd, entryFile, port, routes, entryAppVars, pythonCmd = 'python' }) {
-  const taken = new Set(['sparda_info', 'sparda_list_disabled_tools', 'sparda_get_context']);
+export function generateFastAPI({
+  cwd,
+  entryFile,
+  port,
+  routes,
+  entryAppVars,
+  pythonCmd = 'python',
+}) {
+  const taken = new Set([
+    'sparda_info',
+    'sparda_list_disabled_tools',
+    'sparda_get_context',
+  ]);
   const tools = {};
   for (const r of routes) {
     const name = toolNameFor(r, taken);
     tools[name] = {
       method: r.method.toUpperCase(),
       path: r.path,
-      enabled: !r.mutating,             // write-safety: mutating tools off by default
+      enabled: !r.mutating, // write-safety: mutating tools off by default
       pathParams: r.params.filter((p) => p.in === 'path').map((p) => p.name),
       description: r.description,
       params: r.params,
@@ -44,7 +55,9 @@ export function generateFastAPI({ cwd, entryFile, port, routes, entryAppVars, py
         tool: name,
         decision: 'audit',
         risk: 'medium',
-        reasons: [`route structure modified (fingerprint changed from ${oldFp} to ${fp})`],
+        reasons: [
+          `route structure modified (fingerprint changed from ${oldFp} to ${fp})`,
+        ],
       });
       if (sparding.events.length > 100) sparding.events.shift();
     }
@@ -59,19 +72,31 @@ export function generateFastAPI({ cwd, entryFile, port, routes, entryAppVars, py
   const routerAbs = path.join(entryDir, routerFileName);
 
   // --- render router from template
-  let tpl = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'fastapi-router.txt'), 'utf8');
+  let tpl = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'templates', 'fastapi-router.txt'),
+    'utf8',
+  );
   tpl = tpl
     // double-stringify: a JSON string literal is also a valid Python string literal,
     // and json.loads() in the template turns it into real Python values (E-009)
     .replace('__TOOLS_JSON__', JSON.stringify(JSON.stringify(tools)))
-    .replace('__SPARDING_POLICIES__', JSON.stringify(JSON.stringify(sparding.policies ?? {})))
+    .replace(
+      '__SPARDING_POLICIES__',
+      JSON.stringify(JSON.stringify(sparding.policies ?? {})),
+    )
     .replace('__LOCAL_KEY__', localKey)
     .replace('__PORT__', String(port));
 
   atomicWrite(routerAbs, tpl);
 
   // --- inject into entry file (regex-based with compilation safety check)
-  const injection = injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCmd });
+  const injection = injectIntoEntry({
+    entryAbs,
+    routerFileName,
+    cwd,
+    entryAppVars,
+    pythonCmd,
+  });
 
   // record what init did to .gitignore so `remove` can revert it exactly (hard rule #4, E-010)
   const gitignore = ensureGitignore(cwd) ?? prev?.gitignore ?? null;
@@ -86,7 +111,12 @@ export function generateFastAPI({ cwd, entryFile, port, routes, entryAppVars, py
     generatedFiles: [path.relative(cwd, routerAbs).split(path.sep).join('/')],
     injectedFiles: injection.injected ? [entryFile] : [],
     createdAt: new Date().toISOString(),
-    tools: Object.fromEntries(Object.entries(tools).map(([k, v]) => [k, { method: v.method, path: v.path, enabled: v.enabled }])),
+    tools: Object.fromEntries(
+      Object.entries(tools).map(([k, v]) => [
+        k,
+        { method: v.method, path: v.path, enabled: v.enabled },
+      ]),
+    ),
     ...(gitignore ? { gitignore } : {}),
     ...(prev?.semantic ? { semantic: prev.semantic } : {}),
     ...(prev?.immune ? { immune: prev.immune } : {}),
@@ -96,12 +126,17 @@ export function generateFastAPI({ cwd, entryFile, port, routes, entryAppVars, py
 
   atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-  return { tools, manifest, routerFile: path.relative(cwd, routerAbs).split(path.sep).join('/'), injection };
+  return {
+    tools,
+    manifest,
+    routerFile: path.relative(cwd, routerAbs).split(path.sep).join('/'),
+    injection,
+  };
 }
 
-function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCmd }) {
+function injectIntoEntry({ entryAbs, cwd, pythonCmd }) {
   const src = fs.readFileSync(entryAbs, 'utf8');
-  
+
   // backup first
   const backupDir = path.join(cwd, '.sparda', 'backup');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -119,7 +154,10 @@ function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCm
 
   // strip previous injection blocks (idempotence)
   let body = src;
-  const blockRx = new RegExp(`\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}\\r?\\n?`, 'g');
+  const blockRx = new RegExp(
+    `\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}\\r?\\n?`,
+    'g',
+  );
   body = body.replace(blockRx, eol);
 
   // Let's find the FastAPI() call assignment to inject right after it
@@ -128,7 +166,7 @@ function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCm
   if (!match) {
     return {
       injected: false,
-      manual: [importLine, 'app.include_router(sparda_router, prefix="/mcp")']
+      manual: [importLine, 'app.include_router(sparda_router, prefix="/mcp")'],
     };
   }
 
@@ -140,7 +178,7 @@ function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCm
     MARK_START,
     `${indent}${importLine}`,
     `${indent}${appName}.include_router(sparda_router, prefix="/mcp")`,
-    MARK_END
+    MARK_END,
   ];
 
   // We find where the matching line starts and ends in order to insert right after it.
@@ -157,7 +195,7 @@ function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCm
   if (insertAt === -1) {
     return {
       injected: false,
-      manual: [importLine, `${appName}.include_router(sparda_router, prefix="/mcp")`]
+      manual: [importLine, `${appName}.include_router(sparda_router, prefix="/mcp")`],
     };
   }
 
@@ -168,7 +206,7 @@ function injectIntoEntry({ entryAbs, routerFileName, cwd, entryAppVars, pythonCm
   if (!verifyPythonSyntax(entryAbs, out, pythonCmd)) {
     return {
       injected: false,
-      manual: [importLine, `${appName}.include_router(sparda_router, prefix="/mcp")`]
+      manual: [importLine, `${appName}.include_router(sparda_router, prefix="/mcp")`],
     };
   }
 
@@ -182,9 +220,12 @@ export function removeInjection(cwd, manifest, pythonCmd = 'python') {
     const abs = path.resolve(cwd, relFile);
     if (!fs.existsSync(abs)) continue;
     const src = fs.readFileSync(abs, 'utf8');
-    const blockRx = new RegExp(`\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}`, 'g');
+    const blockRx = new RegExp(
+      `\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}`,
+      'g',
+    );
     const out = src.replace(blockRx, '');
-    
+
     if (verifyPythonSyntax(abs, out, pythonCmd)) {
       atomicWrite(abs, out);
       results.push({ file: relFile, ok: true });
@@ -199,7 +240,10 @@ function verifyPythonSyntax(filePath, content, pythonCmd) {
   const tmpFile = `${filePath}.syntax-check.py`;
   try {
     fs.writeFileSync(tmpFile, content);
-    const args = pythonCmd === 'py' ? ['-3', '-m', 'py_compile', tmpFile] : ['-m', 'py_compile', tmpFile];
+    const args =
+      pythonCmd === 'py'
+        ? ['-3', '-m', 'py_compile', tmpFile]
+        : ['-m', 'py_compile', tmpFile];
     // py_compile cold-starts slowly on Windows; a 2s budget falsely failed clean
     // removals (rule #4) and post-injection checks under load. 5s matches the
     // test-side syntax budget and only bounds the worst case, never the happy path.
@@ -231,4 +275,6 @@ function ensureGitignore(cwd) {
   return 'created';
 }
 
-function escapeRx(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function escapeRx(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

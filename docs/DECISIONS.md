@@ -135,11 +135,14 @@ moved to a remote store; durability was the gap, not relocation. The bridge's
 merge-writes (`immune`, `sparding`, `semantic`, `labs`) route through
 `mergeManifestKeySync`/`writeManifestSync` so they keep the same atomic+fsync
 guarantee. The module also ships an engine-agnostic, by-`instanceId` driver
-seam (Memory / LocalFile / Redis) reserved for multi-node deployments — **not** for the
+seam (Memory / LocalFile / Redis) reserved for *future* living-engine state
+(the bounded brain snapshot) and multi-node deployments — **not** for the
 manifest. Redis is a **lazy `import('ioredis')`**, never a package dependency:
 selecting `SPARDA_DRIVER=redis` without it throws a clear `code:'USER'` error,
 so the 4 exact-pinned runtime deps (hard rule #8) stay 4 — the seam is opt-in
-and the count is unchanged. Nothing here sits on the request path (hard rule #1).
+and the count is unchanged. Nothing here sits on the request path (hard rule
+#1). An earlier prototype's neural serializer is intentionally **not** ported —
+it belongs to future engine work, not to manifest durability.
 
 ## ADR-020 — Bloc B preCall flywheel: serving a proven-stable read without paying the host (v0.5)
 This is the slice where the engine stops only **observing** and starts
@@ -222,3 +225,10 @@ it — *visible in use* rather than dormant behind a flag nobody flips; an
 off-by-default flagship delivers zero value and demos as a dumb pipe. The
 kill-switch gates at the **bridge**, so the engine organ stays env-free.
 
+**Adapted from an earlier prototype's `BloomGate`/`preCall`, with three
+corrections.** That prototype served on the **first** `record` (no purity proof),
+keyed on **raw** `JSON.stringify(args)` (order-sensitive — same query, different
+key order = a miss), and carried a `bloomSet` that duplicated the `Map`'s own
+membership for no gain. We gate on **proven purity**, key on a **canonical** arg
+signature, drop the redundant set, and add the value-free `snapshot()` discipline
+the prototype lacked.

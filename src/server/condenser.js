@@ -6,11 +6,11 @@
 import fs from 'node:fs';
 import { writeManifestSync } from './persistence.js';
 
-const WINDOW = 20;       // calls remembered per session (ring)
-const MAX_VALUES = 50;   // scalars kept per payload
-const MAX_NODES = 200;   // payload walk budget — nothing heavy, ever
+const WINDOW = 20; // calls remembered per session (ring)
+const MAX_VALUES = 50; // scalars kept per payload
+const MAX_NODES = 200; // payload walk budget — nothing heavy, ever
 const MAX_DEPTH = 4;
-const MAX_CHAIN = 5;     // a circuit longer than this is noise, not a workflow
+const MAX_CHAIN = 5; // a circuit longer than this is noise, not a workflow
 const MAX_LINKS = 10;
 const MAX_CIRCUITS = 30; // bounded memory, same philosophy as antibodies (ADR-010)
 // an emergent capability is a suggestion only after N observations (survival rule)
@@ -35,8 +35,7 @@ export function createSequenceRecorder({ manifest, manifestPath, harvester, onCi
     const argEntries = extractArgEntries(args);
     let link = null;
     // most recent producer wins: the freshest output is the likeliest source
-    outer:
-    for (let i = ring.length - 1; i >= 0; i--) {
+    outer: for (let i = ring.length - 1; i >= 0; i--) {
       for (const [argName, value] of argEntries) {
         if (ring[i].outValues.has(value)) {
           // fromKey = where the value lived in the producer's output — the structure
@@ -54,12 +53,29 @@ export function createSequenceRecorder({ manifest, manifestPath, harvester, onCi
     const sig = chain.join('>');
     const now = new Date().toISOString();
     const circuits = manifest.labs.circuits;
-    const c = circuits[sig] ?? (circuits[sig] = { steps: chain, links: [], seen: 0, firstSeen: now, lastSeen: now });
+    const c =
+      circuits[sig] ??
+      (circuits[sig] = {
+        steps: chain,
+        links: [],
+        seen: 0,
+        firstSeen: now,
+        lastSeen: now,
+      });
     c.seen += 1;
     c.lastSeen = now;
-    if (c.links.length < MAX_LINKS &&
-        !c.links.some((l) => l.from === link.from.tool && l.to === tool && l.arg === link.arg)) {
-      c.links.push({ from: link.from.tool, to: tool, arg: link.arg, fromKey: link.fromKey });
+    if (
+      c.links.length < MAX_LINKS &&
+      !c.links.some(
+        (l) => l.from === link.from.tool && l.to === tool && l.arg === link.arg,
+      )
+    ) {
+      c.links.push({
+        from: link.from.tool,
+        to: tool,
+        arg: link.arg,
+        fromKey: link.fromKey,
+      });
     }
     evict(circuits);
     persist();
@@ -71,7 +87,11 @@ export function createSequenceRecorder({ manifest, manifestPath, harvester, onCi
     const keys = Object.keys(circuits);
     if (keys.length <= MAX_CIRCUITS) return;
     keys
-      .sort((a, b) => (circuits[a].seen - circuits[b].seen) || circuits[a].lastSeen.localeCompare(circuits[b].lastSeen))
+      .sort(
+        (a, b) =>
+          circuits[a].seen - circuits[b].seen ||
+          circuits[a].lastSeen.localeCompare(circuits[b].lastSeen),
+      )
       .slice(0, keys.length - MAX_CIRCUITS)
       .forEach((k) => delete circuits[k]);
   }
@@ -82,7 +102,9 @@ export function createSequenceRecorder({ manifest, manifestPath, harvester, onCi
       const onDisk = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
       onDisk.labs = { ...onDisk.labs, circuits: manifest.labs.circuits };
       writeManifestSync(manifestPath, onDisk);
-    } catch { /* disk briefly unavailable — circuits stay in memory */ }
+    } catch {
+      /* disk briefly unavailable — circuits stay in memory */
+    }
   }
 
   return { record, circuits: () => manifest.labs.circuits };

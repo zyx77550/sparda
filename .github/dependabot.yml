@@ -1,0 +1,28 @@
+version: 2
+
+# Dependency update policy. Runtime deps and dev deps are treated differently
+# on purpose (see CONTRIBUTING.md / hard rule #8): SPARDA ships 4 exact-pinned
+# RUNTIME dependencies and that count is a selling point, so each runtime bump
+# must arrive as its own PR and get an explicit review. Dev tooling (eslint,
+# prettier, vitest, etc.) is grouped into one weekly PR to cut noise.
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+    # Production (runtime) deps are intentionally NOT grouped — they land as
+    # individual PRs so each one can be weighed against the 4-dep posture.
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

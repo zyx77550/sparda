@@ -49,9 +49,15 @@ export function initiateWrite({ token, label } = {}) {
   sweep();
   if (pendingWrites.has(token)) return; // dialog already armed for this token
   if (pendingWrites.size >= MAX_PENDING) evictOldest();
-  pendingWrites.set(token, { state: S1, expiresAt: Date.now() + TIMEOUT_MS, label: String(label ?? token.slice(0, 12)) });
+  pendingWrites.set(token, {
+    state: S1,
+    expiresAt: Date.now() + TIMEOUT_MS,
+    label: String(label ?? token.slice(0, 12)),
+  });
   // Signal 2 runs in parallel — it NEVER blocks the MCP response.
-  setImmediate(() => { requestSignal2(token).catch(() => markDenied(token)); });
+  setImmediate(() => {
+    requestSignal2(token).catch(() => markDenied(token));
+  });
 }
 
 // ── Pre-approval: the human already said yes out-of-band via native elicitation (client UI). ──
@@ -60,7 +66,11 @@ export function preapproveWrite(token) {
   if (typeof token !== 'string' || !token) return;
   sweep();
   if (!pendingWrites.has(token) && pendingWrites.size >= MAX_PENDING) evictOldest();
-  pendingWrites.set(token, { state: S2, expiresAt: Date.now() + TIMEOUT_MS, label: 'elicitation' });
+  pendingWrites.set(token, {
+    state: S2,
+    expiresAt: Date.now() + TIMEOUT_MS,
+    label: 'elicitation',
+  });
 }
 
 async function requestSignal2(token) {
@@ -71,7 +81,10 @@ async function requestSignal2(token) {
     : await openOSDialog(entry.label, token);
   const e = pendingWrites.get(token);
   if (!e || e.state !== S1) return; // consumed, expired, or pre-approved meanwhile
-  if (Date.now() > e.expiresAt) { pendingWrites.delete(token); return; }
+  if (Date.now() > e.expiresAt) {
+    pendingWrites.delete(token);
+    return;
+  }
   e.state = approved ? S2 : DENIED;
 }
 
@@ -88,12 +101,22 @@ export function confirmWrite(token) {
   sweep();
   const entry = pendingWrites.get(token);
   if (!entry) return { ok: false, reason: 'unknown_token' };
-  if (Date.now() > entry.expiresAt) { pendingWrites.delete(token); return { ok: false, reason: 'expired' }; }
+  if (Date.now() > entry.expiresAt) {
+    pendingWrites.delete(token);
+    return { ok: false, reason: 'expired' };
+  }
   switch (entry.state) {
-    case S1: return { ok: false, reason: 'awaiting_human' }; // keep — the AI must retry after the click
-    case DENIED: pendingWrites.delete(token); return { ok: false, reason: 'human_denied' };
-    case S2: pendingWrites.delete(token); return { ok: true }; // burn — single use
-    default: pendingWrites.delete(token); return { ok: false, reason: 'invalid_state' };
+    case S1:
+      return { ok: false, reason: 'awaiting_human' }; // keep — the AI must retry after the click
+    case DENIED:
+      pendingWrites.delete(token);
+      return { ok: false, reason: 'human_denied' };
+    case S2:
+      pendingWrites.delete(token);
+      return { ok: true }; // burn — single use
+    default:
+      pendingWrites.delete(token);
+      return { ok: false, reason: 'invalid_state' };
   }
 }
 
@@ -114,17 +137,31 @@ export function buildDialogSpawn(platform, env, msg, title) {
       '[System.Windows.Forms.MessageBoxDefaultButton]::Button2);',
       'if ($r -eq [System.Windows.Forms.DialogResult]::Yes) { exit 0 } else { exit 1 }',
     ].join(' ');
-    return { cmd: 'powershell', args: ['-NoProfile', '-NonInteractive', '-STA', '-Command', ps] };
+    return {
+      cmd: 'powershell',
+      args: ['-NoProfile', '-NonInteractive', '-STA', '-Command', ps],
+    };
   }
   if (platform === 'darwin') {
     // osascript reads the message from the inherited env (system attribute) — no interpolation.
-    const osa = 'display dialog (system attribute "SPARDA_DLG_MSG") with title (system attribute "SPARDA_DLG_TITLE") '
-      + 'buttons {"Deny", "Allow"} default button "Deny" cancel button "Deny" with icon caution';
+    const osa =
+      'display dialog (system attribute "SPARDA_DLG_MSG") with title (system attribute "SPARDA_DLG_TITLE") ' +
+      'buttons {"Deny", "Allow"} default button "Deny" cancel button "Deny" with icon caution';
     return { cmd: 'osascript', args: ['-e', osa] };
   }
   // Linux/BSD: zenity needs an X or Wayland display. Without one, fail closed.
   if (env.DISPLAY || env.WAYLAND_DISPLAY) {
-    return { cmd: 'zenity', args: ['--question', `--title=${title}`, `--text=${msg}`, '--ok-label=Allow', '--cancel-label=Deny', '--width=420'] };
+    return {
+      cmd: 'zenity',
+      args: [
+        '--question',
+        `--title=${title}`,
+        `--text=${msg}`,
+        '--ok-label=Allow',
+        '--cancel-label=Deny',
+        '--width=420',
+      ],
+    };
   }
   return null; // headless → caller denies
 }
@@ -136,7 +173,9 @@ function openOSDialog(label, token) {
     const plan = buildDialogSpawn(process.platform, process.env, msg, title);
     if (!plan) {
       // R2: human log to stderr. Fail closed — no approval channel means no write.
-      process.stderr.write(`[sparda] no desktop display — write auto-denied (Signal 2 unreachable): ${label}\n`);
+      process.stderr.write(
+        `[sparda] no desktop display — write auto-denied (Signal 2 unreachable): ${label}\n`,
+      );
       return resolve(false);
     }
     let proc;
@@ -148,16 +187,33 @@ function openOSDialog(label, token) {
     } catch {
       return resolve(false); // spawner missing → deny
     }
-    const timer = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } resolve(false); }, TIMEOUT_MS);
-    proc.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
-    proc.on('error', () => { clearTimeout(timer); resolve(false); }); // binary absent (e.g. no zenity) → deny
+    const timer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* already gone */
+      }
+      resolve(false);
+    }, TIMEOUT_MS);
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    }); // binary absent (e.g. no zenity) → deny
   });
 }
 
 // test hooks: inject a fake dialog, inspect/clear the pending map. Never used in production.
 export const _confirmTestHooks = {
-  setDialogProvider: (fn) => { dialogProvider = fn; },
-  clearDialogProvider: () => { dialogProvider = null; },
+  setDialogProvider: (fn) => {
+    dialogProvider = fn;
+  },
+  clearDialogProvider: () => {
+    dialogProvider = null;
+  },
   getPendingCount: () => pendingWrites.size,
   clearAll: () => pendingWrites.clear(),
   TIMEOUT_MS,

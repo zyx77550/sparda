@@ -11,10 +11,10 @@
  * ESM, Node ≥ 18. Zero new dependencies.
  */
 
-import { fork, spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath }           from 'node:url';
+import { fork, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { dirname, resolve, extname } from 'node:path';
-import { platform }                from 'node:process';
+import { platform } from 'node:process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -26,13 +26,18 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-export async function probeRoutes({ framework, entryFile, projectRoot, timeoutMs = 8000 }) {
+export async function probeRoutes({
+  framework,
+  entryFile,
+  projectRoot,
+  timeoutMs = 8000,
+}) {
   if (framework === 'express') return probeExpress({ entryFile, projectRoot, timeoutMs });
   if (framework === 'fastapi') return probeFastAPI({ entryFile, projectRoot, timeoutMs });
-  throw Object.assign(
-    new Error(`Unknown framework: ${framework}`),
-    { code: 'USER', hint: 'framework must be "express" or "fastapi"' }
-  );
+  throw Object.assign(new Error(`Unknown framework: ${framework}`), {
+    code: 'USER',
+    hint: 'framework must be "express" or "fastapi"',
+  });
 }
 
 // ── Express probe ─────────────────────────────────────────────────────────────
@@ -42,12 +47,12 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
 
   if (ext === '.ts' || ext === '.mts' || ext === '.cts') {
     process.stderr.write(
-      '[sparda] --probe skipped: .ts entry needs a runtime loader; static discovery still applied.\n'
+      '[sparda] --probe skipped: .ts entry needs a runtime loader; static discovery still applied.\n',
     );
     return [];
   }
 
-  const isEsm    = ext === '.mjs';
+  const isEsm = ext === '.mjs';
   const shimFlag = isEsm ? ['--import', SHIM_ESM] : ['--require', SHIM_CJS];
 
   const routes = [];
@@ -61,24 +66,30 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
-      try { child && child.kill('SIGKILL'); } catch {}
+      try {
+        child && child.kill('SIGKILL');
+      } catch {}
       resolve_(result);
     }
 
     killTimer = setTimeout(() => {
-      process.stderr.write('[sparda] --probe: timeout waiting for Express routes; using static floor.\n');
+      process.stderr.write(
+        '[sparda] --probe: timeout waiting for Express routes; using static floor.\n',
+      );
       settle(routes);
     }, timeoutMs);
 
     try {
       child = fork(entryFile, [], {
-        cwd:      projectRoot,
+        cwd: projectRoot,
         execArgv: shimFlag,
-        silent:   true,
-        env:      { ...process.env, SPARDA_PROBE: '1' },
+        silent: true,
+        env: { ...process.env, SPARDA_PROBE: '1' },
       });
     } catch (spawnErr) {
-      process.stderr.write(`[sparda] --probe: failed to spawn child: ${spawnErr.message}\n`);
+      process.stderr.write(
+        `[sparda] --probe: failed to spawn child: ${spawnErr.message}\n`,
+      );
       clearTimeout(killTimer);
       resolve_([]);
       return;
@@ -88,15 +99,18 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
 
     child.on('message', (msg) => {
       if (!msg || typeof msg !== 'object') return;
-      if (msg.type === '__done__') { settle(routes); return; }
+      if (msg.type === '__done__') {
+        settle(routes);
+        return;
+      }
       if (msg.type === 'route') {
         const method = normalizeMethod(msg.method);
-        const path   = normalizePath(msg.path);
+        const path = normalizePath(msg.path);
         routes.push({
           method,
           path,
           pathParams: extractPathParams(path),
-          source:     'dynamic',
+          source: 'dynamic',
           writeClass: WRITE_METHODS.has(method) ? 'write' : 'read',
         });
       }
@@ -116,7 +130,9 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
 async function probeFastAPI({ entryFile, projectRoot, timeoutMs }) {
   const python = await resolvePython();
   if (!python) {
-    process.stderr.write('[sparda] --probe: python3/python not found; static discovery still applied.\n');
+    process.stderr.write(
+      '[sparda] --probe: python3/python not found; static discovery still applied.\n',
+    );
     return [];
   }
 
@@ -129,21 +145,25 @@ async function probeFastAPI({ entryFile, projectRoot, timeoutMs }) {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
-      try { child && child.kill(); } catch {}
+      try {
+        child && child.kill();
+      } catch {}
       resolve_(result);
     }
 
     killTimer = setTimeout(() => {
-      process.stderr.write('[sparda] --probe: FastAPI probe timeout; using static floor.\n');
+      process.stderr.write(
+        '[sparda] --probe: FastAPI probe timeout; using static floor.\n',
+      );
       settle(parsePythonOutput(Buffer.concat(stdoutChunks).toString('utf8')));
     }, timeoutMs);
 
     let child;
     try {
       child = spawn(python, [PY_PROBE, entryFile], {
-        cwd:   projectRoot,
+        cwd: projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env:   { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       });
     } catch (err) {
       process.stderr.write(`[sparda] --probe: failed to spawn python: ${err.message}\n`);
@@ -169,10 +189,10 @@ function parsePythonOutput(raw) {
     const arr = JSON.parse(raw.trim());
     if (!Array.isArray(arr)) return [];
     return arr.map((r) => ({
-      method:     normalizeMethod(r.method),
-      path:       normalizeFastAPIParams(r.path ?? '/'),
+      method: normalizeMethod(r.method),
+      path: normalizeFastAPIParams(r.path ?? '/'),
       pathParams: extractPathParams(r.path ?? '/'),
-      source:     'dynamic',
+      source: 'dynamic',
       writeClass: WRITE_METHODS.has(normalizeMethod(r.method)) ? 'write' : 'read',
     }));
   } catch {
@@ -187,9 +207,7 @@ function parsePythonOutput(raw) {
 // §A.6:   1500 ms timeout kills MS Store stub that never returns.
 
 async function resolvePython() {
-  const candidates = platform === 'win32'
-    ? ['python', 'python3']
-    : ['python3', 'python'];
+  const candidates = platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
   for (const cmd of candidates) {
     if (await checkCommand(cmd)) return cmd;
   }
@@ -201,7 +219,9 @@ function checkCommand(cmd) {
     let child;
     // §A.6: 1500 ms timeout — kills Microsoft Store python stub that hangs
     const timer = setTimeout(() => {
-      try { child && child.kill(); } catch {}
+      try {
+        child && child.kill();
+      } catch {}
       res(false);
     }, 1500);
 
@@ -213,8 +233,14 @@ function checkCommand(cmd) {
       return;
     }
 
-    child.on('error', () => { clearTimeout(timer); res(false); });
-    child.on('exit',  (code) => { clearTimeout(timer); res(code === 0); });
+    child.on('error', () => {
+      clearTimeout(timer);
+      res(false);
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      res(code === 0);
+    });
   });
 }
 

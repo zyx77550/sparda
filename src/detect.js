@@ -14,21 +14,37 @@ export function detectStack(cwd) {
       const entryFile = findExpressEntry(cwd, pkg);
       const moduleType = detectModuleType(cwd, pkg, entryFile);
       const port = detectExpressPort(cwd, entryFile);
-      return { framework: 'express', entryFile, moduleType, port, expressVersion: deps.express };
+      return {
+        framework: 'express',
+        entryFile,
+        moduleType,
+        port,
+        expressVersion: deps.express,
+      };
     }
     const known = ['@nestjs/core', 'next', 'fastify', 'koa'].find((d) => deps[d]);
-    if (known) throw err(`${known} detected — not supported yet. Express & FastAPI only in v0.`, '+1 the framework vote: github.com/zyx77550/sparda/issues/1');
+    if (known)
+      throw err(
+        `${known} detected — not supported yet. Express & FastAPI only in v0.`,
+        '+1 the framework vote: github.com/zyx77550/sparda/issues/1',
+      );
   }
   for (const f of ['requirements.txt', 'pyproject.toml']) {
     const p = path.join(cwd, f);
-    if (fs.existsSync(p) && fs.readFileSync(p, 'utf8').toLowerCase().includes('fastapi')) {
+    if (
+      fs.existsSync(p) &&
+      fs.readFileSync(p, 'utf8').toLowerCase().includes('fastapi')
+    ) {
       const entryFile = findFastAPIEntry(cwd);
       const port = detectFastAPIPort(cwd, entryFile);
       const pythonCmd = detectPython();
       return { framework: 'fastapi', entryFile, port, pythonCmd };
     }
   }
-  throw err('No supported framework found (Express, FastAPI).', 'Run sparda-mcp inside your project root, next to package.json.');
+  throw err(
+    'No supported framework found (Express, FastAPI).',
+    'Run sparda-mcp inside your project root, next to package.json.',
+  );
 }
 
 function detectPython() {
@@ -52,13 +68,14 @@ function detectPython() {
       // ignore
     }
   }
-  throw err('Python 3 (>= 3.9) introuvable dans le PATH.', 'Installe Python >= 3.9 pour utiliser SPARDA sur un projet FastAPI.');
+  throw err(
+    'Python 3 (>= 3.9) introuvable dans le PATH.',
+    'Installe Python >= 3.9 pour utiliser SPARDA sur un projet FastAPI.',
+  );
 }
 
 function findFastAPIEntry(cwd) {
-  const candidates = [
-    'main.py', 'app.py', 'src/main.py', 'app/main.py'
-  ];
+  const candidates = ['main.py', 'app.py', 'src/main.py', 'app/main.py'];
   for (const rel of candidates) {
     const abs = path.resolve(cwd, rel);
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
@@ -68,17 +85,27 @@ function findFastAPIEntry(cwd) {
       }
     }
   }
-  
+
   const entry = searchPyFiles(cwd, cwd);
   if (entry) {
     return path.relative(cwd, entry).split(path.sep).join('/');
   }
 
-  throw err('Could not locate your FastAPI entry file (the one calling FastAPI()).', 'Specify it manually, or make sure FastAPI() is declared in one of your python files.');
+  throw err(
+    'Could not locate your FastAPI entry file (the one calling FastAPI()).',
+    'Specify it manually, or make sure FastAPI() is declared in one of your python files.',
+  );
 }
 
 function searchPyFiles(dir, root, countRef = { val: 0 }) {
-  const EXCLUDE = new Set(['node_modules', '.git', 'venv', '.venv', 'tests', '__pycache__']);
+  const EXCLUDE = new Set([
+    'node_modules',
+    '.git',
+    'venv',
+    '.venv',
+    'tests',
+    '__pycache__',
+  ]);
   let items;
   try {
     items = fs.readdirSync(dir);
@@ -129,18 +156,34 @@ function findExpressEntry(cwd, pkg) {
     if (m) candidates.push(m[1]);
   }
   candidates.push(
-    'src/app.ts', 'src/server.ts', 'src/index.ts', 'app.ts', 'server.ts', 'index.ts',
-    'src/app.js', 'src/server.js', 'src/index.js', 'app.js', 'server.js', 'index.js',
-    'src/app.mjs', 'app.mjs', 'index.mjs',
+    'src/app.ts',
+    'src/server.ts',
+    'src/index.ts',
+    'app.ts',
+    'server.ts',
+    'index.ts',
+    'src/app.js',
+    'src/server.js',
+    'src/index.js',
+    'app.js',
+    'server.js',
+    'index.js',
+    'src/app.mjs',
+    'app.mjs',
+    'index.mjs',
   );
   for (const rel of candidates) {
     const abs = path.resolve(cwd, rel);
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       const src = fs.readFileSync(abs, 'utf8');
-      if (/express\s*\(/.test(src)) return path.relative(cwd, abs).split(path.sep).join('/');
+      if (/express\s*\(/.test(src))
+        return path.relative(cwd, abs).split(path.sep).join('/');
     }
   }
-  throw err('Could not locate your Express entry file (the one calling express()).', 'Re-run from the project root, or open an issue with your layout.');
+  throw err(
+    'Could not locate your Express entry file (the one calling express()).',
+    'Re-run from the project root, or open an issue with your layout.',
+  );
 }
 
 function detectModuleType(cwd, pkg, entryFile) {
@@ -148,7 +191,11 @@ function detectModuleType(cwd, pkg, entryFile) {
   if (entryFile.endsWith('.cjs')) return 'cjs';
   if (pkg.type === 'module' || entryFile.endsWith('.ts')) {
     const src = fs.readFileSync(path.join(cwd, entryFile), 'utf8');
-    if (/^\s*(const|let|var)\s+\w+\s*=\s*require\(/m.test(src) && !/^\s*import\s/m.test(src)) return 'cjs';
+    if (
+      /^\s*(const|let|var)\s+\w+\s*=\s*require\(/m.test(src) &&
+      !/^\s*import\s/m.test(src)
+    )
+      return 'cjs';
     return 'esm';
   }
   const src = fs.readFileSync(path.join(cwd, entryFile), 'utf8');
@@ -163,7 +210,10 @@ function detectExpressPort(cwd, entryFile) {
   if (m) {
     const envPath = path.join(cwd, '.env');
     if (fs.existsSync(envPath)) {
-      const line = fs.readFileSync(envPath, 'utf8').split(/\r?\n/).find((l) => l.startsWith(`${m[1]}=`));
+      const line = fs
+        .readFileSync(envPath, 'utf8')
+        .split(/\r?\n/)
+        .find((l) => l.startsWith(`${m[1]}=`));
       if (line) {
         const v = Number(line.split('=')[1].trim());
         if (v) return v;
