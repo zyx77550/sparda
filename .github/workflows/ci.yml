@@ -62,3 +62,40 @@ jobs:
 
       - name: Prettier (check)
         run: npm run format:check
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Python test dependencies (FastAPI runtime test)
+        run: python -m pip install --quiet fastapi uvicorn
+
+      - name: Run coverage
+        run: npm run coverage
+
+      # Tokenless upload works on the public mirror only; gated so the private
+      # HQ run stays quiet. Never fails CI — coverage is report-only (no gate yet).
+      - name: Upload coverage to Codecov
+        if: github.repository == 'zyx77550/sparda'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
