@@ -13,3 +13,5 @@ bench/.tmp/
 *.bak
 sparda_test_state_*/
 scratch/
+mcp-publisher.exe
+mcp-publisher.tar.gz
