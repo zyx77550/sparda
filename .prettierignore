@@ -4,6 +4,7 @@ dist/
 **/.tmp/
 templates/
 tests/fixtures/
+demo-app/
 tests/e2e/
 *.bak
 package-lock.json

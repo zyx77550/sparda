@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.zyx77550/sparda-mcp",
+  "title": "SPARDA",
+  "description": "Turn your own Express or FastAPI app into an MCP server. `sparda init` injects a reversible /mcp router into the live process; `sparda dev` bridges it to your client over stdio. Reads are exposed automatically; write tools are disabled by default. Run `sparda init` in your app first, then point your client at `sparda dev`.",
+  "version": "0.5.4",
+  "repository": {
+    "url": "https://github.com/zyx77550/sparda",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "sparda-mcp",
+      "version": "0.5.4",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "dev",
+          "description": "Start the stdio MCP bridge. Requires `sparda init` to have been run in the working directory first."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SPARDA_FLYWHEEL",
+          "description": "Set to `off` to disable serving proven-stable reads from memory (organs keep learning).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SPARDA_RECORD_SEQUENCES",
+          "description": "Set to `1` to enable Labs circuit recording (crystallizes repeated tool chains into composite tools).",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

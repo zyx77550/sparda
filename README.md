@@ -54,6 +54,32 @@ No OpenAPI spec. No account. No API key. No server to host.
    Claude Code connects to the same bridge. That's it — your running app is now a set
    of MCP tools your AI can call.
 
+## Try the Standalone Demo
+
+To see SPARDA in action instantly without modifying your codebase:
+```bash
+npx sparda-mcp demo
+```
+This runs the entire lifecycle (detect → parse → generate → inject → remove) on a bundled demo app in a temporary folder, illustrating all six guarantees in 10 seconds.
+
+## Black Box Report
+
+SPARDA is designed as a local organism. To see what it remembers and how much compute it has recycled:
+```bash
+npx sparda-mcp report
+```
+This prints a terminal dashboard aggregating your exposed tools, write opt-ins, proof journal decisions, and crystallized composite tools.
+
+To write a self-contained, offline HTML dashboard at `.sparda/report.html`, append the `--html` flag:
+```bash
+npx sparda-mcp report --html
+```
+
+To output raw JSON for integration:
+```bash
+npx sparda-mcp report --json
+```
+
 To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte.
 
 ## The promise — every word is backed by a test in CI

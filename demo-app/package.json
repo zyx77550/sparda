@@ -1,0 +1,7 @@
+{
+  "name": "demo-crm",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": { "dev": "node src/app.js" },
+  "dependencies": { "express": "^4.19.0" }
+}

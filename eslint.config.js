@@ -5,6 +5,9 @@
 //                       real modules, must stay byte-stable (hard rule #6).
 //   - tests/fixtures/** byte-sensitive: route fingerprints hash this source and
 //                       `remove` asserts a byte-for-byte clean diff (hard rule #4).
+//   - demo-app/**       same: the `demo` command parses + injects + removes this
+//                       and asserts a byte-for-byte clean diff; it is rendered to
+//                       the user, kept hand-shaped to mirror the fixture.
 //   - **/.tmp/**        generated hosts/routers (gitignored).
 import js from '@eslint/js';
 import globals from 'globals';
@@ -18,6 +21,7 @@ export default [
       '**/.tmp/**',
       'templates/**',
       'tests/fixtures/**',
+      'demo-app/**',
       'tests/e2e/**',
       '**/*.bak',
       'bench/results.json',
