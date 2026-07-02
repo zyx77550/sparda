@@ -18,12 +18,19 @@ const opts = {
   verbose: flags.has('--verbose'),
   quiet: flags.has('--quiet'),
   probe: flags.has('--probe'),
+  html: flags.has('--html'),
+  json: flags.has('--json'),
   port: getOpt('port', null),
   cwd: process.cwd(),
 };
 
 try {
   switch (cmd) {
+    case 'demo': {
+      const { runDemo } = await import('./commands/demo.js');
+      await runDemo(opts);
+      break;
+    }
     case 'init': {
       const { runInit } = await import('./commands/init.js');
       await runInit(opts);
@@ -55,19 +62,27 @@ try {
       await runHook(opts);
       break;
     }
+    case 'report': {
+      const { runReport } = await import('./commands/report.js');
+      await runReport(opts);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
 Usage:
+  npx sparda-mcp demo      Guided tour on a bundled app — no setup, nothing touched
   npx sparda-mcp init      Scan project, generate & inject the MCP router
   npx sparda-mcp dev       Run the MCP stdio bridge (connect Claude Desktop)
   npx sparda-mcp sync      Re-sync the router after route changes (no prompts)
   npx sparda-mcp hook      Install the git sentinel (auto-sync after commits)
   npx sparda-mcp remove    Remove SPARDA from this project (clean git diff)
   npx sparda-mcp doctor    Diagnose your setup
+  npx sparda-mcp report    The black box: what AI agents did to this app
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)
+       --html / --json (report: write .sparda/report.html / print raw JSON)
 
 By Residual Labs — residual-labs.fr`);
       process.exit(cmd ? 1 : 0);
