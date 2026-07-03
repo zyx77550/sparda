@@ -22,6 +22,7 @@ const opts = {
   json: flags.has('--json'),
   app: flags.has('--app'),
   port: getOpt('port', null),
+  out: getOpt('out', null),
   cwd: process.cwd(),
 };
 
@@ -68,6 +69,14 @@ try {
       await runReport(opts);
       break;
     }
+    case 'seed': {
+      const { runSeed } = await import('./commands/seed.js');
+      await runSeed(
+        opts,
+        rest.filter((a) => !a.startsWith('--')),
+      );
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -80,6 +89,7 @@ Usage:
   npx sparda-mcp remove    Remove SPARDA from this project (clean git diff)
   npx sparda-mcp doctor    Diagnose your setup (--app: negentropy scan — drift, dead routes, rot)
   npx sparda-mcp report    The black box: what AI agents did to this app
+  npx sparda-mcp seed      Export/import the learned genome (export [--out f] | import <f>)
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)
