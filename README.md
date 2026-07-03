@@ -105,6 +105,8 @@ What we *don't* promise: the honest limits in [docs/SECURITY.md](./docs/SECURITY
 2. Tool calls run **inside your live app process** — warm DB pools, real auth chain, real data. SPARDA adds no infrastructure: compute comes from your host process, intelligence from your AI client's own model (MCP sampling), storage from `sparda.json` + git.
 3. Write tools (POST/PUT/DELETE) are **disabled by default**. You opt in per tool in `sparda.json` — your choices survive re-runs.
 4. Suspicious docstrings are sanitized before they ever reach the AI (prompt-injection defense).
+5. `npx sparda-mcp doctor --app` audits your codebase for drift: it detects stale tools (IA seeing ghosts), unsynced routes, schema drift via fingerprints, and zombie configurations. High severity issues trigger a non-zero exit code for your CI pipeline.
+6. `npx sparda-mcp seed export/import` lets you package and share your app's "genome" (semantic memory, workflows, antibodies) securely, transferring immune memory between environments or across similar stacks with zero data leak.
 
 ## What SPARDA gives your AI
 
