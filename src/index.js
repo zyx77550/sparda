@@ -20,6 +20,7 @@ const opts = {
   probe: flags.has('--probe'),
   html: flags.has('--html'),
   json: flags.has('--json'),
+  app: flags.has('--app'),
   port: getOpt('port', null),
   cwd: process.cwd(),
 };
@@ -77,7 +78,7 @@ Usage:
   npx sparda-mcp sync      Re-sync the router after route changes (no prompts)
   npx sparda-mcp hook      Install the git sentinel (auto-sync after commits)
   npx sparda-mcp remove    Remove SPARDA from this project (clean git diff)
-  npx sparda-mcp doctor    Diagnose your setup
+  npx sparda-mcp doctor    Diagnose your setup (--app: negentropy scan — drift, dead routes, rot)
   npx sparda-mcp report    The black box: what AI agents did to this app
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
