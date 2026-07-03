@@ -9,7 +9,6 @@ import {
   buildNegentropy,
   renderNegentropy,
   fingerprintFor,
-  toolShapeOf,
 } from '../src/commands/negentropy.js';
 import { parseNextProject } from '../src/parser/nextjs.js';
 import { generateNext } from '../src/generator/nextjs.js';
