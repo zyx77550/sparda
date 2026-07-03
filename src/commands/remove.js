@@ -61,6 +61,23 @@ export async function runRemove(opts) {
       console.log(`✓ Deleted ${f}`);
     }
   }
+  // nextjs: the generated route lives in its own directory chain
+  // (app/mcp/[...sparda]/) — prune the now-empty dirs up to the app root so
+  // the tree is byte-identical, not just the git diff.
+  if (manifest.framework === 'nextjs') {
+    const stopAt = path.resolve(opts.cwd, manifest.entryFile ?? '.');
+    for (const f of manifest.generatedFiles ?? []) {
+      let dir = path.dirname(path.resolve(opts.cwd, f));
+      while (dir.startsWith(stopAt) && dir !== stopAt) {
+        try {
+          fs.rmdirSync(dir); // throws if not empty — that is the stop condition
+        } catch {
+          break;
+        }
+        dir = path.dirname(dir);
+      }
+    }
+  }
   if (revertGitignore(opts.cwd, manifest.gitignore))
     console.log('✓ Reverted .gitignore edit');
   if (removeHook(opts.cwd)) console.log('✓ Uninstalled post-commit sentinel hook');

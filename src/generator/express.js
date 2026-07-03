@@ -283,7 +283,8 @@ export function removeInjection(cwd, manifest) {
 
 // Returns what was done ('created' | 'appended' | null) so the manifest can
 // record it and `remove` can revert the exact edit (byte-for-byte promise).
-function ensureGitignore(cwd) {
+// Exported: the Next.js generator shares the exact same contract.
+export function ensureGitignore(cwd) {
   const gi = path.join(cwd, '.gitignore');
   const line = '.sparda/';
   if (fs.existsSync(gi)) {

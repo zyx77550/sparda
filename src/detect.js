@@ -10,6 +10,25 @@ export function detectStack(cwd) {
   if (fs.existsSync(pkgPath)) {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    // next before express: a project with the next dep IS a Next app (express is
+    // occasionally present as a utility dep and would misroute detection)
+    if (deps.next) {
+      const appDir = ['app', 'src/app'].find((d) => {
+        const abs = path.join(cwd, d);
+        return fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+      });
+      if (!appDir)
+        throw err(
+          'Next.js detected but no App Router directory (app/ or src/app/).',
+          'SPARDA supports the App Router only (route.js handlers) — the Pages Router is not supported.',
+        );
+      return {
+        framework: 'nextjs',
+        entryFile: appDir,
+        port: detectNextPort(cwd, pkg),
+        nextVersion: deps.next,
+      };
+    }
     if (deps.express) {
       const entryFile = findExpressEntry(cwd, pkg);
       const moduleType = detectModuleType(cwd, pkg, entryFile);
@@ -22,7 +41,7 @@ export function detectStack(cwd) {
         expressVersion: deps.express,
       };
     }
-    const known = ['@nestjs/core', 'next', 'fastify', 'koa'].find((d) => deps[d]);
+    const known = ['@nestjs/core', 'fastify', 'koa'].find((d) => deps[d]);
     if (known)
       throw err(
         `${known} detected — not supported yet. Express & FastAPI only in v0.`,
@@ -45,6 +64,27 @@ export function detectStack(cwd) {
     'No supported framework found (Express, FastAPI).',
     'Run sparda-mcp inside your project root, next to package.json.',
   );
+}
+
+// `next dev -p 3001` / `--port 3001` in scripts, then PORT= in .env, then 3000
+function detectNextPort(cwd, pkg) {
+  for (const script of [pkg.scripts?.dev, pkg.scripts?.start]) {
+    if (!script) continue;
+    const m = script.match(/(?:-p|--port)[\s=]+(\d{2,5})/);
+    if (m) return Number(m[1]);
+  }
+  const envPath = path.join(cwd, '.env');
+  if (fs.existsSync(envPath)) {
+    const line = fs
+      .readFileSync(envPath, 'utf8')
+      .split(/\r?\n/)
+      .find((l) => l.startsWith('PORT='));
+    if (line) {
+      const v = Number(line.split('=')[1].trim());
+      if (v) return v;
+    }
+  }
+  return 3000;
 }
 
 function detectPython() {
