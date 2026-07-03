@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
-  "description": "Turn your own Express or FastAPI app into an MCP server. `sparda init` injects a reversible /mcp router into the live process; `sparda dev` bridges it to your client over stdio. Reads are exposed automatically; write tools are disabled by default. Run `sparda init` in your app first, then point your client at `sparda dev`.",
+  "description": "Turn any Express or FastAPI app into an MCP server in 3 minutes. Reversible and secure.",
   "version": "0.5.4",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
