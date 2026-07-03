@@ -157,7 +157,10 @@ protocol. The live, per-project tool list always comes from `sparda_get_context`
 runtime, so the guidance never goes stale.
 
 ## Supported frameworks
-Express 4/5 (JS/TS, ESM/CJS) and FastAPI today. We are actively expanding SPARDA internally to support more Node.js environments (including NestJS, Fastify, and Next.js API routes) in the near future.
+
+- **Next.js App Router (13/14/15)** — file-based injection. Since Next.js uses file-system routing, SPARDA simply creates a catch-all route handler under `app/mcp/[...sparda]/route.js`. **Nothing in your existing codebase's code is touched**; running `remove` simply deletes the generated file.
+- **Express 4/5** (JS/TS, ESM/CJS) — AST-based router injection.
+- **FastAPI** (Python >= 3.9) — AST-based router injection.
 
 ## Security posture (honest)
 - 4 runtime dependencies, exact-pinned.

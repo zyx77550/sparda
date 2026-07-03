@@ -3,7 +3,7 @@
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
   "description": "Turn any Express or FastAPI app into an MCP server in 3 minutes. Reversible and secure.",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "sparda-mcp",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "transport": {
         "type": "stdio"
       },
