@@ -5,9 +5,11 @@ import * as p from '@clack/prompts';
 import { detectStack } from '../detect.js';
 import { parseExpressProject } from '../parser/express.js';
 import { parseFastAPIProject } from '../parser/fastapi.js';
+import { parseNextProject } from '../parser/nextjs.js';
 import { sanitizeDescription } from '../security/sanitize.js';
 import { generateExpress } from '../generator/express.js';
 import { generateFastAPI } from '../generator/fastapi.js';
+import { generateNext } from '../generator/nextjs.js';
 import { c, gradient, colorizeJson } from '../ui/style.js';
 
 const VERSION = JSON.parse(
@@ -39,6 +41,13 @@ export async function runInit(opts) {
     s.stop(
       `Stack detected: ${c.cyan('FastAPI')} — entry: ${stack.entryFile}, port: ${stack.port}`,
     );
+  } else if (stack.framework === 'nextjs') {
+    const res = parseNextProject(opts.cwd, stack.entryFile);
+    routes = res.routes;
+    skipped = res.skipped;
+    s.stop(
+      `Stack detected: ${c.cyan('Next.js (App Router)')} — app dir: ${stack.entryFile}/, port: ${stack.port}`,
+    );
   }
 
   // Opt-in runtime probe (Brief #3): static is the floor, probe only ADDS routes
@@ -46,7 +55,11 @@ export async function runInit(opts) {
   // behavior byte-identical. Executing the host app has side-effects, so it is
   // gated behind --probe, warned on stderr, and degrades to static-only on any
   // failure — a probe error must never break init (R1).
-  if (opts.probe) {
+  if (opts.probe && stack.framework === 'nextjs') {
+    p.log.warn(
+      '--probe is not supported on Next.js (file-based routing needs no runtime probe).',
+    );
+  } else if (opts.probe) {
     p.log.warn(
       "--probe runs your app to observe routes the static scan missed. Use only on code you trust (it triggers your app's import side-effects).",
     );
@@ -77,7 +90,10 @@ export async function runInit(opts) {
   if (routes.length === 0) {
     throw Object.assign(new Error('0 routes extracted.'), {
       code: 'USER',
-      hint: `SPARDA found ${stack.framework === 'express' ? 'Express' : 'FastAPI'} but no literal-path routes. Dynamic routing is not supported in v0.`,
+      hint:
+        stack.framework === 'nextjs'
+          ? `SPARDA found Next.js but no route.js handlers under ${stack.entryFile}/. Page components are not API routes — SPARDA exposes route handlers only.`
+          : `SPARDA found ${stack.framework === 'express' ? 'Express' : 'FastAPI'} but no literal-path routes. Dynamic routing is not supported in v0.`,
     });
   }
 
@@ -118,7 +134,9 @@ export async function runInit(opts) {
     );
 
   let inject = true;
-  if (!opts.yes) {
+  // Next.js is file-based: SPARDA adds one route-handler file and touches
+  // nothing else — there is no injection decision to make.
+  if (!opts.yes && stack.framework !== 'nextjs') {
     const answer = await p.select({
       message: `Inject the MCP router into ${stack.entryFile}?`,
       options: [
@@ -145,14 +163,21 @@ export async function runInit(opts) {
           port: stack.port,
           routes,
         })
-      : generateFastAPI({
-          cwd: opts.cwd,
-          entryFile: stack.entryFile,
-          port: stack.port,
-          routes,
-          entryAppVars,
-          pythonCmd: stack.pythonCmd,
-        });
+      : stack.framework === 'nextjs'
+        ? generateNext({
+            cwd: opts.cwd,
+            appDir: stack.entryFile,
+            port: stack.port,
+            routes,
+          })
+        : generateFastAPI({
+            cwd: opts.cwd,
+            entryFile: stack.entryFile,
+            port: stack.port,
+            routes,
+            entryAppVars,
+            pythonCmd: stack.pythonCmd,
+          });
 
   fs.mkdirSync(path.join(opts.cwd, '.sparda'), { recursive: true });
   const scanReport = { routes, skipped };
@@ -163,7 +188,11 @@ export async function runInit(opts) {
   );
 
   p.log.success(`Generated ${result.routerFile}`);
-  if (inject && result.injection.injected)
+  if (result.injection.fileBased)
+    p.log.success(
+      'File-based injection: your code was not modified (remove deletes the file)',
+    );
+  else if (inject && result.injection.injected)
     p.log.success(`Injected into ${stack.entryFile} (backup: .sparda/backup/)`);
   else if (result.injection.manual) {
     p.note(
@@ -187,7 +216,7 @@ export async function runInit(opts) {
   p.outro(`${c.green(`Done in ${((Date.now() - t0) / 1000).toFixed(1)}s.`)}
 
    Next steps:
-   1. Start your app:        ${c.cyan(stack.framework === 'express' ? 'npm run dev' : 'fastapi dev')}
+   1. Start your app:        ${c.cyan(stack.framework === 'fastapi' ? 'fastapi dev' : 'npm run dev')}
    2. Start the MCP bridge:  ${c.cyan('npx sparda-mcp dev')}
    3. Add to Claude Desktop config (claude_desktop_config.json):
 

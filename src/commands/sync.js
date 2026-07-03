@@ -4,9 +4,11 @@ import path from 'node:path';
 import { detectStack } from '../detect.js';
 import { parseExpressProject } from '../parser/express.js';
 import { parseFastAPIProject } from '../parser/fastapi.js';
+import { parseNextProject } from '../parser/nextjs.js';
 import { sanitizeDescription } from '../security/sanitize.js';
 import { generateExpress } from '../generator/express.js';
 import { generateFastAPI } from '../generator/fastapi.js';
+import { generateNext } from '../generator/nextjs.js';
 
 export async function runSync(opts) {
   const log = (m) => {
@@ -25,6 +27,8 @@ export async function runSync(opts) {
   let routes, entryAppVars;
   if (stack.framework === 'express') {
     ({ routes } = parseExpressProject(opts.cwd, stack.entryFile));
+  } else if (stack.framework === 'nextjs') {
+    ({ routes } = parseNextProject(opts.cwd, stack.entryFile));
   } else {
     ({ routes, entryAppVars } = parseFastAPIProject(
       opts.cwd,
@@ -52,22 +56,31 @@ export async function runSync(opts) {
   }
 
   // regenerate; carry-over keeps enabled overrides, semantic cache and localKey
-  stack.framework === 'express'
-    ? generateExpress({
-        cwd: opts.cwd,
-        entryFile: stack.entryFile,
-        moduleType: stack.moduleType,
-        port: manifest.port ?? stack.port,
-        routes,
-      })
-    : generateFastAPI({
-        cwd: opts.cwd,
-        entryFile: stack.entryFile,
-        port: manifest.port ?? stack.port,
-        routes,
-        entryAppVars,
-        pythonCmd: stack.pythonCmd,
-      });
+  if (stack.framework === 'express') {
+    generateExpress({
+      cwd: opts.cwd,
+      entryFile: stack.entryFile,
+      moduleType: stack.moduleType,
+      port: manifest.port ?? stack.port,
+      routes,
+    });
+  } else if (stack.framework === 'nextjs') {
+    generateNext({
+      cwd: opts.cwd,
+      appDir: stack.entryFile,
+      port: manifest.port ?? stack.port,
+      routes,
+    });
+  } else {
+    generateFastAPI({
+      cwd: opts.cwd,
+      entryFile: stack.entryFile,
+      port: manifest.port ?? stack.port,
+      routes,
+      entryAppVars,
+      pythonCmd: stack.pythonCmd,
+    });
+  }
 
   for (const a of added) log(`[sparda] + ${a}`);
   for (const r of removed) log(`[sparda] - ${r}`);

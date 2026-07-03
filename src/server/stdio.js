@@ -1059,7 +1059,7 @@ async function waitForHost(port, key, framework, ctx) {
       }
     }
     if (attempt === 0) {
-      const startCmd = framework === 'express' ? 'npm run dev' : 'fastapi dev';
+      const startCmd = framework === 'fastapi' ? 'fastapi dev' : 'npm run dev';
       console.error(
         `[sparda] Waiting for host app on :${port} ... (start it with ${startCmd} — Ctrl+C to abort)`,
       );

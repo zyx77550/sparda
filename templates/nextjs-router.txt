@@ -1,0 +1,383 @@
+// ============================================================
+// SPARDA ROUTER (Next.js App Router) — Auto-generated. DO NOT EDIT.
+// Regenerate: npx sparda-mcp init   •   Remove: npx sparda-mcp remove
+// File-based injection: this catch-all handler IS the /mcp router.
+// Web-standard Request/Response only — zero imports, zero dependencies.
+// ============================================================
+
+const SPARDA_TOOLS = __TOOLS_JSON__;
+const SPARDA_POLICIES = __SPARDING_POLICIES__;
+
+const SPARDA_LOCAL_KEY = "__LOCAL_KEY__";
+const SPARDA_PORT = __PORT__;
+
+// never statically optimized, always on the Node.js runtime (process, timers)
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
+// Module-scope state survives requests on a long-lived server (next start /
+// next dev). On serverless each instance keeps its own gauges — RAM-only by
+// design, the durable memory lives in sparda.json via the bridge.
+const SPARDA_STATS = {};
+const SPARDA_EVENTS = [];
+let SPARDA_SEQ = 0;
+// immune system: tools that keep failing are quarantined so the AI can't hammer a broken route
+const SPARDA_QUARANTINE = {};
+const SPARDA_QUARANTINE_MS = Number(process.env.SPARDA_QUARANTINE_MS ?? 60000);
+// recycling gauge: calls answered from SPARDA's own knowledge vs calls that paid the host route.
+const SPARDA_RECYCLE = { servedByCircle: 0, paidFull: 0 };
+function spardaRecycleRate() {
+  const total = SPARDA_RECYCLE.servedByCircle + SPARDA_RECYCLE.paidFull;
+  return total ? Math.round((SPARDA_RECYCLE.servedByCircle * 100) / total) : 0;
+}
+// thermodynamic route classification — observation only, never a guess.
+const SPARDA_PURITY = {};
+function spardaHash(s) {
+  let h = 0x811c9dc5; // FNV-1a, capped: a fingerprint, not a checksum of megabytes
+  for (let i = 0; i < s.length && i < 65536; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h;
+}
+function spardaObservePurity(tool, argsig, body) {
+  const pu = SPARDA_PURITY[tool] ?? (SPARDA_PURITY[tool] = { sigs: {}, repeats: 0, mismatches: 0 });
+  const h = spardaHash(body);
+  const known = pu.sigs[argsig];
+  if (known === undefined) {
+    if (Object.keys(pu.sigs).length >= 20) return; // bounded: enough sigs to judge
+    pu.sigs[argsig] = h;
+  } else if (known === h) pu.repeats += 1;
+  else { pu.mismatches += 1; pu.sigs[argsig] = h; } // the latest real answer is the truth
+}
+function spardaPuritySnapshot() {
+  const out = {};
+  for (const [name, spec] of Object.entries(SPARDA_TOOLS)) {
+    if (spec.method !== 'GET') { out[name] = { class: 'erasing', repeats: 0, mismatches: 0 }; continue; }
+    const pu = SPARDA_PURITY[name];
+    out[name] = {
+      class: !pu ? 'unknown' : pu.mismatches > 0 ? 'volatile' : pu.repeats >= 3 ? 'pure' : 'unknown',
+      repeats: pu ? pu.repeats : 0,
+      mismatches: pu ? pu.mismatches : 0,
+    };
+  }
+  return out;
+}
+// ── horizontal scale: Quorum Sensing × G-Map CRDT (same contract as Express) ──
+const SPARDA_PEERS = (process.env.SPARDA_PEERS ?? '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter((s) => /^https?:\/\//.test(s));
+const SPARDA_GOSSIP_MS = Math.max(50, Number(process.env.SPARDA_GOSSIP_MS) || 30000);
+const SPARDA_GOSSIP_TIMEOUT_MS = Math.max(250, Number(process.env.SPARDA_GOSSIP_TIMEOUT_MS) || 2000);
+function spardaGossipSnapshot() {
+  const out = {};
+  for (const [name, pu] of Object.entries(SPARDA_PURITY)) out[name] = { repeats: pu.repeats, mismatches: pu.mismatches };
+  return out;
+}
+function spardaMergeGossip(remote) {
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) return 0;
+  let merged = 0;
+  for (const [name, rv] of Object.entries(remote)) {
+    if (!SPARDA_TOOLS[name] || !rv || typeof rv !== 'object') continue;
+    const r = Number(rv.repeats), m = Number(rv.mismatches);
+    if (!Number.isFinite(r) || !Number.isFinite(m) || r < 0 || m < 0) continue;
+    const pu = SPARDA_PURITY[name] ?? (SPARDA_PURITY[name] = { sigs: {}, repeats: 0, mismatches: 0 });
+    if (r > pu.repeats) pu.repeats = r;
+    if (m > pu.mismatches) pu.mismatches = m;
+    merged += 1;
+  }
+  return merged;
+}
+function spardaGossipTick() {
+  if (SPARDA_PEERS.length === 0) return;
+  const body = JSON.stringify(spardaGossipSnapshot());
+  for (const peer of SPARDA_PEERS) {
+    fetch(`${peer}/mcp/gossip`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-sparda-key': SPARDA_LOCAL_KEY },
+      body,
+      signal: AbortSignal.timeout(SPARDA_GOSSIP_TIMEOUT_MS),
+    }).catch(() => {});
+  }
+}
+function spardaEvent(source, tool, status, message) {
+  SPARDA_EVENTS.push({ seq: ++SPARDA_SEQ, ts: new Date().toISOString(), source, tool, status, message: String(message ?? '').slice(0, 500) });
+  if (SPARDA_EVENTS.length > 100) SPARDA_EVENTS.shift();
+}
+// hot-reload guard: dev re-evaluates this module; process listeners and timers
+// must be registered exactly once per process.
+if (!globalThis.__SPARDA_WIRED__) {
+  globalThis.__SPARDA_WIRED__ = true;
+  process.on('uncaughtExceptionMonitor', (err) => spardaEvent('process', null, null, err && err.message ? err.message : err));
+  if (SPARDA_PEERS.length > 0) {
+    spardaEvent('gossip', null, null, `horizontal scale: gossiping to ${SPARDA_PEERS.length} peer(s) every ${SPARDA_GOSSIP_MS}ms`);
+    setInterval(spardaGossipTick, SPARDA_GOSSIP_MS).unref();
+  }
+}
+
+// two-phase commit: a write/delete flagged require_human is NOT executed on /invoke.
+const SPARDA_PENDING = {};
+const SPARDA_CONFIRM_TTL_MS = Number(process.env.SPARDA_CONFIRM_TTL_MS ?? 120000);
+function spardaNonce() {
+  return 'cfm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+function spardaSweepPending() {
+  const now = Date.now();
+  for (const k of Object.keys(SPARDA_PENDING)) if (now > SPARDA_PENDING[k].expiresAt) delete SPARDA_PENDING[k];
+}
+
+function spardaProof(tool, spec, args) {
+  const checks = {
+    knownTool: spec !== undefined,
+    enabled: spec ? spec.enabled : false,
+    loopSafe: spec ? !spec.path.startsWith('/mcp') : false,
+    methodClass: spec ? (spec.method === 'GET' ? 'read' : 'write') : 'read',
+    pathParamsPresent: true,
+    hasBodyForWrite: true,
+    reversibleHint: false,
+    quarantineSafe: true,
+  };
+  const reasons = [];
+  if (!checks.knownTool) {
+    reasons.push('unknown tool');
+    return { version: 'sparding-proof/v0.1', risk: 'blocked', decision: 'block', reasons, checks };
+  }
+  if (!checks.enabled) reasons.push('tool disabled (write-safety)');
+  if (!checks.loopSafe) reasons.push('self-referential tool blocked (loop protection)');
+  const quarantined = SPARDA_QUARANTINE[tool];
+  if (quarantined) {
+    if (Date.now() < quarantined.until) {
+      checks.quarantineSafe = false;
+      reasons.push(`tool quarantined (immune system): ${quarantined.reason}`);
+    } else {
+      delete SPARDA_QUARANTINE[tool];
+      if (SPARDA_STATS[tool]) SPARDA_STATS[tool].consecutive5xx = 2;
+    }
+  }
+  for (const name of spec.pathParams ?? []) {
+    if (args[name] === undefined) {
+      checks.pathParamsPresent = false;
+      reasons.push(`missing path param: ${name}`);
+    }
+  }
+  if (checks.methodClass === 'write' && args.body === undefined) checks.hasBodyForWrite = false;
+  if (spec.method === 'GET') checks.reversibleHint = true;
+  else checks.reversibleHint = Object.values(SPARDA_TOOLS).some((t) => t.method === 'GET' && t.path === spec.path);
+
+  let risk = 'low';
+  let decision = 'allow';
+  if (!checks.enabled || !checks.loopSafe || !checks.quarantineSafe || !checks.pathParamsPresent) {
+    return { version: 'sparding-proof/v0.1', risk: 'blocked', decision: 'block', reasons, checks };
+  }
+  const policies = SPARDA_POLICIES ?? {};
+  if (checks.methodClass === 'read') {
+    const readPolicy = policies.reads ?? 'allow';
+    if (readPolicy === 'block') { decision = 'block'; risk = 'blocked'; reasons.push('read policy blocks execution'); }
+    else if (readPolicy === 'require_human') { decision = 'require_human'; risk = 'medium'; reasons.push('read policy requires human confirmation'); }
+  } else {
+    const isDelete = spec.method === 'DELETE';
+    const deletePolicy = policies.deletes ?? 'block';
+    const writePolicy = policies.writes ?? 'require_human';
+    if (isDelete && deletePolicy === 'block') { decision = 'block'; risk = 'blocked'; reasons.push('delete policy blocks execution'); }
+    else if (isDelete && deletePolicy === 'require_human') { decision = 'require_human'; risk = 'high'; reasons.push('delete operation requires human confirmation'); }
+    else if (isDelete && deletePolicy === 'allow') { decision = 'allow'; risk = 'low'; }
+    else if (writePolicy === 'block') { decision = 'block'; risk = 'blocked'; reasons.push('write policy blocks execution'); }
+    else if (writePolicy === 'require_human') { decision = 'require_human'; risk = 'medium'; reasons.push('write operation requires human confirmation'); }
+    else { decision = 'allow'; risk = 'low'; }
+  }
+  return { version: 'sparding-proof/v0.1', risk, decision, reasons, checks };
+}
+
+function spardaRecord(tool, status, ms) {
+  const st = SPARDA_STATS[tool] ?? (SPARDA_STATS[tool] = { calls: 0, errors: 0, clientErrors: 0, totalMs: 0, lastStatus: null, lastTs: null, consecutive5xx: 0 });
+  if (st.calls >= 5 && ms > Math.max((st.totalMs / st.calls) * 10, 200)) {
+    spardaEvent('immune', tool, status, `latency anomaly: ${ms}ms vs ~${Math.round(st.totalMs / st.calls)}ms baseline`);
+  }
+  st.calls += 1;
+  st.totalMs += ms;
+  if (status >= 500) st.errors += 1;
+  else if (status >= 400) st.clientErrors += 1;
+  st.lastStatus = status;
+  st.lastTs = new Date().toISOString();
+  if (status >= 500) st.consecutive5xx += 1;
+  else if (status < 400) st.consecutive5xx = 0;
+  if (st.consecutive5xx >= 3 && !SPARDA_QUARANTINE[tool]) {
+    SPARDA_QUARANTINE[tool] = { since: new Date().toISOString(), until: Date.now() + SPARDA_QUARANTINE_MS, reason: `${st.consecutive5xx} consecutive 5xx` };
+    spardaEvent('immune', tool, 503, `quarantined after ${st.consecutive5xx} consecutive 5xx (cooldown ${SPARDA_QUARANTINE_MS}ms)`);
+  }
+}
+
+const spardaJson = (status, obj) =>
+  new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+
+// SPARDA owns its endpoints' body parsing: 64KB cap and a JSON 400 on malformed
+// bodies — never a framework HTML error page.
+async function spardaReadJson(request) {
+  let text;
+  try { text = await request.text(); } catch { return { error: spardaJson(400, { error: 'unreadable body' }) }; }
+  if (text.length > 65536) return { error: spardaJson(413, { error: 'payload too large (64KB max)' }) };
+  if (!text) return { data: {} };
+  try { return { data: JSON.parse(text) }; } catch {
+    spardaEvent('router', null, 400, 'invalid JSON body');
+    return { error: spardaJson(400, { error: 'invalid JSON body' }) };
+  }
+}
+
+// the actual host-route call, shared by the allow-path and the confirm-path.
+// The "host" is this same Next server: SPARDA proxies to 127.0.0.1 like on
+// Express, so handlers run with their full middleware/context untouched.
+async function spardaExecute(tool, spec, args, proof, t0) {
+  try {
+    let url = spec.path.replace(/:(\w+)/g, (_, name) => encodeURIComponent(String(args[name])));
+    const query = [];
+    for (const [k, v] of Object.entries(args)) {
+      if (k === 'body' || (spec.pathParams ?? []).includes(k) || v === undefined) continue;
+      query.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    }
+    if (query.length) url += `?${query.join('&')}`;
+    const init = { method: spec.method, headers: {} };
+    if (spec.method !== 'GET' && args.body !== undefined) {
+      init.headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(args.body);
+    }
+    SPARDA_RECYCLE.paidFull += 1; // the host route is about to be exercised — full price
+    const upstream = await fetch(`http://127.0.0.1:${SPARDA_PORT}${url}`, { ...init, signal: AbortSignal.timeout(30_000) });
+    const text = await upstream.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    spardaRecord(tool, upstream.status, Date.now() - t0);
+    if (spec.method === 'GET' && upstream.status === 200) {
+      spardaObservePurity(tool, JSON.stringify(Object.entries(args).filter((e) => e[1] !== undefined).sort()), text);
+    }
+    if (upstream.status >= 500) spardaEvent('invoke', tool, upstream.status, text.slice(0, 200));
+    return spardaJson(200, { upstreamStatus: upstream.status, data, spardingProof: proof });
+  } catch (err) {
+    spardaRecord(tool, err.status ?? 502, Date.now() - t0);
+    spardaEvent('invoke', tool, err.status ?? 502, err.message);
+    return spardaJson(err.status ?? 502, { error: err.message, spardingProof: proof });
+  }
+}
+
+async function spardaInvoke(request) {
+  const t0 = Date.now();
+  const read = await spardaReadJson(request);
+  if (read.error) return read.error;
+  const reqBody = read.data ?? {};
+  const tool = reqBody.tool;
+  if (reqBody.args !== undefined && (reqBody.args === null || typeof reqBody.args !== 'object' || Array.isArray(reqBody.args))) {
+    return spardaJson(400, { error: 'args must be a JSON object', got: reqBody.args === null ? 'null' : Array.isArray(reqBody.args) ? 'array' : typeof reqBody.args });
+  }
+  const args = reqBody.args ?? {};
+  const spec = SPARDA_TOOLS[tool];
+  const proof = spardaProof(tool, spec, args);
+
+  if (proof.decision === 'block') {
+    if (!proof.checks.knownTool) return spardaJson(404, { error: `unknown tool: ${tool}`, spardingProof: proof });
+    if (!proof.checks.enabled)
+      return spardaJson(403, { error: `tool disabled (write-safety): ${tool}`, hint: 'Enable it in sparda.json, then re-run: npx sparda-mcp init', spardingProof: proof });
+    if (!proof.checks.loopSafe)
+      return spardaJson(400, { error: 'self-referential tool blocked (loop protection)', spardingProof: proof });
+    if (!proof.checks.quarantineSafe) {
+      const quarantined = SPARDA_QUARANTINE[tool];
+      SPARDA_RECYCLE.servedByCircle += 1; // the doomed host call was never paid
+      return spardaJson(503, {
+        error: `tool quarantined (immune system): ${tool}`,
+        reason: quarantined ? quarantined.reason : '',
+        retryInMs: quarantined ? Math.max(0, quarantined.until - Date.now()) : 0,
+        spardingProof: proof,
+      });
+    }
+    const status = proof.reasons.some((r) => r.includes('policy blocks execution')) ? 403 : 400;
+    return spardaJson(status, { error: proof.reasons[0] || 'blocked', spardingProof: proof });
+  }
+
+  if (proof.decision === 'require_human') {
+    spardaSweepPending();
+    const confirm = spardaNonce();
+    SPARDA_PENDING[confirm] = { tool, args, expiresAt: Date.now() + SPARDA_CONFIRM_TTL_MS, createdAt: new Date().toISOString() };
+    let siblingName = null;
+    for (const [n, t] of Object.entries(SPARDA_TOOLS)) { if (t.method === 'GET' && t.path === spec.path) { siblingName = n; break; } }
+    spardaEvent('confirm', tool, 202, `gated, awaiting confirmation (risk: ${proof.risk})`);
+    return spardaJson(202, {
+      status: 'awaiting_confirmation',
+      confirm,
+      expiresInMs: SPARDA_CONFIRM_TTL_MS,
+      preview: {
+        tool,
+        method: spec.method,
+        path: spec.path,
+        willSendBody: spec.method !== 'GET' && args.body !== undefined,
+        reversibleHint: proof.checks.reversibleHint,
+        inspectFirst: siblingName ? { tool: siblingName, why: 'GET on the same path — read current state before committing this write' } : null,
+      },
+      instruction: `NOT EXECUTED. ${spec.method} ${spec.path} is gated by policy (${proof.reasons[0] || 'require_human'}); the host route was not touched.${siblingName ? ` First call "${siblingName}" to inspect current state, then` : ' To'} confirm via POST /invoke/confirm { "confirm": "${confirm}" }. Single-use, expires in ${Math.round(SPARDA_CONFIRM_TTL_MS / 1000)}s.`,
+      spardingProof: proof,
+    });
+  }
+
+  return spardaExecute(tool, spec, args, proof, t0);
+}
+
+async function spardaConfirm(request) {
+  const t0 = Date.now();
+  const read = await spardaReadJson(request);
+  if (read.error) return read.error;
+  const confirm = (read.data ?? {}).confirm;
+  if (typeof confirm !== 'string' || !confirm) {
+    return spardaJson(400, { error: 'missing confirm token (expected { confirm: "..." })' });
+  }
+  spardaSweepPending();
+  const pending = SPARDA_PENDING[confirm];
+  if (pending) delete SPARDA_PENDING[confirm]; // consume first — a token can never replay
+  if (!pending) return spardaJson(409, { error: 'unknown or expired confirmation token', hint: 're-issue the write via /invoke to mint a fresh token' });
+  if (Date.now() > pending.expiresAt) return spardaJson(409, { error: 'confirmation token expired', hint: 're-issue the write via /invoke' });
+  const spec = SPARDA_TOOLS[pending.tool];
+  const proof = spardaProof(pending.tool, spec, pending.args); // re-judge at commit time
+  if (proof.decision === 'block') {
+    return spardaJson(403, { error: 'confirmation no longer valid', reason: proof.reasons[0] || 'blocked', spardingProof: proof });
+  }
+  spardaEvent('confirm', pending.tool, 200, 'confirmed -> executing');
+  return spardaExecute(pending.tool, spec, pending.args, proof, t0);
+}
+
+async function spardaHandle(request, ctx) {
+  try {
+    if (request.headers.get('x-sparda-key') !== SPARDA_LOCAL_KEY) {
+      return spardaJson(401, { error: 'unauthorized' });
+    }
+    const params = ctx?.params ? await ctx.params : {};
+    const seg = Array.isArray(params.sparda) ? params.sparda : [];
+    const sub = '/' + seg.join('/');
+    const method = request.method;
+
+    if (sub === '/tools' && method === 'GET') return spardaJson(200, SPARDA_TOOLS);
+    if (sub === '/stats' && method === 'GET')
+      return spardaJson(200, {
+        uptimeSec: Math.round(process.uptime()),
+        stats: SPARDA_STATS,
+        quarantine: SPARDA_QUARANTINE,
+        recycle: { servedByCircle: SPARDA_RECYCLE.servedByCircle, paidFull: SPARDA_RECYCLE.paidFull, ratePct: spardaRecycleRate() },
+        purity: spardaPuritySnapshot(),
+      });
+    if (sub === '/events' && method === 'GET') {
+      const since = Number(new URL(request.url).searchParams.get('since') ?? 0) || 0;
+      return spardaJson(200, { seq: SPARDA_SEQ, events: SPARDA_EVENTS.filter((e) => e.seq > since) });
+    }
+    if (sub === '/gossip' && method === 'POST') {
+      const read = await spardaReadJson(request);
+      if (read.error) return read.error;
+      spardaMergeGossip(read.data);
+      return new Response(null, { status: 204 });
+    }
+    if (sub === '/invoke' && method === 'POST') return spardaInvoke(request);
+    if (sub === '/invoke/confirm' && method === 'POST') return spardaConfirm(request);
+    if (sub === '/invoke' || sub === '/invoke/confirm')
+      return spardaJson(405, { error: 'method not allowed', allow: 'POST' });
+    return spardaJson(404, { error: 'not found', path: sub });
+  } catch (err) {
+    // error envelope: the stack stays server-side, correlated to /events by errorId
+    const errorId = 'err_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    spardaEvent('router', null, (err && err.status) || 500, `[${errorId}] ${err && err.message ? err.message : err}`);
+    return spardaJson((err && err.status) || 500, { error: 'internal error', errorId });
+  }
+}
+
+export async function GET(request, ctx) { return spardaHandle(request, ctx); }
+export async function POST(request, ctx) { return spardaHandle(request, ctx); }
+export async function PUT(request, ctx) { return spardaHandle(request, ctx); }
+export async function PATCH(request, ctx) { return spardaHandle(request, ctx); }
+export async function DELETE(request, ctx) { return spardaHandle(request, ctx); }

@@ -90,7 +90,7 @@ export async function runDoctor(opts) {
             }
           }
         } catch {
-          const startCmd = m.framework === 'express' ? 'npm run dev' : 'fastapi dev';
+          const startCmd = m.framework === 'fastapi' ? 'fastapi dev' : 'npm run dev';
           fail(
             `  ✗ Host app on :${m.port} — NOT reachable\n      → start it with: ${startCmd}`,
           );
