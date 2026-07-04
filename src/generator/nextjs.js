@@ -106,7 +106,10 @@ export function generateNext({ cwd, appDir, port, routes }) {
   if (!process.env.VITEST) {
     delete manifestOnDisk.localKey;
   }
-  atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifestOnDisk, null, 2) + '\n');
+  atomicWrite(
+    path.join(cwd, 'sparda.json'),
+    JSON.stringify(manifestOnDisk, null, 2) + '\n',
+  );
 
   return {
     tools,

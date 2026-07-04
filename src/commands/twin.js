@@ -94,7 +94,11 @@ function matchTool(manifest, method, pathname) {
 export function createTwinServer(manifest, localKeyOrExemplars, maybeExemplars) {
   let localKey = localKeyOrExemplars;
   let exemplars = maybeExemplars;
-  if (maybeExemplars === undefined && localKeyOrExemplars && typeof localKeyOrExemplars === 'object') {
+  if (
+    maybeExemplars === undefined &&
+    localKeyOrExemplars &&
+    typeof localKeyOrExemplars === 'object'
+  ) {
     exemplars = localKeyOrExemplars;
     localKey = resolveSpardaKey(process.cwd(), manifest);
   }
