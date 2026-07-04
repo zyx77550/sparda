@@ -1,15 +1,13 @@
 # Decisions (ADR log — append-only)
 
-Short records of choices that shape SPARDA. Newest last. Never rewrite an
-entry; supersede it with a new one. This is the technical decision log for the
-open core; numbering is stable and append-only, and a few numbers are reserved
-for decisions outside the open core.
+Short records of choices that shape the project. Newest last. Never rewrite
+an entry; supersede it with a new one.
 
 ## ADR-001 — In-process position, zero infra (founding decision)
 SPARDA lives *inside* the host app's process instead of in front of it.
 Everything flows from this: warm DB pools and real auth on tool calls,
 runtime observation no external tool can match, zero hosting cost.
-Trade-off accepted: we are guests — see the hard rules (README).
+Trade-off accepted: we are guests — see the survival rule (CLAUDE.md §rules).
 
 ## ADR-002 — Business Source License 1.1
 MIT allowed commercial clones. BUSL keeps source visible and free to use
@@ -20,9 +18,8 @@ not the idea — the real moat is ADR-009/ADR-010 (accumulated memory).
 ## ADR-003 — MCP sampling before BYOK
 The semantic layer uses the *client's own model* via MCP sampling: zero API
 key, zero cost, nothing to steal. BYOK (Groq/Mistral/OpenAI/Ollama…) is the
-fallback for headless/CI contexts, later. Embedding a key in distributed code
-is the same as publishing it, so keys only ever live where a service can hold
-them — never in the open core.
+fallback for headless/CI contexts, later. Credits on our own keys only when
+a SaaS exists to hold them (an embedded key in distributed code is stolen).
 
 ## ADR-004 — Write-safety: mutating tools off by default
 POST/PUT/DELETE tools generate `enabled: false`. The user opts in per tool
@@ -69,19 +66,26 @@ Signature = `source|tool|status` — coarse on purpose: stable across runs.
 Vitest 4 requires Node 20+; the project promises Node 18. Re-evaluate when
 Node 18 support is dropped (decision required here when that happens).
 
+## ADR-012 — Tiering: Free / Shadow stable / Shadow Labs
+Free = individual power (init, bridge, sampling semantics, base immunity).
+Shadow stable = team trust (shadow writes, signed black box, mesh,
+policies). Shadow Labs = the living organs (ROADMAP rounds 2–3) as opt-in,
+default-off checkboxes with visible resource gauges and self-disable on
+failure. Pipeline: Labs → stable → sometimes free. Full rationale: ROADMAP.md §3.
+
 ## ADR-013 — Recycling gauge: measured, never promised (v0.4)
 Compute side lives in the router (`/mcp/stats.recycle`), runtime-only like
 all stats: `paidFull` increments right before the upstream fetch (the host
 route is exercised), `servedByCircle` when SPARDA answers from its own
 knowledge without touching the host — today that is quarantine blocks; the
-flywheel cache (ADR-020) will add to it. Intelligence side lives in the bridge:
+flywheel cache (R4.3) will add to it. Intelligence side lives in the bridge:
 avoided sampling calls are counted against the *actual* `maxTokens` budgets
 (`DIAGNOSIS_TOKENS`/`SEMANTIC_TOKENS` constants shared with the real calls,
 so the estimate cannot drift), and lifetime savings are *derived* from
 antibody `hits` — zero new persistent state. Day 1 reads 0% by design.
 
 ## ADR-014 — Sequence condenser: Labs, default OFF, structure-only (v0.4)
-Opt-in via `labs.recordSequences: true` in `sparda.json`
+ROADMAP R2.1. Opt-in via `labs.recordSequences: true` in `sparda.json`
 (env `SPARDA_RECORD_SEQUENCES=1` overrides for one session); the `labs`
 field joins the sacred carry-over set (ADR-008). Detection is deterministic
 value-matching with a conservative noise floor: strings 2–200 chars,
@@ -90,11 +94,11 @@ circuits hold tool names, arg names and counts — **never payload values**:
 `sparda.json` is committed to git and values can be PII. Everything is
 bounded (20-call ring, 50 values/payload, 200-node walk, 5-step chains,
 30 circuits — least-observed evicted first) and all analysis runs in the
-idle harvester, never on the call path. A circuit is announced once,
+idle harvester (R4.4), never on the call path. A circuit is announced once,
 at 3 observations: an emergent capability is a suggestion, not an action.
 
 ## ADR-015 — Crystallization: GET-only composites, fallback-first (v0.4)
-At the observation threshold a circuit becomes a composite
+ROADMAP R2.2. At the observation threshold a circuit becomes a composite
 MCP tool only if every step is an **enabled GET** and every link carries a
 `fromKey` (the output key the matched value lived under — recorded at
 observation, structure-only). Writes are never absorbed: their per-call
@@ -108,23 +112,39 @@ router (the truth is always the real call), auto-feeding linked args via
 Composites are re-validated against the live tool specs at bridge start —
 a route that changed or was disabled silently un-registers its composite.
 
-## ADR-017 — Purity detector: observation, never a guess (v0.4)
+## ADR-017 — Purity detector: observation, never a guess (v0.4, R4.2)
 The router classifies each route thermodynamically from real traffic only:
 GET + 200 responses are fingerprinted (FNV-1a in JS, crc32 in Python, first
 64 KB — a fingerprint, not a checksum) under a canonical argsig (sorted
 args, so the AI's argument order never splits a signature). Same argsig →
 same hash repeated ≥ 3 times = `pure` (its result pre-exists, recyclable —
-the flywheel (ADR-020) feeds on this); any mismatch = `volatile` forever
+the future flywheel R4.3 feeds on this); any mismatch = `volatile` forever
 this run; non-GET = `erasing` by definition (Landauer: writes pay the
 dime); anything else = `unknown`. Bounded to 20 argsigs/tool, runtime-only
 like all stats (purity is re-earned each run — a cache of trust must not
 outlive the code it observed). Exposed in `/mcp/stats.purity` and the
 `sparda_get_context` hint. Errors (4xx/5xx) teach nothing about purity.
 
+## ADR-016 — Repo split: open-core, designed for the SaaS before it exists
+Owner decision, 2026-06-12. The repo stays **private until the current todo
+is done**; then SPARDA splits in two, once and for good:
+- **`sparda` (public)** — code, templates, tests, README, LICENSE, and the
+  technical docs only (ARCHITECTURE, TESTING, SECURITY, ERRORS). Created
+  with a **fresh history**: the current history contains strategy documents
+  and must never be exposed. The free product is the marketing (ROADMAP §3),
+  and `sparda_info`/README links finally stop pointing at a 404.
+- **HQ (private — this repo becomes it)** — ROADMAP, HANDOFF, `sessions/`,
+  COMPETITION, pricing, business ADRs, and **from day one the home of the
+  paid Shadow/SaaS features**. The AI-handoff-via-commits workflow
+  continues here unchanged.
+Open-core *by design*: paid capabilities are born private, so the public
+core never has to be re-closed when the SaaS lands. Free tier keeps
+descending from Labs → stable → free (ADR-012) without ever reversing.
+
 ## ADR-018 — SPARDING Proof: Local-first safety and audit engine (v0.5, SPARDING)
 SPARDING Proof v0.1 introduces a runtime risk/decision calculator built directly inside Express and FastAPI router templates, keeping generated host endpoints isolated from direct filesystem operations on SPARDA files. The bridge intercepts the proof returned by the router and maintains a bounded event log (`sparding.events`, max 100) and aggregated, structure-only failure lessons (`sparding.failures`) inside `sparda.json`. Empreintes structurelles (`toolFingerprints`) are computed at code-generation time, and a change in route signature during `init`/`sync` triggers an audit event. Static policies in `sparda.json` (`sparding.policies`) govern read/write/delete blocks and human confirmation demands. All operations remain entirely local, zero-infra, and fully backward compatible.
 
-## ADR-019 — Durable persistence layer + pluggable state drivers (v0.5)
+## ADR-019 — Durable persistence layer + pluggable state drivers (v0.5, Chantier 1)
 `src/server/persistence.js` becomes the single source of truth for writing
 `sparda.json`. `atomicWriteFileSync` (temp → **fsync** → rename) replaces two
 fsync-less `atomicWrite` copies that lived in the Express and FastAPI
@@ -141,13 +161,14 @@ manifest. Redis is a **lazy `import('ioredis')`**, never a package dependency:
 selecting `SPARDA_DRIVER=redis` without it throws a clear `code:'USER'` error,
 so the 4 exact-pinned runtime deps (hard rule #8) stay 4 — the seam is opt-in
 and the count is unchanged. Nothing here sits on the request path (hard rule
-#1). An earlier prototype's neural serializer is intentionally **not** ported —
-it belongs to future engine work, not to manifest durability.
+#1). Ported from `sparda-sandbox/chantier1_persistence.ts`; the neural
+`PersistentSPARDA` serializer is intentionally **not** ported — it belongs to
+the future engine integration, not to manifest durability.
 
-## ADR-020 — Bloc B preCall flywheel: serving a proven-stable read without paying the host (v0.5)
+## ADR-020 — Bloc B preCall flywheel: serving a proven-stable read without paying the host (v0.5, R4.3)
 This is the slice where the engine stops only **observing** and starts
 **serving**: `preCall(tool, args)` returns a cached response and the host call
-is never made. Every organ shipped so far (stability, rhythm, myelin,
+is never made (R4.3). Every organ shipped so far (stability, rhythm, myelin,
 Bloc D) is passive — it watches and reports. The flywheel is the first to *act*
 on that knowledge, so it earns the strictest contract in the engine.
 
@@ -186,11 +207,11 @@ endpoint still re-fetches once per TTL, never serves indefinitely-old bytes.
 observe: on any `isWrite` call we drop the write's **same-path GET sibling**
 (structural, always known) **plus every ghost-affected read** the Bloc D
 gravitational lens has learned (`deps.snapshot().ghosts` where
-`writeTool === W`). This is the **payoff of the ghost-dependency layer** — ghost
-dependencies exist precisely so a write can purge the unrelated reads it silently
-moves, keeping the rest of the cache warm instead of nuking it. An un-learned
-coupling degrades safely: the stale entry simply lives until TTL, and it only
-exists at all for a tool already *proven* not to move.
+`writeTool === W`). This is the **payoff of slice 4** — ghost dependencies exist
+precisely so a write can purge the unrelated reads it silently moves, keeping the
+rest of the cache warm instead of nuking it. An un-learned coupling degrades
+safely: the stale entry simply lives until TTL, and it only exists at all for a
+tool already *proven* not to move.
 
 **Hard-rule compatibility.** Rule #1 (host never pays): `preCall` is one
 canonical-stringify + one FNV-1a + a `Map.get` + a TTL compare — microseconds
@@ -207,28 +228,96 @@ FNV-1a — **zero** new dependency.
 **cannot** count (it never sees the avoided call), so the bridge adds a new
 `recycling.flywheel` category — distinct from `recycling.compute` (router-side
 `servedByCircle`/`paidFull`) and `recycling.intelligence` (sampling avoided) —
-fulfilling ADR-013's note that "the flywheel cache will add to it," and
+fulfilling ADR-013's note that "the flywheel cache (R4.3) will add to it," and
 consuming ADR-017's `pure` classification exactly as ADR-017 anticipated.
 
 **Surface + slicing.** The engine spine gains `preCall(tool, args) → { hit,
 value }`; `observe` gains an optional trailing `args` (ignored by the other
 organs); `snapshot()` gains a **value-free** `flywheel: { stats }`. Bridge
-wiring (`stdio.js`): call `preCall` just before `invoke`, serve the
+wiring (`stdio.js`): call `preCall` just before `invoke` (~L312), serve the
 payload **verbatim** on a hit (byte-identical to a live read — only latency
 differs; provenance lives in stats, never in the payload), populate via the
 harvester with `args`, invalidate on observed writes via the ghost map, bump
-`recycling.flywheel`, and extend the hint. **Decision (locked): on for reads by
-default**, with an `SPARDA_FLYWHEEL=off` kill-switch. The strict gate keeps the
-staleness envelope small and bounded, and serving by default is what makes the
-flywheel's value — and the learned ghost-dependency invalidation that drives
-it — *visible in use* rather than dormant behind a flag nobody flips; an
-off-by-default flagship delivers zero value and demos as a dumb pipe. The
-kill-switch gates at the **bridge**, so the engine organ stays env-free.
+`recycling.flywheel`, and extend the hint. Land it in two slices as usual —
+**5a** the flywheel organ + unit tests (serves nothing in prod yet; a test
+proves no value escapes `snapshot()`), **5b** the bridge wiring. **Decision
+(locked): on for reads by default**, with an `SPARDA_FLYWHEEL=off` kill-switch.
+The strict gate keeps the staleness envelope small and bounded, and serving by
+default is what makes R4.3's value — and the learned ghost-dependency
+invalidation that drives it — *visible in use* rather than dormant behind a flag
+nobody flips; an off-by-default flagship delivers zero value and demos as a dumb
+pipe. The kill-switch gates at the **bridge** (5b), so the engine organ stays
+env-free.
 
-**Adapted from an earlier prototype's `BloomGate`/`preCall`, with three
-corrections.** That prototype served on the **first** `record` (no purity proof),
+**Ported from `sparda-sandbox` `BloomGate`/`BlocB.preCall`, with three
+corrections.** The sandbox served on the **first** `record` (no purity proof),
 keyed on **raw** `JSON.stringify(args)` (order-sensitive — same query, different
 key order = a miss), and carried a `bloomSet` that duplicated the `Map`'s own
 membership for no gain. We gate on **proven purity**, key on a **canonical** arg
 signature, drop the redundant set, and add the value-free `snapshot()` discipline
-the prototype lacked.
+the sandbox lacked.
+
+## ADR-021 — The twin and the value boundary (v0.8, R3.2–R3.4 + R4.5)
+
+**Decision.** Round 3 needs observed VALUES (example responses) to reconstruct
+a living mock. Values cross a line nothing else in SPARDA crosses, so the
+boundary is explicit and enforced by construction:
+
+1. **Values live only in `.sparda/twin.json`** — machine-local, inside the
+   directory `init` already gitignores. Never in `sparda.json` (committed),
+   never in a seed (travels). Capped (16KB per exemplar, GET+200 only).
+2. **Learning is explicit** — `sparda twin --learn` calls the live router
+   once per eligible enabled GET (no required path params in v0.1) and stores
+   sanitized exemplars. No continuous collection, no bridge hook, nothing on
+   the request path (hard rule #1 intact).
+3. **The twin replaces the host on the same port** — stop the app, run
+   `sparda twin`: it serves the same routes AND the `/mcp/*` surface from
+   exemplars, so the unchanged bridge (and any agent) exercises a harmless
+   clone. Writes against the twin return 202 echoes and touch nothing.
+4. **The grammar is derived, never authoritative** — observed edges come from
+   Labs circuits; hypothesis edges from exemplar response keys ∩ param names,
+   always labelled `hypothesis`. Derived artifacts (`.sparda/grammar.json`)
+   are regenerable and never committed.
+5. **Evolution only suggests** — `sparda evolve` trials hypothesis chains
+   against the TWIN (never the host). Survivors land in `labs.circuits` with
+   `seen: 0` and `evolved: true`; crystallization still requires the real
+   observation threshold. An emergent capability stays a suggestion until
+   reality confirms it (survival rule, §1).
+6. **The seed stays value-free** — R4.5-full is germination, not transport:
+   `seed import --germinate` rebuilds the derived organs (grammar) from the
+   imported structure on the receiving machine.
+
+## ADR-022 — The local key leaves the repo: env → .sparda/key → fail closed (v0.8.x)
+
+**Problem.** The localKey was baked into two committed artifacts: the generated
+router file and `sparda.json`. Any public repo, any deploy, any git history
+carried the secret. The owner asked for an arbitration (env var vs git hook vs
+ephemeral handshake).
+
+**Decision — none of the three; a fourth that keeps every promise:**
+
+1. **The key lives in `.sparda/key`** — the directory `init` already
+   gitignores (and whose gitignore edit `remove` reverts byte-for-byte). It is
+   generated by `init` if absent and SURVIVES re-init: carry-over (hard rule
+   #5) moves from the manifest to the file.
+2. **Runtime resolution, fail closed.** Routers and every CLI consumer resolve
+   the key as: `SPARDA_LOCAL_KEY` env var → `.sparda/key` file → (legacy)
+   `manifest.localKey` → **null = every /mcp endpoint answers 503
+   "key not configured"**. No key, no surface — never open.
+3. **`sparda.json` carries no key anymore.** New inits write none; the first
+   re-init/sync migrates a legacy key into `.sparda/key` and strips it. The
+   organism's committed memory is finally secret-free end to end (matching the
+   seed's contract).
+4. **Deploy accidents die by construction.** `.sparda/` never ships (ignored),
+   so a router that reaches production resolves no key and fails closed. An
+   operator who WANTS /mcp in prod sets `SPARDA_LOCAL_KEY` explicitly — an
+   informed decision instead of a leak.
+5. **Why not the alternatives.** Env-only breaks zero-config on Express and
+   FastAPI (no native .env loading; dotenv would be a fifth runtime dep —
+   hard rule #8). A pre-commit hook leaves the secret in place and hopes.
+   An ephemeral handshake breaks bridge/host carry-over and still needs a
+   disk or pipe rendezvous — complexity without removing the secret.
+
+**Costs accepted.** The Next.js template loses its "zero imports" purity
+(node:fs/node:path builtins — still zero dependencies); routers read one
+small file once at module load (off the request path).

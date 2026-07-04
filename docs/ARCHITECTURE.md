@@ -161,6 +161,9 @@ a marked `post-commit` git hook running `sparda-mcp sync --quiet`.
 | `src/server/crystallize.js` | crystallization — composite tools from observed circuits (R2.2) |
 | `src/security/sanitize.js` | prompt-injection deny-list |
 | `src/ui/style.js` | zero-dep ANSI styling (gradient banner, JSON highlight) — human commands only, never the bridge |
-| `src/commands/*.js` | init / dev / sync / hook / remove / doctor |
+| `src/commands/*.js` | init / dev / sync / hook / remove / doctor / report / seed / twin / grammar / evolve |
+| `src/commands/twin.js` | twin command — learns exemplars and serves mock backend (R3.2) |
+| `src/commands/grammar.js` | grammar command — infers sequence and parameter relationships (R3.3) |
+| `src/commands/evolve.js` | evolve command — Darwinian trials of candidate circuits against the twin (R3.4) |
 | `templates/*.txt` | the routers, placeholder-rendered (never edited in target apps) |
 | `tests/sparda.test.js` + `tests/fixtures/` | the whole suite (see TESTING.md) |
