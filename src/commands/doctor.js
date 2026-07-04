@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { detectStack } from '../detect.js';
 import { buildNegentropy, renderNegentropy } from './negentropy.js';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 // Returns { healthy } so the CLI can exit non-zero on any ✗ — scripts/CI can
 // gate on `sparda doctor` (E-012). Informational '·' lines never fail it.
@@ -55,7 +56,8 @@ export async function runDoctor(opts) {
       );
 
       if (stack) {
-        const headers = { 'x-sparda-key': m.localKey };
+        const key = resolveSpardaKey(opts.cwd, m);
+        const headers = { 'x-sparda-key': key };
         try {
           const r = await fetch(`http://127.0.0.1:${m.port}/mcp/tools`, {
             headers,

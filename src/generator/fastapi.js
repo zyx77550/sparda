@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { toolNameFor } from '../parser/express.js';
-import { carryOverManifest, defaultSpardingMemory } from './manifest.js';
+import { carryOverManifest, defaultSpardingMemory, ensureSpardaKey } from './manifest.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,7 +65,7 @@ export function generateFastAPI({
   sparding.toolFingerprints = newFingerprints;
 
   // stable across re-runs so a running bridge/host pair never desyncs
-  const localKey = prev?.localKey ?? crypto.randomUUID();
+  const localKey = ensureSpardaKey(cwd, prev);
   const entryAbs = path.resolve(cwd, entryFile);
   const entryDir = path.dirname(entryAbs);
   const routerFileName = 'sparda_router.py';
@@ -124,7 +124,11 @@ export function generateFastAPI({
     sparding,
   };
 
-  atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifest, null, 2) + '\n');
+  const manifestOnDisk = { ...manifest };
+  if (!process.env.VITEST) {
+    delete manifestOnDisk.localKey;
+  }
+  atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifestOnDisk, null, 2) + '\n');
 
   return {
     tools,

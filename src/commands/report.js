@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { c, gradient } from '../ui/style.js';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 // ── pure: manifest (+ optional live stats) → report data ──────────────────
 
@@ -342,9 +343,10 @@ export async function runReport(opts) {
   }
 
   let live = null;
-  if (manifest.port && manifest.localKey) {
+  const key = resolveSpardaKey(opts.cwd, manifest);
+  if (manifest.port && key) {
     live = await fetch(`http://127.0.0.1:${manifest.port}/mcp/stats`, {
-      headers: { 'x-sparda-key': manifest.localKey },
+      headers: { 'x-sparda-key': key },
       signal: AbortSignal.timeout(1500),
     })
       .then((x) => (x.ok ? x.json() : null))

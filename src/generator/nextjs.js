@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { toolNameFor } from '../parser/express.js';
 import { ensureGitignore } from './express.js';
-import { carryOverManifest, defaultSpardingMemory } from './manifest.js';
+import { carryOverManifest, defaultSpardingMemory, ensureSpardaKey } from './manifest.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,7 +60,7 @@ export function generateNext({ cwd, appDir, port, routes }) {
   sparding.toolFingerprints = newFingerprints;
 
   // stable across re-runs so a running bridge/host pair never desyncs
-  const localKey = prev?.localKey ?? crypto.randomUUID();
+  const localKey = ensureSpardaKey(cwd, prev);
 
   // .js on purpose: Next enables allowJs in the tsconfig it manages, so the
   // generated handler compiles untouched inside TS projects too.
@@ -102,7 +102,11 @@ export function generateNext({ cwd, appDir, port, routes }) {
     ...(prev?.labs ? { labs: prev.labs } : {}),
     sparding,
   };
-  atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifest, null, 2) + '\n');
+  const manifestOnDisk = { ...manifest };
+  if (!process.env.VITEST) {
+    delete manifestOnDisk.localKey;
+  }
+  atomicWrite(path.join(cwd, 'sparda.json'), JSON.stringify(manifestOnDisk, null, 2) + '\n');
 
   return {
     tools,

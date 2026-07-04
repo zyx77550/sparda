@@ -10,6 +10,7 @@ import { buildGrammar } from './grammar.js';
 import { createTwinServer, twinFilePath } from './twin.js';
 import { findByKey } from '../server/crystallize.js';
 import { mergeManifestKeySync } from '../server/persistence.js';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 const MAX_CANDIDATES_PER_RUN = 10;
 
@@ -101,7 +102,8 @@ export async function runEvolve(opts) {
   }
 
   // the practice arena: an in-process twin on an ephemeral port
-  const server = createTwinServer(manifest, exemplars);
+  const localKey = resolveSpardaKey(opts.cwd, manifest);
+  const server = createTwinServer(manifest, localKey, exemplars);
   const port = await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve(server.address().port));
@@ -111,7 +113,7 @@ export async function runEvolve(opts) {
   const failed = [];
   try {
     for (const c of candidates) {
-      const verdict = await trialCandidate(c, { port, localKey: manifest.localKey });
+      const verdict = await trialCandidate(c, { port, localKey });
       if (verdict.ok) survivors.push(c);
       else failed.push({ key: c.key, why: verdict.why });
     }

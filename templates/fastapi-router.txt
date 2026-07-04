@@ -19,7 +19,19 @@ import threading
 # json.loads, not a Python literal: JSON true/false/null are not valid Python (E-009)
 SPARDA_TOOLS = json.loads(__TOOLS_JSON__)
 SPARDA_POLICIES = json.loads(__SPARDING_POLICIES__)
-SPARDA_LOCAL_KEY = "__LOCAL_KEY__"
+SPARDA_LOCAL_KEY = os.environ.get("SPARDA_LOCAL_KEY")
+if not SPARDA_LOCAL_KEY and not os.environ.get("VITEST"):
+    try:
+        for p in [".sparda/key", "../.sparda/key", "../../.sparda/key"]:
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    SPARDA_LOCAL_KEY = f.read().strip()
+                if SPARDA_LOCAL_KEY:
+                    break
+    except Exception:
+        pass
+if not SPARDA_LOCAL_KEY:
+    SPARDA_LOCAL_KEY = "__LOCAL_KEY__"
 SPARDA_PORT = __PORT__
 
 SPARDA_STATS = {}
@@ -363,18 +375,24 @@ async def sparda_read_json(request):
 
 @sparda_router.get("/tools")
 async def get_tools(request: Request):
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     return SPARDA_TOOLS
 
 @sparda_router.get("/stats")
 async def get_stats(request: Request):
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     return {"uptimeSec": round(time.time() - SPARDA_START), "stats": SPARDA_STATS, "quarantine": SPARDA_QUARANTINE, "recycle": {**SPARDA_RECYCLE, "ratePct": sparda_recycle_rate()}, "purity": sparda_purity_snapshot()}
 
 @sparda_router.get("/events")
 async def get_events(request: Request):
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     try:
@@ -388,6 +406,8 @@ async def gossip(request: Request):
     # peer-to-peer convergence (Brief #2), behind the same x-sparda-key as every route.
     # Absorbs a peer's grow-only counts via CRDT max-merge; 204 on success. An unknown tool
     # or malformed count is silently dropped (bounded, no injection).
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     body, err = await sparda_read_json(request)
@@ -398,6 +418,8 @@ async def gossip(request: Request):
 
 @sparda_router.post("/invoke")
 async def invoke_tool(request: Request):
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
 
@@ -543,6 +565,8 @@ async def invoke_tool(request: Request):
 
 @sparda_router.post("/invoke/confirm")
 async def confirm_tool_invocation(request: Request):
+    if not SPARDA_LOCAL_KEY:
+        return JSONResponse(status_code=503, content={"error": "key not configured"})
     if request.headers.get("x-sparda-key") != SPARDA_LOCAL_KEY:
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     

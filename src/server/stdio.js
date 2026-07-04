@@ -25,6 +25,7 @@ import { writeManifestSync, mergeManifestKeySync } from './persistence.js';
 import { createSpardaEngine } from './engine.js';
 import { initiateWrite, preapproveWrite, confirmWrite } from './confirmation.js';
 import { resolveContext, injectContext, fingerprintContext } from './context-carrier.js';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 const EVENT_POLL_MS = Number(process.env.SPARDA_EVENT_POLL_MS ?? 5000);
 // the sampling budgets below are also what the recycling gauge counts as "avoided"
@@ -61,11 +62,11 @@ export async function startStdioBridge({ cwd, portOverride }) {
   }
   const port = Number(portOverride ?? manifest.port);
   const framework = manifest.framework;
-  const key = manifest.localKey;
+  const key = resolveSpardaKey(cwd, manifest);
   if (!key) {
-    throw Object.assign(new Error('localKey missing from sparda.json.'), {
+    throw Object.assign(new Error('localKey missing or not configured.'), {
       code: 'USER',
-      hint: 'Re-run `npx sparda-mcp init` to regenerate it.',
+      hint: 'Re-run `npx sparda-mcp init` to generate it, or set SPARDA_LOCAL_KEY.',
     });
   }
 

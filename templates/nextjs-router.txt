@@ -8,7 +8,22 @@
 const SPARDA_TOOLS = __TOOLS_JSON__;
 const SPARDA_POLICIES = __SPARDING_POLICIES__;
 
-const SPARDA_LOCAL_KEY = "__LOCAL_KEY__";
+let SPARDA_LOCAL_KEY = process.env.SPARDA_LOCAL_KEY;
+if (!SPARDA_LOCAL_KEY && !process.env.VITEST) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    for (const p of ['.sparda/key', '../.sparda/key', '../../.sparda/key']) {
+      if (fs.existsSync(p)) {
+        SPARDA_LOCAL_KEY = fs.readFileSync(p, 'utf8').trim();
+        if (SPARDA_LOCAL_KEY) break;
+      }
+    }
+  } catch {}
+}
+if (!SPARDA_LOCAL_KEY) {
+  SPARDA_LOCAL_KEY = "__LOCAL_KEY__";
+}
 const SPARDA_PORT = __PORT__;
 
 // never statically optimized, always on the Node.js runtime (process, timers)
@@ -336,6 +351,9 @@ async function spardaConfirm(request) {
 
 async function spardaHandle(request, ctx) {
   try {
+    if (!SPARDA_LOCAL_KEY) {
+      return spardaJson(503, { error: 'key not configured' });
+    }
     if (request.headers.get('x-sparda-key') !== SPARDA_LOCAL_KEY) {
       return spardaJson(401, { error: 'unauthorized' });
     }

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 // same fingerprint the generators stamp into sparding.toolFingerprints —
 // method|path|params, sha256/8. Divergence = the route's shape changed.
@@ -191,17 +192,17 @@ export function buildNegentropy({ manifest, currentRoutes, live, detectedPort, c
         `${f} is recorded in sparda.json but absent on disk — the organism has a memory of a body it no longer has`,
         'npx sparda-mcp init --yes (regenerates; carry-over keeps your state)',
       );
-    } else if (
-      manifest.localKey &&
-      !fs.readFileSync(abs, 'utf8').includes(manifest.localKey)
-    ) {
-      add(
-        'zombie',
-        'high',
-        'router/manifest key mismatch',
-        `${f} does not carry the manifest's localKey — a stale router from an older init is still wired in`,
-        'npx sparda-mcp init --yes',
-      );
+    } else {
+      const key = resolveSpardaKey(cwd, manifest);
+      if (key && !fs.readFileSync(abs, 'utf8').includes(key)) {
+        add(
+          'zombie',
+          'high',
+          'router/manifest key mismatch',
+          `${f} does not carry the manifest's localKey — a stale router from an older init is still wired in`,
+          'npx sparda-mcp init --yes',
+        );
+      }
     }
   }
 

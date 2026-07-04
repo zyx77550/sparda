@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
+import { resolveSpardaKey } from '../generator/manifest.js';
 
 const EXEMPLAR_CAP = 16384; // 16KB per exemplar — a shape, not an archive
 
@@ -26,7 +27,14 @@ export function eligibleForLearning(tool) {
   return tool.enabled && tool.method === 'GET' && (tool.pathParams ?? []).length === 0;
 }
 
-export async function learnExemplars(manifest, fetchFn = fetch) {
+export async function learnExemplars(manifest, localKey, fetchFn = fetch) {
+  let key = localKey;
+  if (typeof localKey === 'function') {
+    fetchFn = localKey;
+    key = undefined;
+  }
+  key = key ?? manifest.localKey ?? resolveSpardaKey(process.cwd(), manifest);
+
   const exemplars = {};
   const skipped = [];
   for (const [name, t] of Object.entries(manifest.tools ?? {})) {
@@ -46,7 +54,7 @@ export async function learnExemplars(manifest, fetchFn = fetch) {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-sparda-key': manifest.localKey,
+          'x-sparda-key': key,
         },
         body: JSON.stringify({ tool: name, args: {} }),
         signal: AbortSignal.timeout(10_000),
@@ -83,13 +91,19 @@ function matchTool(manifest, method, pathname) {
   return null;
 }
 
-export function createTwinServer(manifest, exemplars) {
+export function createTwinServer(manifest, localKeyOrExemplars, maybeExemplars) {
+  let localKey = localKeyOrExemplars;
+  let exemplars = maybeExemplars;
+  if (maybeExemplars === undefined && localKeyOrExemplars && typeof localKeyOrExemplars === 'object') {
+    exemplars = localKeyOrExemplars;
+    localKey = resolveSpardaKey(process.cwd(), manifest);
+  }
   const json = (res, status, obj) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(obj));
   };
   const answerFor = (name) =>
-    exemplars[name]?.data !== undefined
+    (exemplars ?? {})[name]?.data !== undefined
       ? exemplars[name].data
       : {
           __sparda_twin__: true,
@@ -103,7 +117,7 @@ export function createTwinServer(manifest, exemplars) {
 
     // the /mcp surface, so the unchanged bridge drives the ghost
     if (pathname.startsWith('/mcp')) {
-      if (req.headers['x-sparda-key'] !== manifest.localKey)
+      if (req.headers['x-sparda-key'] !== localKey)
         return json(res, 401, { error: 'unauthorized' });
       if (pathname === '/mcp/tools') return json(res, 200, manifest.tools ?? {});
       if (pathname === '/mcp/stats')
@@ -178,13 +192,14 @@ export async function runTwin(opts, args) {
     });
   }
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const localKey = resolveSpardaKey(opts.cwd, manifest);
   const twinPath = twinFilePath(opts.cwd);
 
   if (args.includes('--learn') || opts.learn) {
     console.error(
       '[sparda] twin: learning from the LIVE app (one call per eligible GET)...',
     );
-    const { exemplars, skipped } = await learnExemplars(manifest);
+    const { exemplars, skipped } = await learnExemplars(manifest, localKey);
     const learned = Object.keys(exemplars).length;
     if (!learned && skipped.every((s) => s.reason.startsWith('unreachable'))) {
       throw Object.assign(
@@ -222,7 +237,7 @@ export async function runTwin(opts, args) {
     }
   }
   const port = Number(opts.port) || manifest.port;
-  const server = createTwinServer(manifest, exemplars);
+  const server = createTwinServer(manifest, localKey, exemplars);
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
