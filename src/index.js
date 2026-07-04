@@ -21,6 +21,8 @@ const opts = {
   html: flags.has('--html'),
   json: flags.has('--json'),
   app: flags.has('--app'),
+  learn: flags.has('--learn'),
+  germinate: flags.has('--germinate'),
   port: getOpt('port', null),
   out: getOpt('out', null),
   cwd: process.cwd(),
@@ -77,6 +79,21 @@ try {
       );
       break;
     }
+    case 'twin': {
+      const { runTwin } = await import('./commands/twin.js');
+      await runTwin(opts, rest);
+      break;
+    }
+    case 'grammar': {
+      const { runGrammar } = await import('./commands/grammar.js');
+      await runGrammar(opts);
+      break;
+    }
+    case 'evolve': {
+      const { runEvolve } = await import('./commands/evolve.js');
+      await runEvolve(opts);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -89,7 +106,10 @@ Usage:
   npx sparda-mcp remove    Remove SPARDA from this project (clean git diff)
   npx sparda-mcp doctor    Diagnose your setup (--app: negentropy scan — drift, dead routes, rot)
   npx sparda-mcp report    The black box: what AI agents did to this app
-  npx sparda-mcp seed      Export/import the learned genome (export [--out f] | import <f>)
+  npx sparda-mcp seed      Export/import the learned genome (export [--out f] | import <f> [--germinate])
+  npx sparda-mcp twin      The living mock (--learn from the live app, then serve the ghost)
+  npx sparda-mcp grammar   Which call sequences mean something (observed + hypotheses)
+  npx sparda-mcp evolve    Trial hypothesis chains against the twin; survivors become suggestions
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)

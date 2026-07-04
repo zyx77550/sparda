@@ -272,6 +272,26 @@ export async function runSeed(opts, args) {
     console.log(
       '  Local knowledge always wins; keys, policies and enabled flags were never read.',
     );
+    // R4.5 full — germination: the derived organs regrow from the imported
+    // structure on THIS machine (values never travelled; they never do).
+    if (opts.germinate) {
+      const { buildGrammar } = await import('./grammar.js');
+      const { twinFilePath } = await import('./twin.js');
+      let exemplars = null;
+      try {
+        exemplars =
+          JSON.parse(fs.readFileSync(twinFilePath(opts.cwd), 'utf8')).exemplars ?? null;
+      } catch {
+        exemplars = null; // no local twin memory yet — grammar grows from structure alone
+      }
+      const grammar = buildGrammar(merged, exemplars);
+      const outPath = path.join(opts.cwd, '.sparda', 'grammar.json');
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      atomicWrite(outPath, JSON.stringify(grammar, null, 2) + '\n');
+      console.log(
+        `✓ Germinated: grammar regrown from the imported genome (${grammar.phrases.length} phrases, ${grammar.edges.length} edges) → .sparda/grammar.json`,
+      );
+    }
     return { report };
   }
 
