@@ -15,6 +15,7 @@ import { createIdleHarvester } from './idle.js';
 import { createSequenceRecorder, sequenceRecordingEnabled } from './condenser.js';
 import {
   eligibleForCrystallization,
+  remapComposites,
   fallbackComposite,
   normalizeCompositeName,
   compositeSchema,
@@ -228,10 +229,58 @@ export async function startStdioBridge({ cwd, portOverride }) {
   // composites born in past sessions wake up with the bridge — re-validated
   // against today's tools (a route may have changed or been disabled since)
   if (recorder) {
+    // R2.4 — nothing disappears, x becomes y: a step whose route was renamed is
+    // re-mapped to its UNIQUE deterministic successor instead of killing the
+    // composite silently; the unmappable go dormant WITH a recorded lesson.
+    const { remapped, dormant } = remapComposites(
+      manifest.labs?.circuits ?? {},
+      toolSpecs,
+    );
     for (const [sig, c] of Object.entries(manifest.labs?.circuits ?? {})) {
       if (c.composite?.name && eligibleForCrystallization(c, toolSpecs)) {
         composites.set(uniqueCompositeName(c.composite.name), { sig, circuit: c });
       }
+    }
+    for (const r of remapped) {
+      delete manifest.labs.circuits[r.oldKey];
+      manifest.labs.circuits[r.newKey] = r.circuit;
+      composites.set(uniqueCompositeName(r.circuit.composite.name), {
+        sig: r.newKey,
+        circuit: r.circuit,
+      });
+      manifest.sparding ??= {};
+      manifest.sparding.events ??= [];
+      manifest.sparding.events.push({
+        ts: new Date().toISOString(),
+        tool: r.circuit.composite.name,
+        decision: 'audit',
+        risk: 'low',
+        reasons: [
+          `composite re-mapped (R2.4): ${Object.entries(r.renames)
+            .map(([a, b]) => `${a} → ${b}`)
+            .join(', ')}`,
+        ],
+      });
+      if (manifest.sparding.events.length > 100) manifest.sparding.events.shift();
+      console.error(
+        `[sparda] R2.4: composite '${r.circuit.composite.name}' re-mapped (${Object.entries(
+          r.renames,
+        )
+          .map(([a, b]) => `${a} → ${b}`)
+          .join(', ')})`,
+      );
+    }
+    for (const d of dormant) {
+      manifest.sparding ??= {};
+      manifest.sparding.failures ??= {};
+      const fsig = `composite|${d.composite}|dormant`;
+      const prev = manifest.sparding.failures[fsig] ?? { count: 0, lesson: '' };
+      manifest.sparding.failures[fsig] = { count: prev.count + 1, lesson: d.reason };
+      console.error(`[sparda] R2.4: composite '${d.composite}' dormant — ${d.reason}`);
+    }
+    if (remapped.length || dormant.length) {
+      mergeManifestKeySync(manifestPath, 'labs', manifest.labs);
+      mergeManifestKeySync(manifestPath, 'sparding', manifest.sparding);
     }
   }
 

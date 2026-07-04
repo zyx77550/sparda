@@ -32,6 +32,112 @@ export function fallbackComposite(circuit) {
   };
 }
 
+// ── R2.4: nothing disappears, x becomes y ──────────────────────────────────
+// Tool names derive from method+path, so a renamed route means a vanished step
+// name. Instead of letting the composite die silently at wake-up, we look for
+// the step's UNIQUE deterministic successor: an enabled GET whose name keeps
+// the old name's segments in order (api_users ⊂ api_v2_users) and ends on the
+// same resource segment. One candidate → re-map; zero or many → dormant with a
+// recorded reason. Never a guess: ambiguity is a reason, not a coin flip.
+
+function nameSegments(toolName) {
+  const parts = String(toolName).split('_');
+  return ['get', 'post', 'put', 'patch', 'delete'].includes(parts[0])
+    ? parts.slice(1)
+    : parts;
+}
+
+function isSubsequence(small, big) {
+  let i = 0;
+  for (const seg of big) if (seg === small[i]) i++;
+  return i === small.length;
+}
+
+export function successorFor(oldName, toolSpecs, exclude = new Set()) {
+  const oldSegs = nameSegments(oldName);
+  if (!oldSegs.length) return null;
+  const last = oldSegs[oldSegs.length - 1];
+  const candidates = Object.entries(toolSpecs)
+    .filter(([name, t]) => {
+      if (exclude.has(name) || !t.enabled || t.method !== 'GET') return false;
+      const segs = nameSegments(name);
+      return segs[segs.length - 1] === last && isSubsequence(oldSegs, segs);
+    })
+    .map(([name]) => name);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+// (circuits map, today's tools) → what survives, what becomes, what sleeps.
+// Pure: never mutates the input; the caller decides what to persist.
+export function remapComposites(circuits, toolSpecs) {
+  const remapped = [];
+  const dormant = [];
+  for (const [oldKey, circuit] of Object.entries(circuits ?? {})) {
+    if (!circuit?.composite?.name) continue;
+    if (eligibleForCrystallization(circuit, toolSpecs)) continue; // alive as-is
+
+    const disabled = (circuit.steps ?? []).filter(
+      (s) => toolSpecs[s] && !toolSpecs[s].enabled,
+    );
+    if (disabled.length) {
+      // the user disabled a step on purpose — respect it, do not re-route around it
+      dormant.push({
+        composite: circuit.composite.name,
+        key: oldKey,
+        reason: `step disabled by the user: ${disabled.join(', ')} — composite sleeps until re-enabled`,
+      });
+      continue;
+    }
+
+    const renames = {};
+    const newSteps = [];
+    let resolvable = true;
+    for (const step of circuit.steps ?? []) {
+      if (toolSpecs[step]?.enabled && toolSpecs[step].method === 'GET') {
+        newSteps.push(step);
+        continue;
+      }
+      const successor = successorFor(step, toolSpecs, new Set(newSteps));
+      if (!successor) {
+        resolvable = false;
+        dormant.push({
+          composite: circuit.composite.name,
+          key: oldKey,
+          reason: `step vanished with no unique successor: ${step} — structure kept, waiting for a sync that brings it back`,
+        });
+        break;
+      }
+      renames[step] = successor;
+      newSteps.push(successor);
+    }
+    if (!resolvable) continue;
+
+    const next = structuredClone(circuit);
+    next.steps = newSteps;
+    next.links = (next.links ?? []).map((l) => ({
+      ...l,
+      from: renames[l.from] ?? l.from,
+      to: renames[l.to] ?? l.to,
+    }));
+    if (!eligibleForCrystallization(next, toolSpecs)) {
+      dormant.push({
+        composite: circuit.composite.name,
+        key: oldKey,
+        reason:
+          'successor found but the re-mapped circuit is not crystallizable — kept dormant',
+      });
+      continue;
+    }
+    remapped.push({
+      oldKey,
+      newKey: next.steps.join('>'),
+      circuit: next,
+      renames,
+    });
+  }
+  return { remapped, dormant };
+}
+
 // a sampled name is untrusted input: normalize hard, reject anything shapeless
 export function normalizeCompositeName(raw) {
   const n = String(raw ?? '')
