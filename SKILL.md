@@ -84,6 +84,16 @@ adapt — don't blindly retry the same call.
 **5. Latency anomalies.** A call far slower than a tool's own baseline surfaces as
 an `immune` event in `/mcp/events`. Treat it as a hint to back off or warn the user.
 
+**6. Twin Simulation Mode — practice safely on a clone.**
+When `/mcp/stats` or `sparda_get_context.runtime` contains `"twin": true`, you are connected to a safe, in-memory mock clone of the application.
+- All GET reads return learned exemplars (observed response shapes and mock values).
+- All write tools return simulated `202` echoes but do not write to database or external APIs.
+- Use this twin mode to practice multi-step workflows, debug tool sequences, and test your plans without touching the live production backend.
+
+**7. Grammar & Evolution — discover optimal workflows.**
+- You can query or contribute to the app's grammar (`.sparda/grammar.json`). The grammar maps valid sequences of tool calls (edges).
+- Running `sparda evolve` mutates and runs candidate chains against the twin. The successful evolved sequences are suggested as mid-session workflows.
+
 ## Writing safely — the mandatory two-phase protocol
 
 Writes are **disabled by default**. The protocol is not optional:
@@ -136,6 +146,8 @@ Writes are **disabled by default**. The protocol is not optional:
 - **General health** → `sparda doctor` checks Node version, framework detection,
   manifest validity, the semantic/immune cache, host reachability, and quarantine;
   it exits non-zero so it can gate CI.
+- **Clone learning / Transfer sémantique** → Use `sparda seed export` to package your app's descriptions, workflows, and antibodies. Then `sparda seed import --germinate` in another clone to import the structure and germinate simulated twin instances.
+- **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 
 ---
 *This skill ships with `sparda-mcp` and is regenerated from SPARDA's capability

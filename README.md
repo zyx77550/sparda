@@ -107,6 +107,9 @@ What we *don't* promise: the honest limits in [docs/SECURITY.md](./docs/SECURITY
 4. Suspicious docstrings are sanitized before they ever reach the AI (prompt-injection defense).
 5. `npx sparda-mcp doctor --app` audits your codebase for drift: it detects stale tools (IA seeing ghosts), unsynced routes, schema drift via fingerprints, and zombie configurations. High severity issues trigger a non-zero exit code for your CI pipeline.
 6. `npx sparda-mcp seed export/import` lets you package and share your app's "genome" (semantic memory, workflows, antibodies) securely, transferring immune memory between environments or across similar stacks with zero data leak.
+7. `npx sparda-mcp twin` starts a safe, simulated mock server of your backend on the original port. It serves GET calls from learned exemplars (observed response shapes & mock data) and returns simulated 202 writes without ever touching your real database or production APIs. Learn exemplars by running `npx sparda-mcp twin --learn`.
+8. `npx sparda-mcp grammar` maps the graph of valid sequences of tool calls (observed circuits and candidate hypotheses) to prevent LLM hallucination of routes.
+9. `npx sparda-mcp evolve` mutates candidate chains and tests them against the twin in-memory, promoting successful chains to evolved workflow suggestions.
 
 ## What SPARDA gives your AI
 
