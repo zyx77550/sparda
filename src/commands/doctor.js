@@ -59,14 +59,14 @@ export async function runDoctor(opts) {
         try {
           const r = await fetch(`http://127.0.0.1:${m.port}/mcp/tools`, {
             headers,
-            signal: AbortSignal.timeout(1500),
+            signal: AbortSignal.timeout(5000),
           });
           if (!r.ok) {
             fail(`  ✗ Host app on :${m.port} answered ${r.status}`);
           } else {
             const s = await fetch(`http://127.0.0.1:${m.port}/mcp/stats`, {
               headers,
-              signal: AbortSignal.timeout(1500),
+              signal: AbortSignal.timeout(5000),
             })
               .then((x) => (x.ok ? x.json() : null))
               .catch(() => null);
