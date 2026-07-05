@@ -94,6 +94,11 @@ try {
       await runEvolve(opts);
       break;
     }
+    case 'ubg': {
+      const { runUbg } = await import('./commands/ubg.js');
+      await runUbg(opts);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -110,6 +115,7 @@ Usage:
   npx sparda-mcp twin      The living mock (--learn from the live app, then serve the ghost)
   npx sparda-mcp grammar   Which call sequences mean something (observed + hypotheses)
   npx sparda-mcp evolve    Trial hypothesis chains against the twin; survivors become suggestions
+  npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)
