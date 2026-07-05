@@ -3,8 +3,8 @@
 > Living document. Describes the **present**. Rewritten at the end of every
 > session that changes anything (history goes to `sessions/`, not here).
 
-**Last updated:** 2026-07-04 (c) · **ROUND 3 SHIPPED & v0.8.0 LIVE — every ROADMAP round now has a living v1.** The twin (`sparda twin --learn` / `twin`, values ONLY in .sparda/twin.json — ADR-021), the grammar (`sparda grammar`, observed vs hypothesis edges), evolution (`sparda evolve`, trials against the twin, survivors = seen:0 suggestions), germination (`seed import --germinate`). Session: `sessions/2026-07-04-round3-twin-grammar-evolve.md`. Next publish = **None (0.8.0 is live)**. Prior: 0.7.1 on npm+registry, truth session on Reach green, R2.4 (PR #16).
-**Version:** 0.8.0 live (published on npm + registry).
+**Last updated:** 2026-07-05 (c) · **ROUND 3 SHIPPED & v0.8.1 LIVE — every ROADMAP round now has a living v1.** The twin (`sparda twin --learn` / `twin`, values ONLY in .sparda/twin.json — ADR-021), the grammar (`sparda grammar`, observed vs hypothesis edges), evolution (`sparda evolve`, trials against the twin, survivors = seen:0 suggestions), germination (`seed import --germinate`), and security key hardening (`ADR-022` — fail-closed 503, no baked localKey, gitignored `.sparda/key`). Session: `sessions/2026-07-04-round3-twin-grammar-evolve.md` & `2026-07-04-[SPARDA]-ADR022-Session.md`.
+**Version:** 0.8.1 live (published on npm + registry).
 **Branch state:** main branch. Tests **293/293 Vitest + 10/10 router self-test + 7/7 E2E phase4** green; ESLint 0 errors, Prettier-clean.
 
 ## ✅ Done (works, tested)
@@ -119,6 +119,7 @@
 - **v0.7.0 — doctor --app (Negentropy) & seed (Lite)** — Scan for drift, fingerprints, and stale configs. Export/import semantic context. Published as `sparda-mcp@0.7.0` on npm + MCP Registry.
 - **v0.7.1 — R2.4 Re-mapping & doctor timeout** — Re-mapping composite tools on route renames. Increased doctor timeout to 5000ms for Next.js lazy compile. Published as `sparda-mcp@0.7.1` on npm + MCP Registry.
 - **v0.8.0 — Round 3 Complete (Twin, Grammar, Evolve, Germinate)** — Real mock server simulation (`twin --learn` / `twin`), syntax grammar graphs (`grammar`), genetic mutations (`evolve`), full germination (`seed import --germinate`). Published as `sparda-mcp@0.8.0` on npm + MCP Registry.
+- **v0.8.1 — ADR-022 localKey security backport** — Restricts secret leak by removing the `localKey` from the generated `sparda.json` manifest. It is written dynamically to `.sparda/key` (local, gitignored) and resolved dynamically at runtime (env -> file -> fail-closed 503). Published as `sparda-mcp@0.8.1` on npm + MCP Registry.
 
 ## ⚠️ Not done / known gaps
 
