@@ -12,7 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function extractFastAPI(cwd, entryFile, pythonCmd = 'python') {
   const script = path.resolve(__dirname, 'fastapi_extract.py');
-  const args = pythonCmd === 'py' ? ['-3', script, entryFile, cwd] : [script, entryFile, cwd];
+  const args =
+    pythonCmd === 'py' ? ['-3', script, entryFile, cwd] : [script, entryFile, cwd];
   const res = spawnSync(pythonCmd, args, { cwd, encoding: 'utf8', timeout: 30_000 });
 
   if (res.status !== 0) {
