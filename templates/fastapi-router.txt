@@ -19,19 +19,20 @@ import threading
 # json.loads, not a Python literal: JSON true/false/null are not valid Python (E-009)
 SPARDA_TOOLS = json.loads(__TOOLS_JSON__)
 SPARDA_POLICIES = json.loads(__SPARDING_POLICIES__)
-SPARDA_LOCAL_KEY = os.environ.get("SPARDA_LOCAL_KEY")
-if not SPARDA_LOCAL_KEY and not os.environ.get("VITEST"):
+# ADR-022: the key is NEVER baked into this committed file. It resolves at
+# runtime — env first, then the gitignored .sparda/key — and fails CLOSED:
+# no key, no /mcp surface. A deploy that ships without .sparda/ is inert.
+SPARDA_LOCAL_KEY = os.environ.get("SPARDA_LOCAL_KEY") or None
+if not SPARDA_LOCAL_KEY:
     try:
         for p in [".sparda/key", "../.sparda/key", "../../.sparda/key"]:
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
-                    SPARDA_LOCAL_KEY = f.read().strip()
+                    SPARDA_LOCAL_KEY = f.read().strip() or None
                 if SPARDA_LOCAL_KEY:
                     break
     except Exception:
-        pass
-if not SPARDA_LOCAL_KEY:
-    SPARDA_LOCAL_KEY = "__LOCAL_KEY__"
+        pass  # stays None -> fail closed
 SPARDA_PORT = __PORT__
 
 SPARDA_STATS = {}

@@ -7,21 +7,20 @@ __IMPORT_LINE__
 const SPARDA_TOOLS = __TOOLS_JSON__;
 const SPARDA_POLICIES = __SPARDING_POLICIES__;
 
-let SPARDA_LOCAL_KEY = process.env.SPARDA_LOCAL_KEY;
-if (!SPARDA_LOCAL_KEY && !process.env.VITEST) {
+// ADR-022: the key is NEVER baked into this committed file. It resolves at
+// runtime — env first, then the gitignored .sparda/key — and fails CLOSED:
+// no key, no /mcp surface. A deploy that ships without .sparda/ is inert.
+__FS_IMPORT__
+let SPARDA_LOCAL_KEY = process.env.SPARDA_LOCAL_KEY || null;
+if (!SPARDA_LOCAL_KEY) {
   try {
-    const fs = require('fs');
-    const path = require('path');
     for (const p of ['.sparda/key', '../.sparda/key', '../../.sparda/key']) {
-      if (fs.existsSync(p)) {
-        SPARDA_LOCAL_KEY = fs.readFileSync(p, 'utf8').trim();
+      if (spardaFs.existsSync(p)) {
+        SPARDA_LOCAL_KEY = spardaFs.readFileSync(p, 'utf8').trim() || null;
         if (SPARDA_LOCAL_KEY) break;
       }
     }
-  } catch {}
-}
-if (!SPARDA_LOCAL_KEY) {
-  SPARDA_LOCAL_KEY = "__LOCAL_KEY__";
+  } catch { /* stays null -> fail closed */ }
 }
 const SPARDA_PORT = __PORT__;
 

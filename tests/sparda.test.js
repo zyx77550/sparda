@@ -1027,9 +1027,17 @@ def boom():
       });
       const key = gen.manifest.localKey;
 
-      const { spardaRouter } = await import(
-        pathToFileURL(path.join(tmp, 'src', 'sparda-router.js')).href + `?t=${Date.now()}`
-      );
+      // ADR-022: the router resolves its key from env at module load
+      process.env.SPARDA_LOCAL_KEY = key;
+      let spardaRouter;
+      try {
+        ({ spardaRouter } = await import(
+          pathToFileURL(path.join(tmp, 'src', 'sparda-router.js')).href +
+            `?t=${Date.now()}`
+        ));
+      } finally {
+        delete process.env.SPARDA_LOCAL_KEY;
+      }
       const app = express();
       app.get('/health', (_req, res) => res.json({ ok: true }));
       app.get('/api/prospects', (_req, res) =>
@@ -1147,6 +1155,7 @@ def boom():
       const key = gen.manifest.localKey;
 
       process.env.SPARDA_QUARANTINE_MS = '400'; // read at router import time
+      process.env.SPARDA_LOCAL_KEY = key; // ADR-022: env-resolved at module load
       let spardaRouter;
       try {
         ({ spardaRouter } = await import(
@@ -1155,6 +1164,7 @@ def boom():
         ));
       } finally {
         delete process.env.SPARDA_QUARANTINE_MS;
+        delete process.env.SPARDA_LOCAL_KEY;
       }
 
       let healthCalls = 0;
@@ -1281,12 +1291,16 @@ def boom():
           port,
           routes,
         });
+        process.env.SPARDA_LOCAL_KEY = fs
+          .readFileSync(path.join(tmp, '.sparda', 'key'), 'utf8')
+          .trim(); // ADR-022
         ({ spardaRouter } = await import(
           pathToFileURL(path.join(tmp, 'src', 'sparda-router.js')).href +
             `?t=${Date.now()}`
         ));
       } finally {
         delete process.env.SPARDA_CONFIRM_TTL_MS;
+        delete process.env.SPARDA_LOCAL_KEY;
       }
 
       let postBody = null;
@@ -1480,7 +1494,11 @@ def boom():
           fs.readFileSync(path.join(tmp, 'sparda.json'), 'utf8'),
         );
         expect(manifest.tools.get_ping).toBeDefined();
-        expect(manifest.localKey).toBe(key1); // stable key: running bridge/host never desyncs
+        // ADR-022: stability lives in .sparda/key; the disk manifest is secret-free
+        expect(fs.readFileSync(path.join(tmp, '.sparda', 'key'), 'utf8').trim()).toBe(
+          key1,
+        );
+        expect(manifest.localKey).toBeUndefined();
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }

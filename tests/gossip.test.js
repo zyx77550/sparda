@@ -166,6 +166,7 @@ describe('Gossip CRDT — Express horizontal scale (Brief #2)', () => {
     // solo: NO SPARDA_PEERS → the startup timer must never arm (zero infra).
     const { spardaRouter } = await importRouterWithEnv(
       path.join(tmp, 'src', 'sparda-router.js'),
+      { SPARDA_LOCAL_KEY: key }, // ADR-022: the router no longer embeds it
     );
     const app = express();
     app.use('/mcp', spardaRouter);
@@ -266,7 +267,7 @@ describe('Gossip CRDT — Express horizontal scale (Brief #2)', () => {
     // configured WITH a peer + a fast tick → the startup timer arms and gossips on a 60ms cadence.
     const { spardaRouter } = await importRouterWithEnv(
       path.join(tmp, 'src', 'sparda-router.js'),
-      { SPARDA_PEERS: peer.url, SPARDA_GOSSIP_MS: '60' },
+      { SPARDA_PEERS: peer.url, SPARDA_GOSSIP_MS: '60', SPARDA_LOCAL_KEY: key },
     );
     const app = express();
     app.get('/health', (_req, res) => res.json({ ok: true })); // stable body → repeats accumulate

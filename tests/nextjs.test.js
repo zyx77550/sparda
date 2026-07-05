@@ -115,7 +115,11 @@ describe('generator — nextjs (file-based injection)', () => {
     expect(manifest.framework).toBe('nextjs');
     expect(manifest.injectedFiles).toEqual([]);
     expect(manifest.generatedFiles).toEqual(['app/mcp/[...sparda]/route.js']);
-    expect(fs.readFileSync(routerAbs, 'utf8')).toContain(manifest.localKey);
+    // ADR-022: the committed router NEVER contains the key; it lives in .sparda/key
+    const keyOnDisk = fs.readFileSync(path.join(dir, '.sparda', 'key'), 'utf8').trim();
+    expect(keyOnDisk.length).toBeGreaterThan(0);
+    expect(fs.readFileSync(routerAbs, 'utf8')).not.toContain(keyOnDisk);
+    expect(manifest.localKey).toBeUndefined(); // the disk manifest is secret-free
 
     // write-safety: GETs on, writes off
     expect(manifest.tools.get_api_users.enabled).toBe(true);
@@ -141,7 +145,10 @@ describe('generator — nextjs (file-based injection)', () => {
 
     generateNext({ cwd: dir, appDir: 'app', port: 3456, routes });
     const m2 = JSON.parse(fs.readFileSync(path.join(dir, 'sparda.json'), 'utf8'));
-    expect(m2.localKey).toBe(first.manifest.localKey);
+    // the key FILE is the stable identity now (ADR-022), not the manifest
+    expect(fs.readFileSync(path.join(dir, '.sparda', 'key'), 'utf8').trim()).toBe(
+      first.manifest.localKey,
+    );
     expect(m2.tools.post_api_users.enabled).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -153,9 +160,19 @@ describe('generated handler — runs standalone (web-standard, no Next needed)',
     const { routes } = parseNextProject(dir, 'app');
     generateNext({ cwd: dir, appDir: 'app', port: 65531, routes }); // dead port: no host
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'sparda.json'), 'utf8'));
-    const mod = await import(
-      pathToFileURL(path.join(dir, 'app', 'mcp', '[...sparda]', 'route.js')).href
-    );
+    // ADR-022: the router resolves its key from env/file at module load —
+    // vitest cwd is the repo root, so we hand it the temp dir's key via env
+    manifest.localKey = fs.readFileSync(path.join(dir, '.sparda', 'key'), 'utf8').trim();
+    process.env.SPARDA_LOCAL_KEY = manifest.localKey;
+    let mod;
+    try {
+      mod = await import(
+        pathToFileURL(path.join(dir, 'app', 'mcp', '[...sparda]', 'route.js')).href +
+          `?t=${Date.now()}`
+      );
+    } finally {
+      delete process.env.SPARDA_LOCAL_KEY;
+    }
     return { dir, manifest, mod };
   }
   const ctx = (segments) => ({ params: Promise.resolve({ sparda: segments }) });
@@ -239,10 +256,18 @@ describe('generated handler — runs standalone (web-standard, no Next needed)',
     fs.writeFileSync(path.join(dir, 'sparda.json'), JSON.stringify(m, null, 2));
     generateNext({ cwd: dir, appDir: 'app', port: 65532, routes });
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'sparda.json'), 'utf8'));
-    const mod = await import(
-      pathToFileURL(path.join(dir, 'app', 'mcp', '[...sparda]', 'route.js')).href
-    );
-    const key = manifest.localKey;
+    const key = fs.readFileSync(path.join(dir, '.sparda', 'key'), 'utf8').trim();
+    process.env.SPARDA_LOCAL_KEY = key;
+    let mod;
+    try {
+      mod = await import(
+        pathToFileURL(path.join(dir, 'app', 'mcp', '[...sparda]', 'route.js')).href +
+          `?t=${Date.now()}`
+      );
+    } finally {
+      delete process.env.SPARDA_LOCAL_KEY;
+    }
+    void manifest;
 
     const gated = await mod.POST(
       req('/mcp/invoke', {

@@ -84,7 +84,6 @@ export function generateFastAPI({
       '__SPARDING_POLICIES__',
       JSON.stringify(JSON.stringify(sparding.policies ?? {})),
     )
-    .replace('__LOCAL_KEY__', localKey)
     .replace('__PORT__', String(port));
 
   atomicWrite(routerAbs, tpl);
@@ -124,10 +123,11 @@ export function generateFastAPI({
     sparding,
   };
 
+  // ADR-022: the disk copy NEVER carries the key — it lives in .sparda/key
+  // (written by ensureSpardaKey above). The in-memory return keeps it for
+  // this process only.
   const manifestOnDisk = { ...manifest };
-  if (!process.env.VITEST) {
-    delete manifestOnDisk.localKey;
-  }
+  delete manifestOnDisk.localKey;
   atomicWrite(
     path.join(cwd, 'sparda.json'),
     JSON.stringify(manifestOnDisk, null, 2) + '\n',

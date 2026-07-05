@@ -111,7 +111,10 @@ export function generateExpress({ cwd, entryFile, moduleType, port, routes }) {
     )
     .replace('__JSON_MW__', "express.json({ limit: '64kb' })")
     .replace('__TOOLS_JSON__', JSON.stringify(tools, null, 2))
-    .replace('__LOCAL_KEY__', localKey)
+    .replace(
+      '__FS_IMPORT__',
+      isESM ? "import spardaFs from 'node:fs';" : "const spardaFs = require('node:fs');",
+    )
     .replace('__PORT__', String(port))
     .replace(/__REQ_TYPE__/g, reqType)
     .replace(/__RES_TYPE__/g, resType)
@@ -150,10 +153,11 @@ export function generateExpress({ cwd, entryFile, moduleType, port, routes }) {
     ...(prev?.labs ? { labs: prev.labs } : {}),
     sparding,
   };
+  // ADR-022: the disk copy NEVER carries the key — it lives in .sparda/key
+  // (written by ensureSpardaKey above). The in-memory return keeps it for
+  // this process only.
   const manifestOnDisk = { ...manifest };
-  if (!process.env.VITEST) {
-    delete manifestOnDisk.localKey;
-  }
+  delete manifestOnDisk.localKey;
   atomicWrite(
     path.join(cwd, 'sparda.json'),
     JSON.stringify(manifestOnDisk, null, 2) + '\n',
