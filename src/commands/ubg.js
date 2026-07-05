@@ -44,7 +44,16 @@ export async function runUbg(opts) {
       console.log(
         `  ${p.pass}: ${names.length} domain(s) — ${names.join(', ')}${p.cycles.length ? ` (⚠ FK cycle: ${p.cycles.join(', ')})` : ''}`,
       );
-    }
+    } else if (p.pass === 'CapabilityExtraction' && p.capabilities)
+      console.log(
+        `  ${p.pass}: ${p.capabilities} capability(ies), ${p.guardsAnnotated} guard(s) annotated`,
+      );
+    else if (p.pass === 'ResourceLifetimes' && p.annotated)
+      console.log(
+        `  ${p.pass}: ${p.annotated} state(s)${p.immortal.length ? ` — immortal: ${p.immortal.join(', ')}` : ''}`,
+      );
+    else if (p.pass === 'StateMachineInference' && p.machines)
+      console.log(`  ${p.pass}: ${p.machines} machine(s) inferred`);
   }
 
   if (report.link.inferredTables.length)

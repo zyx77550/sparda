@@ -136,7 +136,13 @@ function translateRoute(
   for (const step of fullChain) {
     const { id: stepId, scan } = ensureChainNode(graph, step, scanCache);
     chainNodes.push({ id: stepId, step, scan });
-    addEdge(graph, makeEdge('control_flow', prevId, stepId, { order: order++ }));
+    // chain edges carry their route: a middleware shared by N routes fans out
+    // to N handlers, but a request only ever walks ONE of those edges —
+    // per-entrypoint traversals filter on meta.route to stay leak-free
+    addEdge(
+      graph,
+      makeEdge('control_flow', prevId, stepId, { order: order++, route: epId }),
+    );
     prevId = stepId;
   }
 
@@ -242,6 +248,10 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           ...(eff.target ? { target: eff.target } : {}),
           ...(eff.driver ? { driver: eff.driver } : {}),
           ...(eff.httpMethod ? { httpMethod: eff.httpMethod } : {}),
+          // literal column values (SBIR v1.2) — StateMachineInference fuel
+          ...(eff.sets ? { sets: eff.sets } : {}),
+          ...(eff.where ? { where: eff.where } : {}),
+          ...(eff.inserts ? { inserts: eff.inserts } : {}),
           // SBIR v1.1 §2.2 — transaction scope id is file-qualified here,
           // where the owner's file is known
           ...(eff.txLine != null

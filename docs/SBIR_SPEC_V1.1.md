@@ -1,8 +1,8 @@
-# SPARDA Behavior IR (SBIR) Specification — v1.1
+# SPARDA Behavior IR (SBIR) Specification — v1.2
 
 > **From Descriptive AST Graphs to Prescriptive Constraint Runtimes.**
-> Document Version: 1.1.0
-> Artifact Version String: `sparda-ubg/v1.1`
+> Document Version: 1.2.0 (file name kept at V1.1 for link stability)
+> Artifact Version String: `sparda-ubg/v1.2`
 > Category: System Architecture & Compiler Specifications
 > Status: Normative. Every rule in this document is implemented by the compiler
 > in `src/ubg/` and enforced by `tests/ubg.test.js`. A rule that cannot be
@@ -182,7 +182,49 @@ literal, the conservative row (other/unknown) applies. `observable` means the
 action is visible to third parties outside this system's own state — the
 thing no rollback can un-send.
 
-### 2.5 Non-goals of v1.1
+### 2.5 Capabilities (v1.2)
+
+"POST /transfer" is routing; `update:users + insert:orders` is what it can
+DO. Capabilities are **derived, never declared**: for each entrypoint, the
+sorted set over its route-scoped reach of `{op}:{table}` (db writes),
+`read:{table}` (db reads), `call:{host}` (http, host from a literal URL else
+`dynamic`), `fs:read` / `fs:write`. Stored as `entrypoint.meta.capabilities`.
+Every guard additionally learns `meta.protects`: the union of the
+capabilities of every route it gates.
+
+### 2.6 Resource Lifetimes (v1.2)
+
+Each state node answers who creates / updates / destroys / reads it —
+sorted entrypoint id lists on `state.meta.lifetime`
+(`createdBy`/`updatedBy`/`destroyedBy`/`readBy`), derived from `mutation`
+(op → bucket) and state→effect `data_flow` edges. The pass report flags
+**immortal** resources (created, never destroyed) and **unmanaged** ones
+(destroyed here, created elsewhere).
+
+### 2.7 State Machines (v1.2)
+
+Derived from three declared sources, never guessed: (1) a column named
+`status`/`state`, (2) the `CHECK … IN (…)` invariant naming the legal states,
+(3) literal column values in effects — `INSERT` literals give initial
+transitions (`∅ → v`), `UPDATE SET field = 'v'` gives transitions whose
+from-state is the `WHERE field = 'w'` literal when present and `'*'`
+otherwise (an over-approximation, said out loud). Stored as
+`state.meta.stateMachine = { field, states, transitions: [{from, to, via}] }`
+with `via` the sorted entrypoints performing the transition. SQL literal
+values are lowercased with the rest of the statement — a documented
+trade-off, deterministic by construction.
+
+### 2.8 Entropy Effects (v1.2)
+
+Wall-clock (`Date.now()`, `new Date()`, `datetime.now()`), randomness
+(`Math.random()`, `random.*`) and id generation (`crypto.randomUUID()`,
+`uuid*`, `nanoid`, `ulid`) are effects of type `entropy` (targets `time`,
+`random`, `uuid`). They are the internal nondeterminism points a
+record/replay runtime must virtualize; together with `db`/`http`/`fs`
+effects they form the **complete tap list** for deterministic replay.
+Algebra: never idempotent, never observable, always compensable.
+
+### 2.9 Non-goals of v1.2
 
 Stated so nobody retrofits meaning: no runtime tracing (static only), no
 validator schema decomposition, no cross-service domain inference, no
@@ -227,6 +269,11 @@ the report is part of the compiler's contract with the user, not debug noise.
 
 ## 5. Changelog
 
+* **1.2.0** — capabilities (§2.5), resource lifetimes (§2.6), state machines
+  (§2.7), entropy effects (§2.8); SQL literal harvesting (SET/WHERE/VALUES);
+  route-tagged chain `control_flow` edges (`meta.route`) fixing shared-guard
+  reachability leaks; passes 6–8 (`CapabilityExtraction`, `ResourceLifetimes`,
+  `StateMachineInference`). All additive over v1.1.
 * **1.1.0** — detection procedures made normative (§2.1–2.4 tables);
   `ownership` and `compensation` edge kinds; `invariants`, `references`,
   `transaction`, `onFailure`, algebraic booleans, `consistencyDomain`,

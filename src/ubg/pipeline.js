@@ -11,14 +11,22 @@ import * as stateMinimization from './passes/state-minimization.js';
 import * as typePropagation from './passes/type-propagation.js';
 import * as effectAlgebra from './passes/effect-algebra.js';
 import * as consistencyDomains from './passes/consistency-domains.js';
+import * as capabilities from './passes/capabilities.js';
+import * as resourceLifetimes from './passes/resource-lifetimes.js';
+import * as stateMachines from './passes/state-machines.js';
 
-// SBIR §4 — normative order: reap, merge, type, classify, derive domains
+// SBIR §4 — normative order: reap, merge, type, classify, derive domains,
+// then the v1.2 derivations (capabilities, lifetimes, machines) which read
+// everything the earlier passes established
 export const PASSES = [
   deadPathElimination,
   stateMinimization,
   typePropagation,
   effectAlgebra,
   consistencyDomains,
+  capabilities,
+  resourceLifetimes,
+  stateMachines,
 ];
 
 export function optimize(graph, { passes = PASSES } = {}) {

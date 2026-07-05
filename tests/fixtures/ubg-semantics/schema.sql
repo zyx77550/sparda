@@ -9,6 +9,7 @@ CREATE TABLE orders (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id),
   amount DECIMAL(10,2) NOT NULL,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'refunded')),
   CHECK (amount >= 0)
 );
 

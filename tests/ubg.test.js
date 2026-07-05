@@ -163,7 +163,7 @@ describe('UBG: determinism & serialization', () => {
       const { outPath } = compileUBG(EXPRESS_FIXTURE, { write: true, out: outFile });
       expect(outPath).toBe(outFile);
       const parsed = JSON.parse(fs.readFileSync(outFile, 'utf8'));
-      expect(parsed.version).toBe('sparda-ubg/v1.1');
+      expect(parsed.version).toBe('sparda-ubg/v1.2');
       expect(parsed.nodes.length).toBeGreaterThan(0);
       // canonical order: nodes sorted by id
       const ids = parsed.nodes.map((n) => n.id);
@@ -302,6 +302,57 @@ describe('UBG: SBIR v1.1 semantics', () => {
     const a = compileUBG(SEMANTICS_FIXTURE, { write: false });
     const b = compileUBG(SEMANTICS_FIXTURE, { write: false });
     expect(a.json).toBe(b.json);
+  });
+});
+
+describe('UBG: SBIR v1.2 derivations', () => {
+  const SEMANTICS_FIXTURE = path.join(here, 'fixtures', 'ubg-semantics');
+  const { graph, report } = compileUBG(SEMANTICS_FIXTURE, { write: false });
+
+  it('derives capabilities from behavior, not URLs (§2.5)', () => {
+    const transfer = graph.nodes.get('entrypoint:POST /transfer');
+    expect(transfer.meta.capabilities).toEqual(['insert:orders', 'update:users']);
+    const guard = nodesOf(graph, 'guard').find((n) => n.label === 'requireAuth');
+    expect(guard.meta.protects).toContain('update:users');
+    expect(guard.meta.protects).toContain('call:api.stripe.example');
+  });
+
+  it('derives resource lifetimes per state (§2.6)', () => {
+    const lifetime = graph.nodes.get('state:sql:orders').meta.lifetime;
+    expect(lifetime.createdBy).toContain('entrypoint:POST /orders');
+    expect(lifetime.updatedBy).toContain('entrypoint:PATCH /orders/:id/pay');
+    expect(lifetime.destroyedBy).toEqual(['entrypoint:DELETE /orders/:id']);
+    const rl = report.passes.find((p) => p.pass === 'ResourceLifetimes');
+    expect(rl.immortal).toContain('users'); // created, never destroyed
+  });
+
+  it('infers the order state machine from DDL + literals (§2.7)', () => {
+    const sm = graph.nodes.get('state:sql:orders').meta.stateMachine;
+    expect(sm.field).toBe('status');
+    expect(sm.states).toEqual(['paid', 'pending', 'refunded']); // from CHECK IN
+    expect(sm.transitions).toContainEqual({
+      from: '∅',
+      to: 'pending',
+      via: ['entrypoint:POST /orders'],
+    });
+    expect(sm.transitions).toContainEqual({
+      from: 'pending',
+      to: 'paid',
+      via: ['entrypoint:PATCH /orders/:id/pay'],
+    });
+    expect(sm.transitions).toContainEqual({
+      from: 'paid',
+      to: 'refunded',
+      via: ['entrypoint:PATCH /orders/:id/refund'],
+    });
+  });
+
+  it('captures entropy effects — the flight recorder tap list', () => {
+    const targets = nodesOf(graph, 'effect')
+      .filter((n) => n.meta.effectType === 'entropy')
+      .map((n) => n.meta.target)
+      .sort();
+    expect(targets).toEqual(['random', 'time']);
   });
 });
 

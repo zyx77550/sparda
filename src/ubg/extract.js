@@ -243,6 +243,21 @@ function visit(node, out, ctx) {
     return;
   }
 
+  // `new Date()` — wall-clock read: an entropy effect the flight recorder
+  // must tap for deterministic replay (SBIR v1.2 / Timeless)
+  if (
+    node.type === 'NewExpression' &&
+    node.callee?.type === 'Identifier' &&
+    node.callee.name === 'Date' &&
+    node.arguments.length === 0
+  ) {
+    pushEffect(out, ctx, {
+      effectType: 'entropy',
+      target: 'time',
+      line: node.loc?.start.line ?? 0,
+    });
+  }
+
   if (node.type === 'CallExpression') {
     // transaction scope: db.transaction(cb) / prisma.$transaction(...) — the
     // innermost scope wins; isolation only from a string literal, never guessed
@@ -319,6 +334,10 @@ function inspectCall(node, out, ctx) {
       });
       return;
     }
+    if (/^(uuid|uuidv4|nanoid|randomuuid|ulid)$/i.test(callee.name)) {
+      pushEffect(out, ctx, { effectType: 'entropy', target: 'uuid', line });
+      return;
+    }
     if (out.calls.length < MAX_CALLS) out.calls.push({ name: callee.name, line });
     return;
   }
@@ -327,6 +346,20 @@ function inspectCall(node, out, ctx) {
   const method = callee.property.name;
   const methodLower = method.toLowerCase();
   const rootName = rootIdentifier(callee);
+
+  // ---- entropy: nondeterminism points the replayer must virtualize
+  if (rootName === 'Date' && methodLower === 'now') {
+    pushEffect(out, ctx, { effectType: 'entropy', target: 'time', line });
+    return;
+  }
+  if (rootName === 'Math' && methodLower === 'random') {
+    pushEffect(out, ctx, { effectType: 'entropy', target: 'random', line });
+    return;
+  }
+  if (/^crypto$/i.test(rootName ?? '') && methodLower === 'randomuuid') {
+    pushEffect(out, ctx, { effectType: 'entropy', target: 'uuid', line });
+    return;
+  }
 
   // ---- input validation signal (SBIR §2.1): zod-style .safeParse / Schema.parse
   if (
@@ -585,7 +618,11 @@ function builderTableOf(node) {
   return null;
 }
 
-// 'INSERT INTO users (a) VALUES (1)' → { effectType, op, table }
+// 'INSERT INTO users (a) VALUES (1)' → { effectType, op, table, … }
+// Literal column values are also harvested (SET x = 'v', WHERE x = 'v',
+// INSERT (…) VALUES (…)) — the raw material StateMachineInference reads.
+// Everything is lowercased: deterministic, and SQL identifiers are
+// case-insensitive anyway (literal VALUES lose case — documented trade-off).
 export function parseSqlCall(sql) {
   const s = sql.trim().toLowerCase();
   const verb = s.split(/\s+/)[0];
@@ -598,7 +635,47 @@ export function parseSqlCall(sql) {
   else if (verb === 'delete') m = s.match(/delete\s+from\s+"?([\w.]+)"?/);
   else m = s.match(/\bfrom\s+"?([\w.]+)"?/);
   if (m) table = m[1].includes('.') ? m[1].split('.').pop() : m[1];
-  return { ...known, table };
+
+  const details = {};
+  if (verb === 'update') {
+    const setM = s.match(/\bset\s+([\s\S]*?)(?:\s+where\s|$)/);
+    if (setM) {
+      const sets = literalPairsOf(setM[1]);
+      if (Object.keys(sets).length) details.sets = sets;
+    }
+  }
+  if (verb === 'update' || verb === 'delete' || verb === 'select') {
+    const whereM = s.match(/\bwhere\s+([\s\S]*)$/);
+    if (whereM) {
+      const where = literalPairsOf(whereM[1]);
+      if (Object.keys(where).length) details.where = where;
+    }
+  }
+  if (verb === 'insert') {
+    const im = s.match(/\(([^)]*)\)\s*values\s*\(([^)]*)\)/);
+    if (im) {
+      const cols = im[1].split(',').map((c) => c.trim().replace(/"/g, ''));
+      const vals = im[2].split(',').map((v) => v.trim());
+      const inserts = {};
+      cols.forEach((c, i) => {
+        const q = vals[i]?.match(/^'([^']*)'$/);
+        if (q) inserts[c] = q[1];
+      });
+      if (Object.keys(inserts).length) details.inserts = inserts;
+    }
+  }
+  return { ...known, table, ...details };
+}
+
+// "status = 'paid', total = 3" → { status: 'paid' } — string literals only,
+// bounded; placeholders and expressions are invisible on purpose
+function literalPairsOf(clause) {
+  const pairs = {};
+  for (const m of clause.matchAll(/([\w"]+)\s*=\s*'([^']*)'/g)) {
+    if (Object.keys(pairs).length >= 8) break;
+    pairs[m[1].replace(/"/g, '')] = m[2];
+  }
+  return pairs;
 }
 
 // middleware classifier: name smell OR observed 401/403 denial → guard

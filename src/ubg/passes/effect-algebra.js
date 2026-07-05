@@ -35,6 +35,11 @@ export function run(graph) {
         observable = false;
         compensable = true; // nothing to undo
         break;
+      case 'entropy': // reads the world's dice — different every call
+        idempotent = false;
+        observable = false;
+        compensable = true;
+        break;
       case 'db_write':
         idempotent = IDEMPOTENT_DB_OPS.has(m.op);
         observable = false;

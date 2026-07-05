@@ -44,6 +44,16 @@ def root_name(node):
     return None
 
 
+def literal_pairs_of(clause):
+    """"status = 'paid', x = 3" -> {status: paid} — string literals only."""
+    pairs = {}
+    for m in re.finditer(r"([\w\"]+)\s*=\s*'([^']*)'", clause):
+        if len(pairs) >= 8:
+            break
+        pairs[m.group(1).replace('"', "")] = m.group(2)
+    return pairs
+
+
 def parse_sql(sql):
     s = sql.strip().lower()
     verb = s.split()[0] if s.split() else ""
@@ -62,7 +72,35 @@ def parse_sql(sql):
     table = None
     if m:
         table = m.group(1).split(".")[-1]
-    return {"effectType": effect_type, "op": op, "table": table}
+    effect = {"effectType": effect_type, "op": op, "table": table}
+
+    # literal column values — StateMachineInference raw material (SBIR v1.2)
+    if verb == "update":
+        set_m = re.search(r"\bset\s+([\s\S]*?)(?:\s+where\s|$)", s)
+        if set_m:
+            sets = literal_pairs_of(set_m.group(1))
+            if sets:
+                effect["sets"] = sets
+    if verb in ("update", "delete", "select"):
+        where_m = re.search(r"\bwhere\s+([\s\S]*)$", s)
+        if where_m:
+            where = literal_pairs_of(where_m.group(1))
+            if where:
+                effect["where"] = where
+    if verb == "insert":
+        im = re.search(r"\(([^)]*)\)\s*values\s*\(([^)]*)\)", s)
+        if im:
+            cols = [c.strip().replace('"', "") for c in im.group(1).split(",")]
+            vals = [v.strip() for v in im.group(2).split(",")]
+            inserts = {}
+            for i, col in enumerate(cols):
+                if i < len(vals):
+                    q = re.match(r"^'([^']*)'$", vals[i])
+                    if q:
+                        inserts[col] = q.group(1)
+            if inserts:
+                effect["inserts"] = inserts
+    return effect
 
 
 def sql_literal_of(arg):
@@ -269,6 +307,20 @@ def inspect_call(node, out, ctx):
         return
     method = func.attr
     root = root_name(func)
+
+    # entropy: nondeterminism points the flight replayer must virtualize
+    if root == "datetime" and method in ("now", "utcnow", "today"):
+        push_effect(out, ctx, {"effectType": "entropy", "target": "time", "line": line})
+        return
+    if root == "time" and method in ("time", "monotonic", "time_ns"):
+        push_effect(out, ctx, {"effectType": "entropy", "target": "time", "line": line})
+        return
+    if root == "random":
+        push_effect(out, ctx, {"effectType": "entropy", "target": "random", "line": line})
+        return
+    if root == "uuid" and method.startswith("uuid"):
+        push_effect(out, ctx, {"effectType": "entropy", "target": "uuid", "line": line})
+        return
 
     # input validation signal (SBIR §2.1): explicit Pydantic validation calls
     if method in ("model_validate", "model_validate_json", "parse_obj", "parse_raw"):

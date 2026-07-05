@@ -15,6 +15,7 @@ const getOpt = (name, dflt) => {
 
 const opts = {
   yes: flags.has('--yes') || flags.has('-y'),
+  saveBaseline: flags.has('--save-baseline'),
   verbose: flags.has('--verbose'),
   quiet: flags.has('--quiet'),
   probe: flags.has('--probe'),
@@ -99,6 +100,16 @@ try {
       await runUbg(opts);
       break;
     }
+    case 'apocalypse': {
+      const { runApocalypse } = await import('./commands/apocalypse.js');
+      await runApocalypse(opts);
+      break;
+    }
+    case 'timeless': {
+      const { runTimeless } = await import('./commands/timeless.js');
+      await runTimeless(opts, rest);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -116,6 +127,8 @@ Usage:
   npx sparda-mcp grammar   Which call sequences mean something (observed + hypotheses)
   npx sparda-mcp evolve    Trial hypothesis chains against the twin; survivors become suggestions
   npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
+  npx sparda-mcp apocalypse  Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
+  npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)
