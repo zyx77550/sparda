@@ -1,6 +1,6 @@
 {
   "name": "sparda-mcp",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "mcpName": "io.github.zyx77550/sparda-mcp",
   "description": "Turn any codebase into an MCP server with one command. Express & FastAPI → Claude-ready in 3 minutes.",
   "type": "module",

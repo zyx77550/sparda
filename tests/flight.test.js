@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import express from 'express';
-import { createFlightBox, FlightDivergence } from '../src/flight/box.js';
+import { createFlightBox, getFlightBox, FlightDivergence } from '../src/flight/box.js';
 import { replayFlight, rawRequest } from '../src/flight/replayer.js';
 import { flightIdOf, loadFlight, listFlights } from '../src/flight/format.js';
 
@@ -199,6 +199,50 @@ describe('Flight: chaos replay — the product', () => {
         'uuid',
       ]);
     } finally {
+      box.disarm();
+    }
+  });
+});
+
+describe('Flight: singleton & recorder/replay coexistence', () => {
+  it('getFlightBox is one box per process — app and CLI share the ALS', () => {
+    expect(getFlightBox()).toBe(getFlightBox());
+  });
+
+  it('replay wins over record: replaying THROUGH a recording app neither re-records nor diverges', async () => {
+    const { cwd, saved } = await recordOneFlight();
+    const flight = loadFlight(cwd, saved.id);
+
+    globalThis.fetch = fakeUpstream(500, { down: true });
+    const box = createFlightBox();
+    box.arm();
+    try {
+      // the app still mounts the RECORD middleware, like a real integrated app
+      const db = { query: async () => ({ rows: [{ email: 'live@now' }] }) };
+      const app = buildApp(box, db, { record: { cwd } });
+      const result = await replayFlight(app, flight, box);
+      expect(result.match).toBe(true);
+      expect(JSON.parse(result.actual.body).email).toBe('zak@residual-labs.fr');
+      expect(listFlights(cwd)).toEqual([saved.id]); // no parasite flight written
+    } finally {
+      box.disarm();
+    }
+  });
+
+  it('SPARDA_FLIGHT=off disables recording entirely', async () => {
+    const cwd = makeTmp();
+    process.env.SPARDA_FLIGHT = 'off';
+    globalThis.fetch = fakeUpstream(201, { ok: true });
+    const box = createFlightBox();
+    box.arm();
+    try {
+      const db = { query: async () => ({ rows: [{ email: 'x@y.z' }] }) };
+      const app = buildApp(box, db, { record: { cwd } });
+      const res = await fire(app, { userId: 1, note: 'n' });
+      expect(res.status).toBe(200);
+      expect(listFlights(cwd)).toEqual([]);
+    } finally {
+      delete process.env.SPARDA_FLIGHT;
       box.disarm();
     }
   });

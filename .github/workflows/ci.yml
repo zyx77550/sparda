@@ -40,6 +40,11 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # the router selftest exercises the GENERATED artifact (templates +
+      # ADR-022 runtime key resolution) — vitest never loads it, so CI must
+      - name: Router selftest (generated artifact)
+        run: node tests/router-selftest.cjs
+
   lint:
     name: Lint & format
     runs-on: ubuntu-latest

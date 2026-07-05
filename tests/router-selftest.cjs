@@ -4,6 +4,11 @@ const fs = require('fs');
 const express = require('express');
 const PORT = Number(process.env.TEST_PORT || 4399);
 
+// ADR-022: no plaintext key in the template — the router resolves it at
+// runtime from SPARDA_LOCAL_KEY (env) or .sparda/key, and fails closed (503)
+// otherwise. The selftest authenticates via env, like CI would.
+process.env.SPARDA_LOCAL_KEY = 'testkey';
+
 // --- render the template exactly like src/generator/express.js (CJS/JS variant) ---
 const tools = {
   get_user: { method: 'GET', path: '/users/:id', pathParams: ['id'], enabled: true },
@@ -28,6 +33,9 @@ let tpl = fs
     'const spardaRouter = express.Router();\nmodule.exports = { spardaRouter };',
   )
   .replace('__JSON_MW__', 'express.json()')
+  // ADR-022: mirror the generator's CJS substitution for the runtime key
+  // resolution import — without it the placeholder check below fails
+  .replace('__FS_IMPORT__', "const spardaFs = require('node:fs');")
   .replace('__TOOLS_JSON__', JSON.stringify(tools, null, 2))
   .replace('__LOCAL_KEY__', 'testkey')
   .replace('__PORT__', String(PORT))

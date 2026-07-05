@@ -11,7 +11,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { detectStack } from '../detect.js';
-import { createFlightBox } from '../flight/box.js';
+import { getFlightBox } from '../flight/box.js';
 import { replayFlight } from '../flight/replayer.js';
 import { listFlights, loadFlight } from '../flight/format.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
@@ -39,10 +39,12 @@ function list(opts) {
   const flights = listFlights(opts.cwd);
   if (!flights.length) {
     console.log(
-      'No flights recorded. Mount the recorder in your app:\n' +
-        "  const { createFlightBox } = require('sparda-mcp/src/flight/box.js');\n" +
-        '  const flight = createFlightBox(); flight.arm();\n' +
-        '  app.use(flight.middleware());',
+      'No flights recorded. Mount the recorder in your app (ESM):\n' +
+        "  import { getFlightBox } from 'sparda-mcp/src/flight/box.js';\n" +
+        '  const box = getFlightBox(); box.arm();\n' +
+        '  app.use(box.middleware());\n' +
+        '  const db = box.wrapClient(rawDb); // your query client\n' +
+        "  (CJS: const { getFlightBox } = await import('sparda-mcp/src/flight/box.js'))",
     );
     return { flights };
   }
@@ -58,8 +60,11 @@ function list(opts) {
 
 async function replay(opts, id) {
   const flight = loadFlight(opts.cwd, id);
+  // the SHARED box: if the app integrates the recorder, its wrapClient rides
+  // the same AsyncLocalStorage this replay store lands on — load it BEFORE
+  // the app so both resolve the singleton
+  const box = getFlightBox();
   const app = await loadApp(opts.cwd);
-  const box = createFlightBox();
   box.arm();
   let result;
   try {
@@ -124,7 +129,7 @@ async function exportTest(opts, id) {
 // means the behavior changed: if the change is the intended fix, re-record
 // the flight and re-export — this file asserts the PAST, on purpose.
 import { describe, it, expect } from 'vitest';
-import { createFlightBox } from 'sparda-mcp/src/flight/box.js';
+import { getFlightBox } from 'sparda-mcp/src/flight/box.js';
 import { replayFlight } from 'sparda-mcp/src/flight/replayer.js';
 import { loadFlight } from 'sparda-mcp/src/flight/format.js';
 import appModule from '${relEntry.startsWith('.') ? relEntry : './' + relEntry}';
@@ -133,7 +138,8 @@ describe('flight ${id} — ${flight.request.method} ${flight.request.url}', () =
   it('replays byte-identically', async () => {
     const app = appModule.default ?? appModule;
     const flight = loadFlight(process.cwd(), '${id}');
-    const box = createFlightBox();
+    // the SHARED box — the app's own wrapClient must see the replay store
+    const box = getFlightBox();
     box.arm();
     try {
       const result = await replayFlight(app, flight, box);

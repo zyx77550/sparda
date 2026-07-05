@@ -34,7 +34,7 @@ import { c, gradient, colorizeJson } from '../src/ui/style.js';
 import { stripVTControlCharacters } from 'node:util';
 import { parse } from '@babel/parser';
 
-const pythonCmd = (() => {
+const detectedPython = (() => {
   for (const cmd of ['python3', 'python', 'py']) {
     const args = cmd === 'py' ? ['-3', '--version'] : ['--version'];
     try {
@@ -42,8 +42,10 @@ const pythonCmd = (() => {
       if (res.status === 0) return cmd;
     } catch {}
   }
-  return 'python';
+  return null; // no Python — FastAPI suites skip instead of exploding on ENOENT
 })();
+const hasPython = detectedPython !== null;
+const pythonCmd = detectedPython ?? 'python';
 
 const pythonArgs = (args) => (pythonCmd === 'py' ? ['-3', ...args] : args);
 
@@ -414,7 +416,7 @@ describe('SPARDA Test Suite', () => {
   // ==========================================
   // 5. FASTAPI PARSER & INJECTION TESTS
   // ==========================================
-  describe('FastAPI Parser & Injection', () => {
+  describe.skipIf(!hasPython)('FastAPI Parser & Injection', () => {
     it('should parse basic FastAPI project correctly', () => {
       const cwd = path.join(FIXTURES_DIR, 'fastapi-basic');
       const { routes } = parseFastAPIProject(cwd, 'main.py', pythonCmd);

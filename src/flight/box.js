@@ -131,6 +131,12 @@ export function createFlightBox() {
   // The flight is finalized and written on response finish.
   function middleware({ cwd = process.cwd(), onFlight = null } = {}) {
     return function spardaFlightRecorder(req, res, next) {
+      // replay wins over record: when the timeless CLI replays through an app
+      // that mounts this recorder, the outer replay store must reach the taps
+      // untouched — re-recording a replay would shadow it with live values
+      const outer = als.getStore();
+      if (outer?.mode === 'replay') return next();
+      if (process.env.SPARDA_FLIGHT === 'off') return next();
       const store = { mode: 'record', taps: [] };
       const chunks = [];
       const origWrite = res.write.bind(res);
@@ -220,4 +226,20 @@ function jsonClone(value, label) {
       label,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Process singleton — THE box for app integration and the timeless CLI.
+// The app's wrapClient and the replayer must share ONE AsyncLocalStorage or
+// replay stores are invisible to the app's taps (silent passthrough to the
+// real db — the exact failure mode this singleton exists to kill). Module
+// caching guarantees identity as long as both sides resolve the same
+// sparda-mcp install, which `npx sparda` inside the app's project does.
+// createFlightBox() stays exported for isolated tests.
+// ---------------------------------------------------------------------------
+let singleton = null;
+
+export function getFlightBox() {
+  if (!singleton) singleton = createFlightBox();
+  return singleton;
 }
