@@ -16,6 +16,7 @@ const getOpt = (name, dflt) => {
 const opts = {
   yes: flags.has('--yes') || flags.has('-y'),
   saveBaseline: flags.has('--save-baseline'),
+  sarif: flags.has('--sarif'),
   verbose: flags.has('--verbose'),
   quiet: flags.has('--quiet'),
   probe: flags.has('--probe'),

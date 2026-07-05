@@ -93,7 +93,7 @@ npx sparda-mcp apocalypse
 This command reads the compiled `.sparda/ubg.json` (with zero source code parsing at runtime) and discharges five static correctness obligations:
 * **Unguarded Mutation (Critical)**: Flags any mutation path that does not cross a security `guard`.
 * **Non-Atomic Aggregate Write (High)**: Flags when an API writes to multiple tables of the same Consistency Domain (Aggregate) outside a single transaction scope.
-* **Unvalidated Constrained Write (Medium)**: Flags writes into columns with SQL invariants (CHECK, NOT NULL, UNIQUE) without prior validation (Zod/Pydantic).
+* **Unvalidated Constrained Write (Medium)**: Flags writes into columns with declared invariants (CHECK, NOT NULL, UNIQUE — parsed from your `.sql` DDL **or `schema.prisma`**, Prisma enums included) without prior validation (Zod/Pydantic).
 * **Irreversible Observable Effect (High)**: Flags out-of-process actions (like Stripe charges) that happen alongside state writes without a structural compensation path (like a catch-refund).
 * **Aggregate Member Bypass (Info)**: Flags mutating a member table directly without routing through the aggregate root.
 
@@ -107,6 +107,33 @@ Subsequent runs will diff the candidate graph against this baseline to detect re
 * API blast radius expansion (Medium).
 
 If any Critical or High finding is found, `apocalypse` exits with a non-zero code to block your CI pipeline.
+
+**One step in your workflow — findings land in the GitHub Security tab (SARIF):**
+```yaml
+- uses: zyx77550/sparda@main
+  with:
+    sarif: 'true'
+```
+
+## Time Travel: Timeless
+
+Every production request is deterministic between its effects — the compiler knows exactly where the nondeterminism lives (db, http, clock, random, uuid: the effect nodes of the graph). Timeless records only those points (a few KB per request) and replays the request **byte-identically** against your current code, with the database, webhooks and clock virtualized from the recording:
+
+```bash
+npx sparda-mcp timeless                # list recorded flights
+npx sparda-mcp timeless replay <id>    # re-fly it — byte-identical or loud divergence
+npx sparda-mcp timeless export <id>    # the production bug is now a vitest test
+```
+
+Recording is two lines in your app (ESM), with deterministic sampling and GDPR redaction built in:
+```js
+import { getFlightBox } from 'sparda-mcp/src/flight/box.js';
+const box = getFlightBox(); box.arm();
+app.use(box.middleware({ sample: 100 }));   // 1 request in 100; passwords/tokens redacted by default
+const db = box.wrapClient(pgPool);           // your query client, tapped
+```
+
+The closed loop nobody else has: **production bug → recorded flight → failing test → AI writes the fix → `apocalypse` proves the fix breaks no guard, invariant or transaction → deploy.** Replay is per-request (concurrent-race capture is out of scope for v1 — stated, not hidden).
 
 To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte.
 

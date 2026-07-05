@@ -51,6 +51,9 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
           // SBIR v1.1 §2.1/§2.3 — declared truth travels with the state node
           ...(t.invariants?.length ? { invariants: t.invariants } : {}),
           ...(t.references?.length ? { references: t.references } : {}),
+          // Prisma @@map: code speaks the model name, SQL speaks the mapped
+          // table — the linker must answer to both
+          ...(t.aliases?.length ? { aliases: t.aliases } : {}),
         },
       ),
     );

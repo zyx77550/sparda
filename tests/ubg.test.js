@@ -356,6 +356,66 @@ describe('UBG: SBIR v1.2 derivations', () => {
   });
 });
 
+describe('UBG: Prisma state layer (no .sql anywhere)', () => {
+  const PRISMA_FIXTURE = path.join(here, 'fixtures', 'ubg-prisma');
+  const { graph, report } = compileUBG(PRISMA_FIXTURE, { write: false });
+
+  it('compiles schema.prisma into state nodes with invariants', () => {
+    expect(report.prismaTables).toBe(2);
+    const user = graph.nodes.get('state:sql:user');
+    expect(user).toBeDefined();
+    expect(user.meta.aliases).toEqual(['users']); // @@map
+    expect(user.meta.invariants).toContainEqual({ type: 'primary_key', fields: ['id'] });
+    expect(user.meta.invariants).toContainEqual({ type: 'unique', fields: ['email'] });
+    expect(user.meta.invariants).toContainEqual({ type: 'not_null', fields: ['email'] });
+    expect(user.meta.invariants).toContainEqual({
+      type: 'default',
+      fields: ['balance'],
+      value: '0',
+    });
+  });
+
+  it('links prisma calls to states and derives FK ownership from @relation', () => {
+    const mutations = edgesOf(graph, 'mutation');
+    expect(mutations.map((e) => e.to)).toContain('state:sql:order');
+    const ownership = edgesOf(graph, 'ownership').map((e) => `${e.from}>${e.to}`);
+    expect(ownership).toContain('state:sql:user>state:sql:order');
+    expect(graph.nodes.get('state:sql:user').meta.role).toBe('aggregate_root');
+    expect(graph.nodes.get('entrypoint:POST /orders').meta.mutatesDomains).toEqual([
+      'User',
+    ]);
+  });
+
+  it('a Prisma enum IS a state machine — states + transitions inferred', () => {
+    const sm = graph.nodes.get('state:sql:order').meta.stateMachine;
+    expect(sm.field).toBe('status');
+    expect(sm.states).toEqual(['paid', 'pending', 'refunded']); // from the enum
+    expect(sm.transitions).toContainEqual({
+      from: '∅',
+      to: 'pending',
+      via: ['entrypoint:POST /orders'],
+    });
+    expect(sm.transitions).toContainEqual({
+      from: 'pending',
+      to: 'paid',
+      via: ['entrypoint:PATCH /orders/:id/pay'],
+    });
+  });
+
+  it('propagates types across the Prisma boundary', () => {
+    expect(graph.nodes.get('entrypoint:GET /users/:id').meta.returns).toEqual({
+      id: 'string', // path param
+      email: 'string', // User.email String
+    });
+  });
+
+  it('stays byte-deterministic', () => {
+    const a = compileUBG(PRISMA_FIXTURE, { write: false });
+    const b = compileUBG(PRISMA_FIXTURE, { write: false });
+    expect(a.json).toBe(b.json);
+  });
+});
+
 describe.skipIf(!hasPython)('UBG: FastAPI compilation', () => {
   const { graph, report } = compileUBG(FASTAPI_FIXTURE, { write: false });
 

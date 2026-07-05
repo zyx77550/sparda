@@ -9,6 +9,7 @@ import { extractExpress } from './express.js';
 import { extractNext } from './nextjs.js';
 import { extractFastAPI } from './fastapi.js';
 import { parseSqlSchemas } from './sql.js';
+import { parsePrismaSchemas } from './prisma.js';
 import { translate } from './translate.js';
 import { linkDataFlow } from './link.js';
 import { optimize } from './pipeline.js';
@@ -36,13 +37,17 @@ export function compileUBG(
   const extracted = extractors[stack.framework]();
 
   const sql = parseSqlSchemas(cwd);
+  const prisma = parsePrismaSchemas(cwd);
+  // DDL beats ORM on a name collision — the database is the closer truth
+  const sqlNames = new Set(sql.tables.map((t) => t.name));
+  const tables = [...sql.tables, ...prisma.tables.filter((t) => !sqlNames.has(t.name))];
 
   const graph = translate({
     framework: stack.framework,
     routes: extracted.routes,
     globalMiddlewares: extracted.globalMiddlewares,
     helpers: extracted.helpers,
-    tables: sql.tables,
+    tables,
   });
   validateGraph(graph);
 
@@ -56,7 +61,7 @@ export function compileUBG(
     entry: stack.entryFile,
     sourceHash: sourceHashOf(cwd, [
       ...extracted.scannedFiles,
-      ...sql.tables.map((t) => t.sourceFile),
+      ...tables.map((t) => t.sourceFile),
     ]),
   };
 
@@ -64,10 +69,11 @@ export function compileUBG(
     framework: stack.framework,
     entry: stack.entryFile,
     routes: extracted.routes.length,
-    tables: sql.tables.length,
+    tables: tables.length,
+    ...(prisma.tables.length ? { prismaTables: prisma.tables.length } : {}),
     link: linkReport,
     passes: passReports,
-    skipped: [...extracted.skipped, ...sql.skipped],
+    skipped: [...extracted.skipped, ...sql.skipped, ...prisma.skipped],
     counts: countGraph(graph),
   };
 

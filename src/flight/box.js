@@ -129,7 +129,22 @@ export function createFlightBox() {
 
   // Express middleware — mount early; the request's whole async tree records.
   // The flight is finalized and written on response finish.
-  function middleware({ cwd = process.cwd(), onFlight = null } = {}) {
+  //   sample: 1     record every request (default); N records every Nth —
+  //                 a deterministic counter, never Math.random (Law 3 applies
+  //                 to the recorder too)
+  //   redactKeys:   body keys scrubbed at record time, deep, case-insensitive.
+  //                 Redaction happens BEFORE the flight touches disk — the
+  //                 secret never exists in the artifact. Redacted flights
+  //                 replay fine as long as handlers don't echo those fields
+  //                 back (if they do, the replay diverges loudly — honest).
+  let requestCounter = 0;
+  function middleware({
+    cwd = process.cwd(),
+    onFlight = null,
+    sample = 1,
+    redactKeys = DEFAULT_REDACT_KEYS,
+  } = {}) {
+    const redactSet = new Set(redactKeys.map((k) => k.toLowerCase()));
     return function spardaFlightRecorder(req, res, next) {
       // replay wins over record: when the timeless CLI replays through an app
       // that mounts this recorder, the outer replay store must reach the taps
@@ -137,6 +152,7 @@ export function createFlightBox() {
       const outer = als.getStore();
       if (outer?.mode === 'replay') return next();
       if (process.env.SPARDA_FLIGHT === 'off') return next();
+      if (sample > 1 && requestCounter++ % sample !== 0) return next();
       const store = { mode: 'record', taps: [] };
       const chunks = [];
       const origWrite = res.write.bind(res);
@@ -155,7 +171,7 @@ export function createFlightBox() {
             method: req.method,
             url: req.originalUrl ?? req.url,
             headers: { 'content-type': req.headers['content-type'] ?? '' },
-            body: req.body ?? null,
+            body: redactDeep(req.body ?? null, redactSet),
           },
           response: {
             status: res.statusCode,
@@ -188,6 +204,36 @@ export function createFlightBox() {
 
 function tapOut(store, kind, label, result) {
   store.taps.push({ seq: store.taps.length, kind, label, result });
+}
+
+// GDPR hygiene: these never reach the flight file. Only the content-type
+// header is ever captured, so headers (authorization, cookie) are safe by
+// construction — this list covers the request BODY.
+export const DEFAULT_REDACT_KEYS = [
+  'password',
+  'passwd',
+  'secret',
+  'token',
+  'apikey',
+  'api_key',
+  'authorization',
+  'cookie',
+  'creditcard',
+  'card_number',
+  'cvv',
+  'ssn',
+];
+
+function redactDeep(value, redactSet, depth = 0) {
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, redactSet, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = redactSet.has(k.toLowerCase())
+      ? '[REDACTED]'
+      : redactDeep(v, redactSet, depth + 1);
+  }
+  return out;
 }
 
 // strict FIFO per kind, label-checked — the "quasi infallible" contract:

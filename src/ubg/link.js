@@ -11,11 +11,14 @@ import { addEdge, addNode, makeEdge, makeNode, stateId } from './schema.js';
 export function linkDataFlow(graph) {
   const report = { mutations: 0, reads: 0, inferredTables: [] };
 
-  // canonical name → state node id (schema-declared tables first)
+  // canonical name → state node id (schema-declared tables first); Prisma
+  // aliases (@@map) resolve to the same node as the model name
   const stateByTable = new Map();
   for (const node of graph.nodes.values()) {
-    if (node.kind === 'state' && node.meta.table)
-      stateByTable.set(canonical(node.meta.table), node.id);
+    if (node.kind !== 'state' || !node.meta.table) continue;
+    stateByTable.set(canonical(node.meta.table), node.id);
+    for (const alias of node.meta.aliases ?? [])
+      stateByTable.set(canonical(alias), node.id);
   }
 
   const effects = [...graph.nodes.values()]

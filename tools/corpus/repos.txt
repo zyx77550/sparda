@@ -1,0 +1,5 @@
+# Corpus: real open-source backends the compiler must survive.
+# One git URL per line. Shallow-cloned into tools/corpus/.tmp (gitignored).
+https://github.com/gothinkster/node-express-realworld-example-app
+https://github.com/hagopj13/node-express-boilerplate
+https://github.com/tiangolo/full-stack-fastapi-template

@@ -406,7 +406,9 @@ function inspectCall(node, out, ctx) {
     }
   }
 
-  // ---- prisma: prisma.user.findMany() → table "user"
+  // ---- prisma: prisma.user.findMany() → table "user". Literal values in
+  // `data:`/`where:` are harvested like SQL SET/WHERE literals — they are the
+  // raw material StateMachineInference reads (lowercased, same trade-off)
   if (PRISMA_OPS[methodLower] !== undefined) {
     const obj = callee.object;
     if (
@@ -417,10 +419,15 @@ function inspectCall(node, out, ctx) {
       /prisma|client|db/i.test(obj.object.name)
     ) {
       const op = PRISMA_OPS[methodLower];
+      const data = prismaLiteralsOf(node.arguments[0], 'data');
+      const where = prismaLiteralsOf(node.arguments[0], 'where');
       pushEffect(out, ctx, {
         effectType: op === 'select' ? 'db_read' : 'db_write',
         op,
         table: obj.property.name.toLowerCase(),
+        ...(data && op === 'insert' ? { inserts: data } : {}),
+        ...(data && op !== 'insert' && op !== 'select' ? { sets: data } : {}),
+        ...(where ? { where } : {}),
         line,
       });
       return;
@@ -468,6 +475,33 @@ function pushEffect(out, ctx, effect) {
   if (ctx?.tryId != null) effect.tryId = ctx.tryId;
   if (ctx?.catchOf != null) effect.catchOf = ctx.catchOf;
   out.effects.push(effect);
+}
+
+// prisma.order.update({ where: { status: 'PENDING' }, data: { status: 'PAID' } })
+// → string-literal pairs of the named option, lowercased, bounded like SQL
+function prismaLiteralsOf(arg, optionName) {
+  if (arg?.type !== 'ObjectExpression') return null;
+  for (const prop of arg.properties) {
+    if (
+      prop.type !== 'ObjectProperty' ||
+      prop.key.type !== 'Identifier' ||
+      prop.key.name !== optionName ||
+      prop.value.type !== 'ObjectExpression'
+    )
+      continue;
+    const pairs = {};
+    for (const field of prop.value.properties) {
+      if (Object.keys(pairs).length >= 8) break;
+      if (
+        field.type === 'ObjectProperty' &&
+        field.key.type === 'Identifier' &&
+        field.value.type === 'StringLiteral'
+      )
+        pairs[field.key.name.toLowerCase()] = field.value.value.toLowerCase();
+    }
+    return Object.keys(pairs).length ? pairs : null;
+  }
+  return null;
 }
 
 // fetch(url, { method: 'POST' }) — literal method option or nothing (SBIR §2.4)

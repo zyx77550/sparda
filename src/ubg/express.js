@@ -21,8 +21,12 @@ export function extractExpress(cwd, entryFile) {
   const mounts = [];
 
   scanFile(path.resolve(cwd, entryFile), '', 0);
-  for (const m of [...mounts]) {
-    if (m.file && fs.existsSync(m.file)) scanFile(m.file, m.prefix, 1);
+  // growing queue, NOT a snapshot: a mounted router file can itself mount
+  // sub-routers (app.use('/v1', routes) → router.use('/auth', authRoute)) —
+  // the real-world boilerplate pattern. Depth still bounded by scanFile.
+  for (let i = 0; i < mounts.length; i++) {
+    const m = mounts[i];
+    if (m.file && fs.existsSync(m.file)) scanFile(m.file, m.prefix, m.depth ?? 1);
     else if (!m.file)
       skipped.push({
         reason: `router "${m.ident}" mounted at ${m.prefix} — source file not resolved`,
@@ -136,6 +140,7 @@ export function extractExpress(cwd, entryFile) {
           file: mod.imports.get(args[1].name) ?? null,
           ident: args[1].name,
           fromFile: relFile,
+          depth: depth + 1, // nested mounts keep sinking, scanFile bounds them
         });
         return;
       }

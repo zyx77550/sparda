@@ -1,0 +1,50 @@
+# SPARDA Apocalypse — deployment proof as a CI gate.
+# Compiles the repo to its behavior graph and proves no declared guard,
+# invariant, transaction scope or aggregate boundary can be broken. Fails the
+# job on any critical/high finding. Optionally uploads SARIF so findings land
+# in the GitHub Security tab.
+#
+#   - uses: zyx77550/sparda@main
+#     with:
+#       working-directory: .
+#       sarif: 'true'
+name: 'SPARDA Apocalypse'
+description: 'Prove the deploy — guards, invariants, transactions, aggregates — from the compiled behavior graph. 100% local, deterministic, no keys.'
+author: 'Residual Labs'
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  working-directory:
+    description: 'Directory of the app to prove (where package.json lives)'
+    required: false
+    default: '.'
+  sarif:
+    description: 'Also emit .sparda/apocalypse.sarif and upload it to code scanning'
+    required: false
+    default: 'false'
+  version:
+    description: 'sparda-mcp version to run (npm dist-tag or semver)'
+    required: false
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Prove the deploy
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.sarif }}" = "true" ]; then
+          npx --yes sparda-mcp@${{ inputs.version }} apocalypse --sarif
+        else
+          npx --yes sparda-mcp@${{ inputs.version }} apocalypse
+        fi
+
+    - name: Upload SARIF to code scanning
+      if: ${{ inputs.sarif == 'true' && always() }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.working-directory }}/.sparda/apocalypse.sarif
+        category: sparda-apocalypse

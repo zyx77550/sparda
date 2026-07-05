@@ -248,6 +248,54 @@ describe('Flight: singleton & recorder/replay coexistence', () => {
   });
 });
 
+describe('Flight: production hygiene', () => {
+  it('redacts sensitive body keys before the flight touches disk', async () => {
+    const cwd = makeTmp();
+    globalThis.fetch = fakeUpstream(201, { ok: true });
+    const box = createFlightBox();
+    box.arm();
+    try {
+      let resolveSaved;
+      const savedP = new Promise((r) => (resolveSaved = r));
+      const db = { query: async () => ({ rows: [{ email: 'a@b.c' }] }) };
+      const app = buildApp(box, db, {
+        record: { cwd, onFlight: (s) => resolveSaved(s) },
+      });
+      await fire(app, {
+        userId: 1,
+        note: 'x',
+        password: 'hunter2',
+        nested: { token: 'sk-123' },
+      });
+      const saved = await savedP;
+      const flight = loadFlight(cwd, saved.id);
+      expect(flight.request.body.password).toBe('[REDACTED]');
+      expect(flight.request.body.nested.token).toBe('[REDACTED]');
+      expect(flight.request.body.note).toBe('x'); // non-sensitive survives
+      expect(JSON.stringify(flight)).not.toContain('hunter2');
+      expect(JSON.stringify(flight)).not.toContain('sk-123');
+    } finally {
+      box.disarm();
+    }
+  });
+
+  it('sample: N records exactly every Nth request, deterministically', async () => {
+    const cwd = makeTmp();
+    globalThis.fetch = fakeUpstream(201, { ok: true });
+    const box = createFlightBox();
+    box.arm();
+    try {
+      const db = { query: async () => ({ rows: [{ email: 'a@b.c' }] }) };
+      const app = buildApp(box, db, { record: { cwd, sample: 3 } });
+      for (let i = 0; i < 6; i++) await fire(app, { userId: i, note: `r${i}` });
+      await new Promise((r) => setTimeout(r, 200)); // let finish handlers flush
+      expect(listFlights(cwd)).toHaveLength(2); // requests 0 and 3
+    } finally {
+      box.disarm();
+    }
+  });
+});
+
 describe('Flight: fail-loud primitives', () => {
   it('FlightDivergence carries the exact mismatch', () => {
     const box = createFlightBox();

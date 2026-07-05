@@ -199,6 +199,8 @@ function findExpressEntry(cwd, pkg) {
     'src/app.ts',
     'src/server.ts',
     'src/index.ts',
+    'src/main.ts', // Nx / NestJS-style monorepo layout
+    'main.ts',
     'app.ts',
     'server.ts',
     'index.ts',
