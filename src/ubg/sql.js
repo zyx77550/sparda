@@ -108,17 +108,29 @@ function extractCreateTables(src, sourceFile, skipped) {
       continue;
     }
     const body = src.slice(bodyStart, bodyEnd);
-    const { columns, primaryKeys } = parseColumns(body);
+    const { columns, primaryKeys, invariants, references } = parseColumns(body);
     for (const col of columns) if (primaryKeys.has(col.name)) col.pk = true;
     tables.push({
       name: name.toLowerCase(),
       columns,
+      invariants: sortInvariants(invariants),
+      references,
       sourceFile,
       sourceLine: lineOf(src, m.index),
     });
     re.lastIndex = bodyEnd;
   }
   return tables;
+}
+
+// SBIR §2.1 — canonical invariant order: (type, fields) so the artifact never
+// depends on declaration order quirks between migration files
+function sortInvariants(invariants) {
+  return [...invariants].sort((a, b) => {
+    const ka = `${a.type} ${(a.fields ?? []).join(',')} ${a.expression ?? ''}`;
+    const kb = `${b.type} ${(b.fields ?? []).join(',')} ${b.expression ?? ''}`;
+    return ka.localeCompare(kb);
+  });
 }
 
 // scan from the char after the opening paren; returns index of its match
@@ -135,37 +147,84 @@ function findMatchingParen(src, start) {
 const CONSTRAINT_PREFIX =
   /^(primary\s+key|foreign\s+key|constraint|unique\s*\(|check\s*\(|exclude|like\s)/i;
 
+const cleanIdent = (s) => s.trim().replace(/"/g, '').toLowerCase();
+const fieldList = (s) => s.split(',').map(cleanIdent);
+const normalizeWs = (s) => s.trim().replace(/\s+/g, ' ');
+
 function parseColumns(body) {
   const columns = [];
   const primaryKeys = new Set();
+  const invariants = [];
+  const references = [];
+
+  const fk = (fields, refTable, refFieldsRaw) => {
+    const ref = {
+      table: cleanIdent(refTable).split('.').pop(),
+      fields: refFieldsRaw ? fieldList(refFieldsRaw) : ['id'],
+    };
+    invariants.push({ type: 'foreign_key', fields, references: ref });
+    references.push({ fields, table: ref.table, refFields: ref.fields });
+  };
 
   for (const rawDef of splitTopLevel(body)) {
-    const def = rawDef.trim();
+    let def = normalizeWs(rawDef);
     if (!def) continue;
+    def = def.replace(/^constraint\s+"?\w+"?\s+/i, ''); // named → anonymous form
 
     if (CONSTRAINT_PREFIX.test(def)) {
-      const pkMatch = def.match(/^primary\s+key\s*\(([^)]*)\)/i);
-      if (pkMatch) {
-        for (const c of pkMatch[1].split(','))
-          primaryKeys.add(c.trim().replace(/"/g, '').toLowerCase());
+      // table-level constraints (SBIR §2.1 inference table)
+      let m;
+      if ((m = def.match(/^primary\s+key\s*\(([^)]*)\)/i))) {
+        for (const c of fieldList(m[1])) primaryKeys.add(c);
+      } else if ((m = def.match(/^unique\s*\(([^)]*)\)/i))) {
+        invariants.push({ type: 'unique', fields: fieldList(m[1]) });
+      } else if ((m = def.match(/^check\s*\((.*)\)$/i))) {
+        invariants.push({ type: 'check', expression: normalizeWs(m[1]) });
+      } else if (
+        (m = def.match(
+          /^foreign\s+key\s*\(([^)]*)\)\s+references\s+("?[\w.]+"?)\s*(?:\(([^)]*)\))?/i,
+        ))
+      ) {
+        fk(fieldList(m[1]), m[2], m[3]);
       }
       continue; // table-level constraints are not columns
     }
 
     const colMatch = def.match(/^("?[\w]+"?)\s+([\w]+(?:\s*\([^)]*\))?)/);
     if (!colMatch) continue;
-    const colName = colMatch[1].replace(/"/g, '').toLowerCase();
+    const colName = cleanIdent(colMatch[1]);
     const sqlType = colMatch[2].toLowerCase().replace(/\s+/g, '');
+    const notNull = /\bnot\s+null\b/i.test(def);
+    const isPk = /\bprimary\s+key\b/i.test(def);
     columns.push({
       name: colName,
       sqlType,
       type: normalizeType(sqlType),
-      nullable: !/\bnot\s+null\b/i.test(def),
-      pk: /\bprimary\s+key\b/i.test(def),
+      nullable: !notNull,
+      pk: isPk,
     });
-    if (/\bprimary\s+key\b/i.test(def)) primaryKeys.add(colName);
+    if (isPk) primaryKeys.add(colName);
+
+    // inline column constraints → invariants
+    if (notNull) invariants.push({ type: 'not_null', fields: [colName] });
+    if (/\bunique\b/i.test(def) && !isPk)
+      invariants.push({ type: 'unique', fields: [colName] });
+    let m;
+    if ((m = def.match(/\bcheck\s*\((.*)\)/i)))
+      invariants.push({ type: 'check', expression: normalizeWs(m[1]) });
+    if ((m = def.match(/\breferences\s+("?[\w.]+"?)\s*(?:\(([^)]*)\))?/i)))
+      fk([colName], m[1], m[2]);
+    if (
+      (m = def.match(
+        /\bdefault\s+(.+?)(?=\s+(?:not\s+null|primary\s+key|unique|check|references)\b|$)/i,
+      ))
+    )
+      invariants.push({ type: 'default', fields: [colName], value: normalizeWs(m[1]) });
   }
-  return { columns, primaryKeys };
+
+  if (primaryKeys.size)
+    invariants.push({ type: 'primary_key', fields: [...primaryKeys].sort() });
+  return { columns, primaryKeys, invariants, references };
 }
 
 // split on commas at paren depth 0 — DECIMAL(10,2) stays intact

@@ -1,0 +1,12 @@
+{
+  "name": "ubg-semantics-fixture",
+  "private": true,
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "zod": "^3.23.0"
+  }
+}

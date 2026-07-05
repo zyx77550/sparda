@@ -35,6 +35,16 @@ export async function runUbg(opts) {
       console.log(
         `  ${p.pass}: ${p.entrypointsTyped} entrypoint return schema(s), ${p.resolved} type(s) resolved`,
       );
+    else if (p.pass === 'EffectAlgebra' && p.classified)
+      console.log(
+        `  ${p.pass}: ${p.classified} effect(s) classified, ${p.observable} observable`,
+      );
+    else if (p.pass === 'ConsistencyDomains' && Object.keys(p.domains ?? {}).length) {
+      const names = Object.keys(p.domains).sort();
+      console.log(
+        `  ${p.pass}: ${names.length} domain(s) — ${names.join(', ')}${p.cycles.length ? ` (⚠ FK cycle: ${p.cycles.join(', ')})` : ''}`,
+      );
+    }
   }
 
   if (report.link.inferredTables.length)

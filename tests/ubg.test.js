@@ -163,7 +163,7 @@ describe('UBG: determinism & serialization', () => {
       const { outPath } = compileUBG(EXPRESS_FIXTURE, { write: true, out: outFile });
       expect(outPath).toBe(outFile);
       const parsed = JSON.parse(fs.readFileSync(outFile, 'utf8'));
-      expect(parsed.version).toBe('sparda-ubg/v1');
+      expect(parsed.version).toBe('sparda-ubg/v1.1');
       expect(parsed.nodes.length).toBeGreaterThan(0);
       // canonical order: nodes sorted by id
       const ids = parsed.nodes.map((n) => n.id);
@@ -191,6 +191,117 @@ describe('UBG: Next.js compilation', () => {
     expect(ids).toContain('entrypoint:POST /api/users');
     const get = graph.nodes.get('entrypoint:GET /api/users');
     expect(get.meta.returns).toMatchObject({ users: 'array' });
+  });
+});
+
+describe('UBG: SBIR v1.1 semantics', () => {
+  const SEMANTICS_FIXTURE = path.join(here, 'fixtures', 'ubg-semantics');
+  const { graph } = compileUBG(SEMANTICS_FIXTURE, { write: false });
+  const effectByTarget = (t) =>
+    [...graph.nodes.values()].find((n) => n.kind === 'effect' && n.meta.target === t);
+
+  it('extracts SQL invariants onto state nodes (§2.1)', () => {
+    const users = graph.nodes.get('state:sql:users').meta.invariants;
+    expect(users).toContainEqual({ type: 'primary_key', fields: ['id'] });
+    expect(users).toContainEqual({ type: 'not_null', fields: ['email'] });
+    expect(users).toContainEqual({ type: 'unique', fields: ['email'] });
+    expect(users).toContainEqual({ type: 'check', expression: 'balance >= 0' });
+    expect(users).toContainEqual({ type: 'default', fields: ['balance'], value: '0' });
+
+    const orders = graph.nodes.get('state:sql:orders').meta.invariants;
+    expect(orders).toContainEqual({
+      type: 'foreign_key',
+      fields: ['user_id'],
+      references: { table: 'users', fields: ['id'] },
+    });
+    expect(orders).toContainEqual({ type: 'check', expression: 'amount >= 0' });
+  });
+
+  it('derives ownership edges and consistency domains from FKs (§2.3)', () => {
+    const ownership = edgesOf(graph, 'ownership').map((e) => `${e.from}>${e.to}`);
+    expect(ownership).toContain('state:sql:users>state:sql:orders');
+    expect(ownership).toContain('state:sql:orders>state:sql:order_items');
+
+    expect(graph.nodes.get('state:sql:users').meta).toMatchObject({
+      consistencyDomain: 'Users',
+      role: 'aggregate_root',
+    });
+    expect(graph.nodes.get('state:sql:orders').meta).toMatchObject({
+      consistencyDomain: 'Users',
+      role: 'member',
+    });
+    expect(graph.nodes.get('state:sql:order_items').meta).toMatchObject({
+      consistencyDomain: 'Users',
+      role: 'member',
+    });
+    expect(graph.nodes.get('state:sql:logs').meta).toMatchObject({
+      consistencyDomain: 'Logs',
+      role: 'standalone',
+    });
+  });
+
+  it('computes each entrypoint blast radius (§2.3 mutatesDomains)', () => {
+    expect(graph.nodes.get('entrypoint:POST /orders').meta.mutatesDomains).toEqual([
+      'Users',
+    ]);
+    expect(graph.nodes.get('entrypoint:GET /status').meta.mutatesDomains).toBeUndefined();
+  });
+
+  it('scopes transactional effects and marks rollback (§2.2)', () => {
+    const txEffects = [...graph.nodes.values()].filter(
+      (n) => n.kind === 'effect' && n.meta.transaction,
+    );
+    expect(txEffects).toHaveLength(2);
+    const ids = new Set(txEffects.map((n) => n.meta.transaction.id));
+    expect(ids.size).toBe(1); // both statements live in the same scope
+    expect([...ids][0]).toMatch(/^tx:src\/app\.js:\d+$/);
+
+    const update = txEffects.find((n) => n.meta.op === 'update');
+    expect(update.meta).toMatchObject({
+      idempotent: true,
+      compensable: true,
+      observable: false,
+      onFailure: { action: 'rollback' },
+    });
+    const insert = txEffects.find((n) => n.meta.op === 'insert');
+    expect(insert.meta).toMatchObject({ idempotent: false, compensable: true });
+  });
+
+  it('emits compensation edges from catch-effects to try-effects (§2.2)', () => {
+    const refund = effectByTarget('https://api.stripe.example/refund');
+    const charge = effectByTarget('https://api.stripe.example/charge');
+    const comp = edgesOf(graph, 'compensation');
+    expect(comp).toHaveLength(2); // refund undoes the charge AND the insert
+    expect(comp.every((e) => e.from === refund.id)).toBe(true);
+    expect(charge.meta.onFailure).toEqual({ action: 'compensate', by: [refund.id] });
+
+    expect(charge.meta).toMatchObject({
+      httpMethod: 'POST',
+      observable: true,
+      idempotent: false,
+      compensable: true, // the refund exists
+    });
+    expect(refund.meta).toMatchObject({ observable: true, compensable: false });
+  });
+
+  it('classifies the safe GET probe (§2.4)', () => {
+    expect(effectByTarget('https://status.example.com/ping').meta).toMatchObject({
+      httpMethod: 'GET',
+      idempotent: true,
+      observable: false,
+      compensable: true,
+    });
+  });
+
+  it('flags validated entrypoints without decomposing the validator (§2.1)', () => {
+    expect(graph.nodes.get('entrypoint:POST /users').meta.inputValidated).toBe(true);
+    expect(graph.nodes.get('entrypoint:POST /pay').meta.inputValidated).toBeUndefined();
+  });
+
+  it('stays byte-deterministic with the v1.1 passes (Law 3)', () => {
+    const a = compileUBG(SEMANTICS_FIXTURE, { write: false });
+    const b = compileUBG(SEMANTICS_FIXTURE, { write: false });
+    expect(a.json).toBe(b.json);
   });
 });
 
@@ -240,6 +351,29 @@ describe.skipIf(!hasPython)('UBG: FastAPI compilation', () => {
     expect([...graph.nodes.keys()].some((id) => id.includes('unused_helper'))).toBe(
       false,
     );
+  });
+
+  it('scopes the `with db:` insert as a transaction (SBIR §2.2, DB-API idiom)', () => {
+    const insert = [...graph.nodes.values()].find(
+      (n) => n.kind === 'effect' && n.meta.op === 'insert',
+    );
+    expect(insert.meta.transaction?.id).toMatch(/^tx:main\.py:\d+$/);
+    expect(insert.meta).toMatchObject({
+      compensable: true,
+      onFailure: { action: 'rollback' },
+    });
+  });
+
+  it('classifies the Python webhook POST as observable (SBIR §2.4)', () => {
+    const http = [...graph.nodes.values()].find(
+      (n) => n.kind === 'effect' && n.meta.effectType === 'http_call',
+    );
+    expect(http.meta).toMatchObject({
+      httpMethod: 'POST',
+      observable: true,
+      idempotent: false,
+      compensable: false,
+    });
   });
 
   it('TypePropagation resolves returns across the Python/SQL boundary', () => {

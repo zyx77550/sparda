@@ -32,6 +32,7 @@ async def read_user(user_id: int):
 @app.post("/users", dependencies=[Depends(require_auth)])
 async def create_user(email: str):
     """Create a user and notify the webhook."""
-    db.execute("INSERT INTO users (email) VALUES (?)", (email,))
+    with db:
+        db.execute("INSERT INTO users (email) VALUES (?)", (email,))
     requests.post("https://hooks.example.com/user-created")
     return {"ok": True}

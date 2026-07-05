@@ -9,8 +9,17 @@ import { validateGraph } from './schema.js';
 import * as deadPathElimination from './passes/dead-path-elimination.js';
 import * as stateMinimization from './passes/state-minimization.js';
 import * as typePropagation from './passes/type-propagation.js';
+import * as effectAlgebra from './passes/effect-algebra.js';
+import * as consistencyDomains from './passes/consistency-domains.js';
 
-export const PASSES = [deadPathElimination, stateMinimization, typePropagation];
+// SBIR §4 — normative order: reap, merge, type, classify, derive domains
+export const PASSES = [
+  deadPathElimination,
+  stateMinimization,
+  typePropagation,
+  effectAlgebra,
+  consistencyDomains,
+];
 
 export function optimize(graph, { passes = PASSES } = {}) {
   const reports = [];

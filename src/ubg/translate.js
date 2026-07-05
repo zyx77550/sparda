@@ -48,6 +48,9 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
             nullable: c.nullable,
             pk: c.pk,
           })),
+          // SBIR v1.1 §2.1/§2.3 — declared truth travels with the state node
+          ...(t.invariants?.length ? { invariants: t.invariants } : {}),
+          ...(t.references?.length ? { references: t.references } : {}),
         },
       ),
     );
@@ -140,6 +143,10 @@ function translateRoute(
   const handlerEntry = chainNodes.length > 0 ? chainNodes[chainNodes.length - 1] : null;
   if (!handlerEntry) return; // entrypoint with no resolvable chain — dead-path pass reaps it
 
+  // SBIR v1.1 §2.1 — validator seen in the handler body (zod) or enforced by
+  // the framework (FastAPI Pydantic): recorded as a signal, never decomposed
+  if (handlerEntry.scan?.validatesInput) graph.nodes.get(epId).meta.inputValidated = true;
+
   // request data flows straight to the handler (middlewares see it too, but
   // the handler is where the schema lands and returns are produced)
   addEdge(
@@ -218,6 +225,7 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
 
   let order = 0;
   let ordinal = 0;
+  const created = []; // effects of THIS body — compensation pairs live here
   for (const eff of scan.effects) {
     const id = effectId(eff.effectType, owner.loc.file, eff.line, ordinal++);
     addNode(
@@ -233,10 +241,37 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           ...(eff.table ? { table: eff.table } : {}),
           ...(eff.target ? { target: eff.target } : {}),
           ...(eff.driver ? { driver: eff.driver } : {}),
+          ...(eff.httpMethod ? { httpMethod: eff.httpMethod } : {}),
+          // SBIR v1.1 §2.2 — transaction scope id is file-qualified here,
+          // where the owner's file is known
+          ...(eff.txLine != null
+            ? {
+                transaction: {
+                  id: `tx:${owner.loc.file}:${eff.txLine}`,
+                  isolation: eff.txIsolation ?? 'default',
+                },
+                onFailure: { action: 'rollback' },
+              }
+            : {}),
         },
       ),
     );
     addEdge(graph, makeEdge('control_flow', ownerId, id, { order: order++ }));
+    created.push({ id, eff });
+  }
+
+  // SBIR v1.1 §2.2 — compensating pathways: a mutating catch-effect undoes
+  // every mutating try-effect of its group
+  const MUTATING = new Set(['db_write', 'http_call', 'fs_write']);
+  for (const c of created) {
+    if (c.eff.catchOf == null || !MUTATING.has(c.eff.effectType)) continue;
+    for (const t of created) {
+      if (t.eff.tryId !== c.eff.catchOf || !MUTATING.has(t.eff.effectType)) continue;
+      addEdge(graph, makeEdge('compensation', c.id, t.id, { reason: 'catch-handler' }));
+      const target = graph.nodes.get(t.id);
+      const by = new Set([...(target.meta.onFailure?.by ?? []), c.id]);
+      target.meta.onFailure = { action: 'compensate', by: [...by].sort() };
+    }
   }
 
   for (const call of scan.calls) {

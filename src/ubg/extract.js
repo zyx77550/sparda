@@ -211,20 +211,57 @@ export function scanFunction(fnNode) {
     returnShapes: [],
     calls: [],
     guardSignals: { deniesWithStatus: false },
+    validatesInput: false,
     async: Boolean(fnNode?.async),
   };
   if (!fnNode) return result;
-  visit(fnNode.body, result);
+  visit(fnNode.body, result, {
+    tx: null,
+    isolation: 'default',
+    tryId: null,
+    catchOf: null,
+  });
   return result;
 }
 
-function visit(node, out) {
+// SBIR §2.2 — transaction wrappers whose function arguments open a scope
+const TX_WRAPPERS = new Set(['transaction', '$transaction', 'withTransaction']);
+
+function visit(node, out, ctx) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) {
-    for (const n of node) visit(n, out);
+    for (const n of node) visit(n, out, ctx);
     return;
   }
-  if (node.type === 'CallExpression') inspectCall(node, out);
+
+  // try/catch — try-effects are compensable by catch-effects (SBIR §2.2)
+  if (node.type === 'TryStatement') {
+    const tryLine = node.loc?.start.line ?? 0;
+    visit(node.block, out, { ...ctx, tryId: tryLine, catchOf: null });
+    if (node.handler) visit(node.handler, out, { ...ctx, tryId: null, catchOf: tryLine });
+    if (node.finalizer) visit(node.finalizer, out, ctx);
+    return;
+  }
+
+  if (node.type === 'CallExpression') {
+    // transaction scope: db.transaction(cb) / prisma.$transaction(...) — the
+    // innermost scope wins; isolation only from a string literal, never guessed
+    const callee = node.callee;
+    if (
+      callee?.type === 'MemberExpression' &&
+      callee.property?.type === 'Identifier' &&
+      TX_WRAPPERS.has(callee.property.name)
+    ) {
+      const txCtx = {
+        ...ctx,
+        tx: node.loc?.start.line ?? 0,
+        isolation: isolationLiteralOf(node) ?? 'default',
+      };
+      for (const arg of node.arguments) visit(arg, out, txCtx);
+      return;
+    }
+    inspectCall(node, out, ctx);
+  }
   for (const k of Object.keys(node)) {
     if (
       k === 'loc' ||
@@ -234,11 +271,29 @@ function visit(node, out) {
     )
       continue;
     const v = node[k];
-    if (v && typeof v === 'object') visit(v, out);
+    if (v && typeof v === 'object') visit(v, out, ctx);
   }
 }
 
-function inspectCall(node, out) {
+// Prisma `isolationLevel: 'Serializable'` & friends — literal or nothing
+function isolationLiteralOf(callNode) {
+  for (const arg of callNode.arguments) {
+    if (arg.type !== 'ObjectExpression') continue;
+    for (const prop of arg.properties) {
+      if (
+        prop.type === 'ObjectProperty' &&
+        ((prop.key.type === 'Identifier' && /^isolation(Level)?$/.test(prop.key.name)) ||
+          (prop.key.type === 'StringLiteral' &&
+            /^isolation(Level)?$/.test(prop.key.value))) &&
+        prop.value.type === 'StringLiteral'
+      )
+        return prop.value.value.toLowerCase();
+    }
+  }
+  return null;
+}
+
+function inspectCall(node, out, ctx) {
   const line = node.loc?.start.line ?? 0;
   const callee = node.callee;
 
@@ -255,9 +310,11 @@ function inspectCall(node, out) {
   // ---- local calls: bare identifier calls → call-graph edges later
   if (callee.type === 'Identifier') {
     if (callee.name === 'fetch') {
-      pushEffect(out, {
+      const httpMethod = optionsMethodOf(node);
+      pushEffect(out, ctx, {
         effectType: 'http_call',
         target: literalArg(node.arguments[0]) ?? 'dynamic',
+        ...(httpMethod ? { httpMethod } : {}),
         line,
       });
       return;
@@ -271,17 +328,28 @@ function inspectCall(node, out) {
   const methodLower = method.toLowerCase();
   const rootName = rootIdentifier(callee);
 
+  // ---- input validation signal (SBIR §2.1): zod-style .safeParse / Schema.parse
+  if (
+    methodLower === 'safeparse' ||
+    (methodLower === 'parse' &&
+      callee.object.type === 'Identifier' &&
+      /schema$/i.test(callee.object.name))
+  ) {
+    out.validatesInput = true;
+    return;
+  }
+
   // ---- raw SQL: X.query('INSERT ...') / X.execute(`SELECT ...`)
   if ((methodLower === 'query' || methodLower === 'execute') && node.arguments.length) {
     const sql = literalArg(node.arguments[0]);
     if (sql) {
       const parsed = parseSqlCall(sql);
       if (parsed) {
-        pushEffect(out, { ...parsed, line, driver: rootName ?? 'unknown' });
+        pushEffect(out, ctx, { ...parsed, line, driver: rootName ?? 'unknown' });
         return;
       }
     }
-    pushEffect(out, {
+    pushEffect(out, ctx, {
       effectType: 'db_read',
       op: 'unknown',
       table: null,
@@ -295,7 +363,7 @@ function inspectCall(node, out) {
   if (SUPABASE_OPS.has(methodLower)) {
     const table = builderTableOf(callee.object);
     if (table) {
-      pushEffect(out, {
+      pushEffect(out, ctx, {
         effectType: methodLower === 'select' ? 'db_read' : 'db_write',
         op: methodLower,
         table: table.toLowerCase(),
@@ -316,7 +384,7 @@ function inspectCall(node, out) {
       /prisma|client|db/i.test(obj.object.name)
     ) {
       const op = PRISMA_OPS[methodLower];
-      pushEffect(out, {
+      pushEffect(out, ctx, {
         effectType: op === 'select' ? 'db_read' : 'db_write',
         op,
         table: obj.property.name.toLowerCase(),
@@ -326,11 +394,15 @@ function inspectCall(node, out) {
     }
   }
 
-  // ---- HTTP clients: axios.get(...), got.post(...)
+  // ---- HTTP clients: axios.get(...), got.post(...) — the member IS the method
   if (rootName && HTTP_CLIENTS.has(rootName.toLowerCase())) {
-    pushEffect(out, {
+    const httpMethod = /^(get|post|put|patch|delete|head)$/.test(methodLower)
+      ? methodLower.toUpperCase()
+      : optionsMethodOf(node);
+    pushEffect(out, ctx, {
       effectType: 'http_call',
       target: literalArg(node.arguments[0]) ?? 'dynamic',
+      ...(httpMethod ? { httpMethod } : {}),
       line,
     });
     return;
@@ -339,13 +411,13 @@ function inspectCall(node, out) {
   // ---- filesystem: fs.writeFileSync(...), fs.promises.readFile(...)
   if (rootName === 'fs' || rootName === 'fsp' || rootName === 'fsPromises') {
     if (FS_WRITE.has(methodLower)) {
-      pushEffect(out, {
+      pushEffect(out, ctx, {
         effectType: 'fs_write',
         target: literalArg(node.arguments[0]) ?? 'dynamic',
         line,
       });
     } else if (FS_READ.has(methodLower)) {
-      pushEffect(out, {
+      pushEffect(out, ctx, {
         effectType: 'fs_read',
         target: literalArg(node.arguments[0]) ?? 'dynamic',
         line,
@@ -354,9 +426,32 @@ function inspectCall(node, out) {
   }
 }
 
-function pushEffect(out, effect) {
+function pushEffect(out, ctx, effect) {
   if (out.effects.length >= MAX_EFFECTS) return;
+  if (ctx?.tx != null) {
+    effect.txLine = ctx.tx;
+    effect.txIsolation = ctx.isolation;
+  }
+  if (ctx?.tryId != null) effect.tryId = ctx.tryId;
+  if (ctx?.catchOf != null) effect.catchOf = ctx.catchOf;
   out.effects.push(effect);
+}
+
+// fetch(url, { method: 'POST' }) — literal method option or nothing (SBIR §2.4)
+function optionsMethodOf(callNode) {
+  for (const arg of callNode.arguments) {
+    if (arg.type !== 'ObjectExpression') continue;
+    for (const prop of arg.properties) {
+      if (
+        prop.type === 'ObjectProperty' &&
+        ((prop.key.type === 'Identifier' && prop.key.name === 'method') ||
+          (prop.key.type === 'StringLiteral' && prop.key.value === 'method')) &&
+        prop.value.type === 'StringLiteral'
+      )
+        return prop.value.value.toUpperCase();
+    }
+  }
+  return null;
 }
 
 // res.json(x), res.status(201).json(x), Response.json(x), NextResponse.json(x),

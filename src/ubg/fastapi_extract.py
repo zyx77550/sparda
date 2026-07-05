@@ -167,33 +167,80 @@ def is_http_denial(exc):
     return False
 
 
+TX_CTX_ATTRS = ("begin", "begin_nested", "transaction", "atomic")
+
+
+def is_tx_context(expr):
+    """SBIR §2.2 — `with session.begin():`, `with db.transaction():`,
+    `with db:` (the sqlite3/DB-API commit-or-rollback idiom)."""
+    if isinstance(expr, ast.Name):
+        return True
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
+        return expr.func.attr in TX_CTX_ATTRS
+    return False
+
+
 def scan_function(fn):
     out = {
         "effects": [],
         "returnShapes": [],
         "calls": [],
         "guardSignals": {"deniesWithStatus": False},
+        "validatesInput": False,
         "async": isinstance(fn, ast.AsyncFunctionDef),
     }
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call):
-            inspect_call(node, out)
-        elif isinstance(node, ast.Return) and node.value is not None:
-            shape = dict_shape_of(node.value)
-            if shape is not None and len(out["returnShapes"]) < MAX_RETURN_SHAPES:
-                out["returnShapes"].append({"line": node.lineno, "shape": shape})
-        elif isinstance(node, ast.Raise) and node.exc is not None:
-            if is_http_denial(node.exc):
-                out["guardSignals"]["deniesWithStatus"] = True
+    ctx = {"tx": None, "iso": "default", "tryId": None, "catchOf": None}
+    for stmt in fn.body:
+        _visit(stmt, out, ctx)
     return out
 
 
-def push_effect(out, effect):
-    if len(out["effects"]) < MAX_EFFECTS:
-        out["effects"].append(effect)
+def _visit(node, out, ctx):
+    if isinstance(node, ast.Try):
+        try_line = node.lineno
+        for stmt in node.body:
+            _visit(stmt, out, dict(ctx, tryId=try_line, catchOf=None))
+        for handler in node.handlers:
+            for stmt in handler.body:
+                _visit(stmt, out, dict(ctx, tryId=None, catchOf=try_line))
+        for stmt in node.orelse + node.finalbody:
+            _visit(stmt, out, ctx)
+        return
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        is_tx = any(is_tx_context(item.context_expr) for item in node.items)
+        child = dict(ctx, tx=node.lineno, iso="default") if is_tx else ctx
+        for item in node.items:  # the context expression runs OUTSIDE the scope
+            _visit(item.context_expr, out, ctx)
+        for stmt in node.body:
+            _visit(stmt, out, child)
+        return
+    if isinstance(node, ast.Call):
+        inspect_call(node, out, ctx)
+    elif isinstance(node, ast.Return) and node.value is not None:
+        shape = dict_shape_of(node.value)
+        if shape is not None and len(out["returnShapes"]) < MAX_RETURN_SHAPES:
+            out["returnShapes"].append({"line": node.lineno, "shape": shape})
+    elif isinstance(node, ast.Raise) and node.exc is not None:
+        if is_http_denial(node.exc):
+            out["guardSignals"]["deniesWithStatus"] = True
+    for child in ast.iter_child_nodes(node):
+        _visit(child, out, ctx)
 
 
-def inspect_call(node, out):
+def push_effect(out, ctx, effect):
+    if len(out["effects"]) >= MAX_EFFECTS:
+        return
+    if ctx.get("tx") is not None:
+        effect["txLine"] = ctx["tx"]
+        effect["txIsolation"] = ctx.get("iso", "default")
+    if ctx.get("tryId") is not None:
+        effect["tryId"] = ctx["tryId"]
+    if ctx.get("catchOf") is not None:
+        effect["catchOf"] = ctx["catchOf"]
+    out["effects"].append(effect)
+
+
+def inspect_call(node, out, ctx):
     line = node.lineno
     func = node.func
 
@@ -206,7 +253,7 @@ def inspect_call(node, out):
             target = lit(node.args[0]) if node.args else None
             effect_type = ("fs_write" if isinstance(mode, str)
                            and any(c in mode for c in "wax+") else "fs_read")
-            push_effect(out, {
+            push_effect(out, ctx, {
                 "effectType": effect_type,
                 "target": target if isinstance(target, str) else "dynamic",
                 "line": line,
@@ -223,6 +270,11 @@ def inspect_call(node, out):
     method = func.attr
     root = root_name(func)
 
+    # input validation signal (SBIR §2.1): explicit Pydantic validation calls
+    if method in ("model_validate", "model_validate_json", "parse_obj", "parse_raw"):
+        out["validatesInput"] = True
+        return
+
     # raw SQL: X.execute('INSERT …') / cursor.execute(text('SELECT …'))
     if method in ("execute", "executemany") and node.args:
         sql = sql_literal_of(node.args[0])
@@ -231,9 +283,9 @@ def inspect_call(node, out):
             if parsed:
                 parsed["line"] = line
                 parsed["driver"] = root or "unknown"
-                push_effect(out, parsed)
+                push_effect(out, ctx, parsed)
                 return
-        push_effect(out, {
+        push_effect(out, ctx, {
             "effectType": "db_read", "op": "unknown", "table": None,
             "line": line, "driver": root or "unknown",
         })
@@ -241,7 +293,7 @@ def inspect_call(node, out):
 
     # SQLAlchemy ORM: session.query(User) → read; session.add/delete → write
     if method == "query" and node.args and isinstance(node.args[0], ast.Name):
-        push_effect(out, {
+        push_effect(out, ctx, {
             "effectType": "db_read", "op": "select",
             "table": node.args[0].id.lower(), "line": line,
             "driver": root or "unknown",
@@ -249,7 +301,7 @@ def inspect_call(node, out):
         return
     if (method in ("add", "add_all", "merge") and root
             and re.search(r"session|db", root, re.I)):
-        push_effect(out, {
+        push_effect(out, ctx, {
             "effectType": "db_write", "op": "insert", "table": None,
             "line": line, "driver": root,
         })
@@ -259,28 +311,31 @@ def inspect_call(node, out):
     if method in SUPABASE_OPS:
         table = builder_table_of(func.value)
         if table:
-            push_effect(out, {
+            push_effect(out, ctx, {
                 "effectType": "db_read" if method == "select" else "db_write",
                 "op": method, "table": table.lower(), "line": line,
             })
             return
 
-    # HTTP clients: requests.get(…), httpx.post(…), client.get(…) on httpx roots
+    # HTTP clients: requests.get(…), httpx.post(…) — the attr IS the method
     if root in HTTP_CLIENTS and method in ("get", "post", "put", "patch",
-                                           "delete", "request"):
+                                           "delete", "head", "request"):
         target = lit(node.args[0]) if node.args else None
-        push_effect(out, {
+        effect = {
             "effectType": "http_call",
             "target": target if isinstance(target, str) else "dynamic",
             "line": line,
-        })
+        }
+        if method != "request":
+            effect["httpMethod"] = method.upper()
+        push_effect(out, ctx, effect)
         return
 
     # filesystem: os.remove(…), shutil.rmtree(…), Path.write_text(…)
     if method in FS_WRITE and (root in ("os", "shutil") or method.startswith("write")
                                or root is None):
         target = lit(node.args[0]) if node.args else None
-        push_effect(out, {
+        push_effect(out, ctx, {
             "effectType": "fs_write",
             "target": target if isinstance(target, str) else "dynamic",
             "line": line,
@@ -288,7 +343,7 @@ def inspect_call(node, out):
         return
     if method in FS_READ and root in ("os", "os.path"):
         target = lit(node.args[0]) if node.args else None
-        push_effect(out, {
+        push_effect(out, ctx, {
             "effectType": "fs_read",
             "target": target if isinstance(target, str) else "dynamic",
             "line": line,
@@ -529,9 +584,15 @@ class UbgExtractor:
                                   % (dep_name, method.upper(), full_path),
                         "file": rel_file, "line": node.lineno,
                     })
+            handler_scan = scan_function(node)
+            params = self.params_of(node, full_path)
+            # a Pydantic body model means FastAPI validates before the handler
+            # runs — same signal as an explicit zod .safeParse (SBIR §2.1)
+            if any(p["in"] == "body" for p in params):
+                handler_scan["validatesInput"] = True
             chain.append({
                 "name": node.name, "role": "handler", "sourceFile": rel_file,
-                "sourceLine": node.lineno, "scan": scan_function(node),
+                "sourceLine": node.lineno, "scan": handler_scan,
             })
 
             self.routes.append({
@@ -539,7 +600,7 @@ class UbgExtractor:
                 "path": full_path,
                 "sourceFile": rel_file,
                 "sourceLine": node.lineno,
-                "params": self.params_of(node, full_path),
+                "params": params,
                 "chain": chain,
                 "description": (ast.get_docstring(node) or "")[:400],
             })
