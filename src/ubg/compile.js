@@ -7,6 +7,7 @@ import { detectStack } from '../detect.js';
 import { clearModuleCache } from './extract.js';
 import { extractExpress } from './express.js';
 import { extractNext } from './nextjs.js';
+import { extractFastAPI } from './fastapi.js';
 import { parseSqlSchemas } from './sql.js';
 import { translate } from './translate.js';
 import { linkDataFlow } from './link.js';
@@ -21,17 +22,18 @@ export function compileUBG(
   clearModuleCache(); // each compile run parses fresh — no stale-file ghosts
 
   const stack = detectStack(cwd);
-  if (stack.framework !== 'express' && stack.framework !== 'nextjs') {
+  const extractors = {
+    express: () => extractExpress(cwd, stack.entryFile),
+    nextjs: () => extractNext(cwd, stack.entryFile),
+    fastapi: () => extractFastAPI(cwd, stack.entryFile, stack.pythonCmd),
+  };
+  if (!extractors[stack.framework]) {
     throw Object.assign(
-      new Error(`UBG compiler supports Express & Next.js — detected ${stack.framework}.`),
-      { code: 'USER', hint: 'FastAPI lowering lands in a later round.' },
+      new Error(`UBG compiler has no lowering for ${stack.framework} yet.`),
+      { code: 'USER' },
     );
   }
-
-  const extracted =
-    stack.framework === 'express'
-      ? extractExpress(cwd, stack.entryFile)
-      : extractNext(cwd, stack.entryFile);
+  const extracted = extractors[stack.framework]();
 
   const sql = parseSqlSchemas(cwd);
 

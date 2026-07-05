@@ -64,7 +64,9 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
       a.name.localeCompare(b.name),
   );
   for (const h of sortedHelpers) {
-    const scan = scanFunction(h.fn);
+    // extractors on non-JS runtimes (FastAPI) pre-compute the scan — the
+    // microscope only runs when we hold an actual babel node
+    const scan = h.scan ?? scanFunction(h.fn);
     const kind = isGuardLike(h.name, scan) ? 'guard' : 'logic';
     const id =
       kind === 'guard'
@@ -171,7 +173,7 @@ function translateRoute(
 
 // A chain step (middleware or handler) becomes a guard or logic node.
 function ensureChainNode(graph, step, scanCache) {
-  const scan = scanFunction(step.fn);
+  const scan = step.scan ?? scanFunction(step.fn);
   const kind =
     isGuardLike(step.name, scan) && step.role !== 'handler' ? 'guard' : 'logic';
   const id =
