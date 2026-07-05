@@ -169,6 +169,7 @@ runtime, so the guidance never goes stale.
 
 ## Security posture (honest)
 - 4 runtime dependencies, exact-pinned.
+- **Dynamic Local Key Resolution.** The generated router contains no baked secrets. It resolves authorization keys at runtime from the `SPARDA_LOCAL_KEY` environment variable or the local gitignored `.sparda/key` file, and fails closed (503) when neither is found. For custom production or staging setups, you can override this behavior by exposing `SPARDA_LOCAL_KEY` in your environment.
 - Local key on every router call; self-reference loop protection; 30s timeouts; 8 KB output truncation.
 - AST-positioned injection with backup and post-injection re-parse; `npx sparda-mcp remove` leaves a clean git diff.
 - Persistence is **value-free**: SPARDA records structure (tool names, field names, fingerprints), never your payloads.
