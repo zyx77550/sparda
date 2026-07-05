@@ -6,23 +6,27 @@
 
 <br/>
 
-**Your AI can write code. It still can't operate your app.**
+**Compile your backend into a deterministic behavior runtime.**
 
-Claude, Cursor & friends read your *files* — not your *running product*. They can
-refactor a controller, but they can't create an order, fetch a real user, or see why
-production is failing. And giving an AI real access to your API usually means: write
-an OpenAPI spec, build an MCP server, host it, secure it, keep it in sync with every
-route change — and pray it never `DELETE`s the wrong row. Days of glue code, per
-project, forever drifting.
+For twenty years, software communicated via APIs. Then AI agents arrived. The industry's response was simply to expose more endpoints (MCP). But an agent doesn't understand your application; it only sees a list of disconnected tools. That is enough for a human, but not for an autonomous machine.
 
-SPARDA deletes that work:
+SPARDA analyzes your Express, FastAPI, or Next.js application, extracts its behavior, and compiles it into a **SPARDA Behavior Graph (SBG)**. 
+
+This graph acts as a local, deterministic runtime that powers:
+* **MCP Server Integration**: Exposing your endpoints to AI clients dynamically.
+* **SPARDA Twin**: An executable, offline simulation clone of your backend for safe agent testing.
+* **SPARDA Immune**: Real-time graph-based anomaly defense, latency alerts, and auto-quarantine.
+* **SPARDA Evolution**: Statically inferred grammar mapping and in-memory workflow optimization.
+
+All executed 100% locally, with zero runtime dependencies and zero cloud connection.
 
 ```bash
-npx sparda-mcp init   # scan your Express/FastAPI app, inject the MCP router — 3 minutes
-npx sparda-mcp dev    # connect Claude Desktop / Claude Code. Done.
+npx sparda-mcp init   # Scan your app, compile the UBG, inject the SPARDA Runtime
+npx sparda-mcp dev    # Connect Claude Desktop / Cursor over stdio
 ```
 
-No OpenAPI spec. No account. No API key. No server to host.
+No OpenAPI spec to write. No cloud account. No API key. No server to host.
+Exposing raw APIs to AI is the old way. SPARDA compiles the whole system's behavior.
 
 ## Quickstart
 
