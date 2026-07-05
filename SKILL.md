@@ -1,40 +1,30 @@
 ---
 name: sparda-mcp
 description: >-
-  Drive a SPARDA-generated MCP server to its full potential. Use this whenever
-  you are connected to an MCP server built by SPARDA (sparda-mcp) — recognizable
-  by the tools `sparda_get_context`, `sparda_info`, `sparda_confirm`, or composite
-  tools labelled "[Labs circuit]". It teaches the call-context-first workflow, how
-  to exploit the response-recycling flywheel, the circuit-breaker, crystallized
-  circuits and adaptive immunity, and the mandatory two-phase confirm protocol for
-  write tools. Reach for it before calling raw endpoints, before any write, or when
-  a tool returns 202 (awaiting confirmation) or 503 (quarantined).
+  Drive a SPARDA compiled Behavior Runtime to its full potential. Use this whenever
+  you are connected to a backend running the SPARDA Runtime (compiled into a SPARDA
+  Behavior Graph - SBG) — recognizable by the tools `sparda_get_context`, `sparda_info`,
+  `sparda_confirm`, or composite tools. It teaches the graph-context-first workflow,
+  how to exploit the response-recycling flywheel, the circuit-breaker, crystallized
+  circuits, offline Twin simulations, and the two-phase confirm protocol for writes.
 ---
 
-# Driving a SPARDA MCP server
+# Driving a SPARDA Behavior Runtime
 
-A SPARDA server is **not** a flat list of HTTP endpoints. SPARDA injected a live
-`/mcp` router *inside a real running app*, so its tools are that app's actual
-routes — wrapped in an intelligence layer that makes repeated use **cheaper** (it
-recycles stable answers from memory) and **safer** (it quarantines failing tools
-and gates writes behind human confirmation). Used naively it's just an API. Used
-well, it gets faster and safer the more you call it. This skill is how to use it
-well.
+A SPARDA server is driven by a compiled **SPARDA Behavior Graph (SBG)**. Instead of exposing raw, disconnected endpoints, SPARDA has compiled the host application's states, transitions, permissions, and side-effects into a deterministic behavioral model. The local **SPARDA Runtime** dynamically executes this graph inside the live host process, powering the MCP interface, the Twin simulation clone, and the Immune system offline.
 
 ## Rule 0 — call `sparda_get_context` first, every session
 
-Before anything else, call **`sparda_get_context`** (no params). It returns the
-*live* picture, so you never guess the surface:
+Before anything else, call **`sparda_get_context`** (no params). It returns the *live* state of the SPARDA Behavior Graph:
 
-- the enabled tools + their descriptions, and SPARDA's suggested **workflows**;
-- `runtime` — current `/mcp/stats` (per-tool call/error counts, tool "purity",
-  quarantine state);
-- the last ~20 **events** (errors, latency anomalies, immune diagnoses);
-- **immune memory** (known failure signatures + cached fixes);
-- **recycling** stats (how many calls were served from memory);
-- a `behavior` snapshot (which response fields are stable).
+- the active routes/tools, workflows, and type-propagated schemas;
+- `runtime` — current stats (calls, errors, quarantine states, Twin mode active);
+- the last ~20 **events** (errors, latency anomalies, immune alerts);
+- **immune memory** (cached antibodies and error diagnoses);
+- **recycling** metrics (flywheel memory hit rates);
+- a `behavior` snapshot of stable variables.
 
-Read it before acting. `sparda_info` gives a lighter summary if you only need counts.
+Read it to orient yourself inside the graph. `sparda_info` gives a lighter summary of counts.
 
 ## The tools you'll see
 
@@ -146,6 +136,7 @@ Writes are **disabled by default**. The protocol is not optional:
 - **General health** → `sparda doctor` checks Node version, framework detection,
   manifest validity, the semantic/immune cache, host reachability, and quarantine;
   it exits non-zero so it can gate CI.
+- **Formal Deployment Proof** → `sparda apocalypse` reads the compiled graph (`ubg.json`) and proves five correctness obligations: catches unguarded mutations, non-atomic aggregate writes, unvalidated writes to constrained tables, uncompensated observable effects, and aggregate root bypasses. Run `sparda apocalypse --save-baseline` to store the reference graph; subsequent runs diff against the baseline to catch dropped guards, dropped SQL invariants, or grown blast radiuses.
 - **Clone learning / Transfer sémantique** → Use `sparda seed export` to package your app's descriptions, workflows, and antibodies. Then `sparda seed import --germinate` in another clone to import the structure and germinate simulated twin instances.
 - **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 

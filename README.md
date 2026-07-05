@@ -84,6 +84,30 @@ To output raw JSON for integration:
 npx sparda-mcp report --json
 ```
 
+## Deployment Proof: Apocalypse
+
+SPARDA's Behavior Graph is a formal model of your system. Instead of waiting for runtime failures or relying on static analysis vibes, you can statically prove the safety of your backend before any deployment:
+```bash
+npx sparda-mcp apocalypse
+```
+This command reads the compiled `.sparda/ubg.json` (with zero source code parsing at runtime) and discharges five static correctness obligations:
+* **Unguarded Mutation (Critical)**: Flags any mutation path that does not cross a security `guard`.
+* **Non-Atomic Aggregate Write (High)**: Flags when an API writes to multiple tables of the same Consistency Domain (Aggregate) outside a single transaction scope.
+* **Unvalidated Constrained Write (Medium)**: Flags writes into columns with SQL invariants (CHECK, NOT NULL, UNIQUE) without prior validation (Zod/Pydantic).
+* **Irreversible Observable Effect (High)**: Flags out-of-process actions (like Stripe charges) that happen alongside state writes without a structural compensation path (like a catch-refund).
+* **Aggregate Member Bypass (Info)**: Flags mutating a member table directly without routing through the aggregate root.
+
+To save your current graph as a safe baseline:
+```bash
+npx sparda-mcp apocalypse --save-baseline
+```
+Subsequent runs will diff the candidate graph against this baseline to detect regression vectors:
+* Deletion of any security `guard` (Critical).
+* Deletion of a database SQL invariant (High).
+* API blast radius expansion (Medium).
+
+If any Critical or High finding is found, `apocalypse` exits with a non-zero code to block your CI pipeline.
+
 To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte.
 
 ## The promise — every word is backed by a test in CI
