@@ -137,6 +137,10 @@ Writes are **disabled by default**. The protocol is not optional:
   manifest validity, the semantic/immune cache, host reachability, and quarantine;
   it exits non-zero so it can gate CI.
 - **Formal Deployment Proof** → `sparda apocalypse` reads the compiled graph (`ubg.json`) and proves five correctness obligations: catches unguarded mutations, non-atomic aggregate writes, unvalidated writes to constrained tables, uncompensated observable effects, and aggregate root bypasses. Run `sparda apocalypse --save-baseline` to store the reference graph; subsequent runs diff against the baseline to catch dropped guards, dropped SQL invariants, or grown blast radiuses.
+- **OpenAPI Ingestion** → Run `sparda ubg --openapi <openapi_spec.json_or_yaml>` to compile any non-JS/Python backend (Go, Java, Rails, Laravel, .NET) into a SPARDA Behavior Graph by mapping security schemes into guards and request/response structures.
+- **Executing the Graph (No code mock)** → Run `sparda mirror` to host a mock HTTP simulation server directly from `ubg.json` without any backend code. Enforces authentication guards, returns typed responses, and acts as a contract sandbox.
+- **Exporting OpenAPI 3.1 Spec** → Run `sparda openapi` to generate a valid, deterministic OpenAPI 3.1 spec dynamically from the compiled behavior graph.
+- **Self-Verification** → Run `sparda verify` to test the compiler's own invariants (byte-determinism, soundness, and spec round-trip) to guarantee trust.
 - **Clone learning / Transfer sémantique** → Use `sparda seed export` to package your app's descriptions, workflows, and antibodies. Then `sparda seed import --germinate` in another clone to import the structure and germinate simulated twin instances.
 - **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 
