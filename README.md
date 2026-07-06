@@ -6,6 +6,10 @@
 
 <br/>
 
+> 🇫🇷 **Français** : Pour comprendre SPARDA en 10 minutes (douleur, architecture, vision), lisez le document du fondateur : [SPARDA-EXPLIQUE.md](docs/SPARDA-EXPLIQUE.md).
+
+---
+
 **Compile your backend into a deterministic behavior runtime.**
 
 For twenty years, software communicated via APIs. Then AI agents arrived. The industry's response was simply to expose more endpoints (MCP). But an agent doesn't understand your application; it only sees a list of disconnected tools. That is enough for a human, but not for an autonomous machine.
