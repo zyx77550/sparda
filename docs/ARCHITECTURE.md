@@ -1,5 +1,34 @@
 # Architecture
 
+## The behavior compiler (the core — `src/ubg/`)
+
+At the center is a compiler. It lowers a backend into the **Unified Behavior
+Graph (UBG)** — a language-agnostic IR specified by [SBIR](SBIR_SPEC_V1.1.md) —
+and every product command is a pass over that graph. This is the layer the
+"two pipelines" below (the MCP path) are one consumer of.
+
+```
+detect ─► extract (facts) ─► translate ─► link ─► optimize (8 passes) ─► serialize
+ stack     express/nextjs/     facts →     effects   DeadPath · StateMin ·   .sparda/
+           fastapi/openapi     UBG graph   → state   TypeProp · EffectAlgebra  ubg.json
+           + .sql/.prisma                   (SQL/    · ConsistencyDomains ·   (canonical,
+                                            Prisma)  Capabilities · Lifetimes  content-hashed)
+                                                     · StateMachines
+```
+
+- **Extractors** (`src/ubg/express.js`, `nextjs.js`, `fastapi_extract.py`,
+  `openapi.js`) lower syntax to framework-neutral *facts*; `translate.js` builds
+  the graph; `link.js` wires db effects to state nodes; `pipeline.js` runs the
+  eight passes; `serialize.js` writes the canonical, hash-identified artifact.
+- **State layer** comes from `sql.js` (DDL) and `prisma.js` (schema.prisma,
+  enums → state machines) — declared truth, so invariants/aggregates fill in.
+- **Consumers** (each a pass, none re-parses source): `apocalypse.js` (deploy
+  proof + SARIF), `mirror.js` (execute the graph over HTTP), `openapi-emit.js`
+  (graph → OpenAPI 3.1), `verify.js` (prove the compiler laws), and the flight
+  engine (`src/flight/`: record/replay + `heal.js` closed-loop gate).
+
+The MCP runtime below is the *interactive* output of the same understanding.
+
 ## The two pipelines
 
 ### `init` — static pipeline (runs once, deterministic)
@@ -165,5 +194,8 @@ a marked `post-commit` git hook running `sparda-mcp sync --quiet`.
 | `src/commands/twin.js` | twin command — learns exemplars and serves mock backend (R3.2) |
 | `src/commands/grammar.js` | grammar command — infers sequence and parameter relationships (R3.3) |
 | `src/commands/evolve.js` | evolve command — Darwinian trials of candidate circuits against the twin (R3.4) |
+| **`src/ubg/`** | the behavior compiler — extractors, translator, linker, 8 passes, serializer, `apocalypse.js`, `mirror.js`, `openapi.js`/`openapi-emit.js`, `verify.js` |
+| **`src/flight/`** | Timeless engine — `box.js` (record/replay taps), `replayer.js`, `heal.js` (closed-loop gate) |
+| **`src/commands/{ubg,apocalypse,timeless,mirror,openapi,verify,heal}.js`** | the compiler-command CLIs (passes over `ubg.json`) |
 | `templates/*.txt` | the routers, placeholder-rendered (never edited in target apps) |
-| `tests/sparda.test.js` + `tests/fixtures/` | the whole suite (see TESTING.md) |
+| `tests/*.test.js` + `tests/fixtures/` | the whole suite — 389 Vitest + router self-test (see TESTING.md) |

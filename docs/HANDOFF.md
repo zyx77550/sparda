@@ -3,9 +3,9 @@
 > Living document. Describes the **present**. Rewritten at the end of every
 > session that changes anything (history goes to `sessions/`, not here).
 
-**Last updated:** 2026-07-06 (c) · **OpenAPI, Mirror & Verify SHIPPED & v0.12.0 LIVE.** Includes capabilities, lifetimes, SQL/Prisma state machines, Timeless Flight Recorder, OpenAPI ingestion/emission, Mirror VM simulation, and compiler verification (verify).
-**Version:** 0.12.0 live (published on npm + registry).
-**Branch state:** main branch. Tests **384/384 Vitest + 10/10 router self-test** green; ESLint 0 errors, Prettier-clean.
+**Last updated:** 2026-07-06 (d) · **v0.13.1 LIVE — the closed loop is complete.** SPARDA is a behavior compiler: the UBG (SBIR spec) is the IR, and seven commands are passes over it — `ubg` (compile: Express/FastAPI/Next.js + any stack via OpenAPI, SQL **and Prisma** state layer), `apocalypse` (prove the deploy; SARIF + GitHub Action), `timeless` (record/replay a production request; deterministic sampling + GDPR redaction), `heal` (bug → fix → *proven* correct + zero regression), `mirror` (serve the graph over HTTP, no framework), `openapi` (emit an OpenAPI 3.1 spec from the graph), `verify` (prove the compiler's own laws). Corpus runner (`tools/corpus`) compiles real OSS backends.
+**Version:** 0.13.1 live (published on npm + registry).
+**Branch state:** main branch. Tests **389/389 Vitest + 10/10 router self-test** green; ESLint 0 errors, Prettier-clean; coverage 71.4% statements.
 
 ## ✅ Done (works, tested)
 

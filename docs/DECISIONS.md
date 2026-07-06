@@ -321,3 +321,159 @@ ephemeral handshake).
 **Costs accepted.** The Next.js template loses its "zero imports" purity
 (node:fs/node:path builtins — still zero dependencies); routers read one
 small file once at module load (off the request path).
+
+## ADR-023 — SBIR: a deterministic IR, separate from the products (v0.9–v0.13)
+
+**Problem.** Every new capability (deploy prover, time-travel debugger, mock
+server) re-parsed the codebase its own way. That path multiplies parsers,
+diverges on edge cases, and makes "deterministic" unprovable across tools.
+
+**Decision — compile once to one IR; every tool is a pass over it.** The
+**Unified Behavior Graph (UBG)**, specified by **SBIR** ([SBIR_SPEC](SBIR_SPEC_V1.1.md)),
+is the single intermediate representation: five node kinds (`entrypoint`,
+`logic`, `state`, `effect`, `guard`) and six edge kinds (`control_flow`,
+`data_flow`, `mutation`, `gate`, `ownership`, `compensation`). Framework
+extractors (Express/FastAPI/Next.js) lower syntax to *facts*; a translator
+lowers facts to the graph; passes refine it. Identity is content: node ids are
+derived from source location, the artifact is canonicalized (sorted nodes,
+edges, keys), and `sourceHash` is a sha256 of the inputs — same tree, same
+bytes (SBIR §3.3). Additive-compatibility is a contract: v1.1/v1.2 only *add*
+metadata and edge kinds; a v1 reader stays correct on a v1.2 artifact.
+
+**Why not the alternatives.** A parser-per-product is what everyone else does
+and is exactly the divergence we refuse. A database/AST dump is not
+language-agnostic — "Express" would leak into every consumer. Emitting to an
+existing IR (LLVM, WASM) throws away the web-semantic layer (routes, guards,
+tables) that is the whole point.
+
+**Costs accepted.** A translation layer to maintain; static analysis
+over-approximates (unresolved handlers become blind nodes) — but everything the
+static eye cannot see goes to a `skipped[]` report with a reason, never guessed.
+
+## ADR-024 — Apocalypse: proof obligations, structural reachability (v1.1)
+
+**Problem.** "Is this safe to deploy?" is usually answered by tests (absence of
+evidence) or static-analysis vibes. We wanted a *proof* a project can run on
+its own graph.
+
+**Decision — discharge named obligations over the UBG, fail-closed in CI.**
+`apocalypse` reads `ubg.json` (zero source parsing at runtime) and proves five
+static obligations (unguarded mutation, non-atomic aggregate write, unvalidated
+constrained write, irreversible observable effect, aggregate-member bypass) plus
+baseline-diff obligations (guard removed, invariant dropped, blast radius grew).
+Each finding is a counterexample path, never a heuristic. Exit 1 on any
+critical/high; SARIF output feeds GitHub code scanning; a composite Action ships
+it. The **Law of Completeness is stated in its decidable form**: a node is dead
+only if no path of edges from any entrypoint reaches it (structural
+reachability — a sound over-approximation). Semantic unreachability is
+undecidable (Rice); a spec demanding it demands a non-existent compiler.
+
+**Why not the alternatives.** Runtime enforcement (a WAF, a policy engine) pays
+per request and only catches what executes. Symbolic execution is unsound at
+scale and non-deterministic. Both break the "host never pays / same bytes"
+contract.
+
+**Costs accepted.** The prover is exactly as strong as what the code and DDL
+*declare* — it proves the absence of whole bug classes, not of all bugs. Stated
+in the command's honesty banner, not hidden.
+
+## ADR-025 — Timeless: effect-derived record/replay, fail-loud (v0.10)
+
+**Problem.** Reproducing a production bug exactly is the debugging holy grail
+everyone abandoned: instruction-level recorders (huge overhead, Linux-only,
+unusable in prod) are *blind* to where nondeterminism lives.
+
+**Decision — the compiler already knows where nondeterminism is: the `effect`
+nodes.** A backend is deterministic *between* its effects, so we tap only those
+(db, http, clock, random, uuid) — a few KB per request — and replay the request
+against the real code with each tap virtualized from the recording. Replay is
+**fail-loud**: strict FIFO per kind, label-checked; any structural mismatch is a
+`FlightDivergence`, never a silent fuzzy match. Flight identity is content
+(sha256). Production hygiene is built in: deterministic sampling (a counter,
+never `Math.random` — Law 3 applies to the recorder too) and GDPR redaction of
+sensitive body keys *before* the flight touches disk.
+
+**Why not the alternatives.** Blind syscall/instruction recording carries
+prohibitive overhead and has no semantic tap list. Tracing (OpenTelemetry) gives
+*traces*, not *re-execution*: you see the failure, you cannot re-run it.
+
+**Costs accepted.** Replay is per-request; concurrent-race capture is out of
+v1 scope — stated in the README, not hidden. The recorder must be mounted (two
+lines) — explicit beats magic.
+
+## ADR-026 — OpenAPI is an adapter, not our format (v0.11)
+
+**Problem.** "Only Express and FastAPI" caps the addressable market; but writing
+a parser per language (Go, Java, Rails, .NET) is the parser-sprawl ADR-023
+rejects.
+
+**Decision — ingest AND emit the standard the industry already agreed on, but
+own the graph.** `ubg --openapi` lowers a spec into the same route facts the AST
+extractors produce (security schemes → guards, response schemas → typed returns,
+declared bodies → validated input) — any backend with a spec compiles.
+`openapi` inverts it: the graph *emits* an OpenAPI 3.1 document, richer than most
+hand-written specs. OpenAPI is the on-ramp; **SBIR is the format**. We sit
+*above* OpenAPI in the stack (LLVM emits assembly; nobody calls LLVM an
+assembler), so a spec-only backend still gets apocalypse-diff and mirror, and
+upgrades in place the day a native lowering lands.
+
+**Why not the alternatives.** Making OpenAPI our native format caps us at what a
+spec can say (no effects, no transactions, no state machines — the moat).
+Bundling a YAML parser adds a runtime dep (hard rule #8); we refuse to
+half-parse YAML and point users at a one-line convert instead.
+
+**Costs accepted.** A spec declares less than code — effect/state/transaction
+layers stay absent unless paired with `.sql`/`schema.prisma`. Said plainly in
+`openapi.js`.
+
+## ADR-027 — Mirror executes the graph; verify proves the compiler's laws (v0.11–v0.12)
+
+**Problem.** A graph that only describes is a diagram format. And a compiler that
+merely *asserts* "deterministic/sound" in a README is marketing.
+
+**Decision — make both executable.** `mirror` boots an HTTP server from
+`ubg.json` alone — no framework, no source: guards actually deny (401),
+responses render the compiled return schemas, unknown paths 404 with the route
+table. It is the existence proof that SBIR is an *executable* IR (front-ends
+develop against a backend that isn't deployed — or written). `verify` runs the
+SBIR compiler laws mechanically on any input (two compiles byte-identical;
+canonical form a fixed point; no dangling edges; every surviving node
+entrypoint-reachable; OpenAPI emit→ingest preserves the entrypoint set). A claim
+a project can check on its own inputs is a promise; a claim in a README is
+marketing.
+
+**Why not the alternatives.** Shipping a static mock throws away the guard/type
+semantics the graph carries. Trusting the laws by code review alone is how the
+shared-guard reachability bug (which `verify` caught on first run) would have
+shipped.
+
+**Costs accepted.** The mirror serves *declared* behavior — typed placeholders,
+never invented business values (every response carries `x-sparda-mirror: true`).
+
+## ADR-028 — Heal: the gate is the product, the agent is replaceable (v0.13)
+
+**Problem.** An AI that writes plausible code is not the same as a system that
+*proves* the code is correct — the trust layer the agent era is missing. And
+Timeless's exported test asserts the PAST (the bug); healing needs the opposite.
+
+**Decision — SPARDA orchestrates and judges; whoever writes the fix, the machine
+gates it.** `heal <id>` builds a fix brief *from the graph* (handler file:line,
+capabilities that must not grow, guards that must not be removed). The **gate**
+is the product, and it proves three axes at once: (1) **behavior** — a *lenient*
+replay of the recorded flight (same deterministic taps) meets the EXPECTATION,
+not the recorded bug; a fix may reformulate a query (the tap is relabeled,
+reported) but may not change effect order or kinds; (2) **compiler laws** —
+`verify` still passes; (3) **no regression** — `apocalypse` diff against the
+frozen pre-fix graph finds no new critical/high and no removed guard. Without an
+explicit `--expect`, heal accepts exactly one honest default (a 5xx that no
+longer 5xxs) and refuses to guess intent otherwise.
+
+**Why not the alternatives.** Trusting the AI's own "I fixed it" is the failure
+mode. Reusing the strict flight test rejects every legitimate fix (it asserts
+the bug). A fuzzy behavior match would let a fix that silently drops a guard
+pass — the gate must be honest in both directions (an unfixed bug keeps it
+closed, exit 1).
+
+**Costs accepted.** Heal replays one flight; multi-request healing and the
+agent-in-the-loop runner (`--agent`) are thin orchestration over this gate, kept
+optional so the proof — not the model — is the product.

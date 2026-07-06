@@ -2,8 +2,8 @@
 name: sparda-mcp
 description: >-
   Drive a SPARDA compiled Behavior Runtime to its full potential. Use this whenever
-  you are connected to a backend running the SPARDA Runtime (compiled into a SPARDA
-  Behavior Graph - SBG) — recognizable by the tools `sparda_get_context`, `sparda_info`,
+  you are connected to a backend running the SPARDA Runtime (compiled into a Unified
+  Behavior Graph - UBG) — recognizable by the tools `sparda_get_context`, `sparda_info`,
   `sparda_confirm`, or composite tools. It teaches the graph-context-first workflow,
   how to exploit the response-recycling flywheel, the circuit-breaker, crystallized
   circuits, offline Twin simulations, and the two-phase confirm protocol for writes.
@@ -11,7 +11,9 @@ description: >-
 
 # Driving a SPARDA Behavior Runtime
 
-A SPARDA server is driven by a compiled **SPARDA Behavior Graph (SBG)**. Instead of exposing raw, disconnected endpoints, SPARDA has compiled the host application's states, transitions, permissions, and side-effects into a deterministic behavioral model. The local **SPARDA Runtime** dynamically executes this graph inside the live host process, powering the MCP interface, the Twin simulation clone, and the Immune system offline.
+A SPARDA server is driven by a compiled **Unified Behavior Graph (UBG)** — the graph SPARDA's compiler produces from the host application's states, transitions, permissions, and side-effects, serialized under the **SBIR** specification. Instead of exposing raw, disconnected endpoints, SPARDA compiles the app into a deterministic behavioral model. The local **SPARDA Runtime** dynamically executes this graph inside the live host process, powering the MCP interface, the Twin simulation clone, and the Immune system offline.
+
+> This skill covers the **runtime** (driving a live MCP server). The same graph also powers dev-time compiler commands you run in the app's repo — `sparda ubg` (compile), `apocalypse` (prove the deploy), `timeless` (record/replay a request), `heal` (prove a fix), `mirror` (serve the graph), `verify` (prove the compiler's laws). Those are CLI, not MCP tools; see the project README.
 
 ## Rule 0 — call `sparda_get_context` first, every session
 
@@ -137,10 +139,12 @@ Writes are **disabled by default**. The protocol is not optional:
   manifest validity, the semantic/immune cache, host reachability, and quarantine;
   it exits non-zero so it can gate CI.
 - **Formal Deployment Proof** → `sparda apocalypse` reads the compiled graph (`ubg.json`) and proves five correctness obligations: catches unguarded mutations, non-atomic aggregate writes, unvalidated writes to constrained tables, uncompensated observable effects, and aggregate root bypasses. Run `sparda apocalypse --save-baseline` to store the reference graph; subsequent runs diff against the baseline to catch dropped guards, dropped SQL invariants, or grown blast radiuses.
-- **OpenAPI Ingestion** → Run `sparda ubg --openapi <openapi_spec.json_or_yaml>` to compile any non-JS/Python backend (Go, Java, Rails, Laravel, .NET) into a SPARDA Behavior Graph by mapping security schemes into guards and request/response structures.
+- **OpenAPI Ingestion** → Run `sparda ubg --openapi <openapi_spec.json>` to compile any non-JS/Python backend (Go, Java, Rails, Laravel, .NET) into a Unified Behavior Graph by mapping security schemes into guards and request/response structures. (JSON specs only — convert YAML once with `npx -y js-yaml spec.yaml > spec.json`.)
 - **Executing the Graph (No code mock)** → Run `sparda mirror` to host a mock HTTP simulation server directly from `ubg.json` without any backend code. Enforces authentication guards, returns typed responses, and acts as a contract sandbox.
 - **Exporting OpenAPI 3.1 Spec** → Run `sparda openapi` to generate a valid, deterministic OpenAPI 3.1 spec dynamically from the compiled behavior graph.
 - **Self-Verification** → Run `sparda verify` to test the compiler's own invariants (byte-determinism, soundness, and spec round-trip) to guarantee trust.
+- **Time-Travel Debugging** → `sparda timeless` records a production request's nondeterminism (db, http, clock, random, uuid) and replays it byte-identically against current code. `sparda timeless replay <id>` re-flies it; `sparda timeless export <id>` turns the bug into a vitest test. Recording is opt-in in the app (deterministic sampling + GDPR redaction built in).
+- **Self-Healing, Proven** → `sparda heal <id>` builds a fix brief from the graph, then `--check --expect '{"status":200}'` gates a candidate fix on three axes at once: the recorded flight now returns the expected response (not the bug), `verify` still passes, and `apocalypse` finds no new critical/high and no removed guard. The gate is honest both ways — an unfixed bug keeps it closed (exit 1).
 - **Clone learning / Transfer sémantique** → Use `sparda seed export` to package your app's descriptions, workflows, and antibodies. Then `sparda seed import --germinate` in another clone to import the structure and germinate simulated twin instances.
 - **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 

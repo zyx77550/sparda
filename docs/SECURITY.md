@@ -27,17 +27,21 @@ surfaces, in order of severity:
 | Unsafe writes | write tools `enabled: false` by default; per-write elicitation confirm; proof-after-write read-back | generators + `stdio.js` |
 | Error-loop hammering | quarantine: 3 consecutive 5xx → 503 + cooldown, half-open probe | router templates (v0.3) |
 | Local access | `x-sparda-key` (UUID) required on every router endpoint; 401 otherwise | router templates |
+| Key at rest | ADR-022: no plaintext key in `sparda.json` or generated routes — resolved at runtime from `SPARDA_LOCAL_KEY` (env) → gitignored `.sparda/key`; **fail-closed 503** if neither is found, so an accidental commit/deploy of `/mcp` routes is safe by construction | `generator/*`, `manifest.js` |
 | Self-reference loops | `/mcp*` paths blocked at parse time *and* invoke time | parser + router |
 | Resource abuse | 30s timeouts, 8KB output truncation, events ring buffer (100), antibodies cap (50), stats are O(tools) | router + bridge |
 | Host stability | `uncaughtExceptionMonitor` (observe-only — never alters crash behavior); injection is backed up, re-parsed, reversible byte-for-byte | templates + generators |
 | Supply chain | 4 runtime deps, exact-pinned | `package.json` |
 
-## Known gaps (v0.3, honest)
+## Known gaps (honest)
 
-- **`localKey` is plaintext in `sparda.json`**, which users may commit. It
-  only guards a loopback interface, but treat it as weak auth, not secret
-  material. Mitigation candidates (key in `.sparda/` + gitignore, or env)
-  → needs an ADR before changing (carry-over and bridge handshake depend on it).
+- **Key comparison is `!==`, not constant-time.** The key guards a loopback
+  interface (not an internet-exposed service), so a timing side-channel is
+  low-impact — but it is a deviation from best practice, stated not hidden.
+- **The `x-sparda-key` still guards weak-auth surface, not secret material.**
+  Since ADR-022 the key is never at rest in a committable file and fails
+  closed when absent (see Defenses), but treat the loopback interface as
+  local-trust, not a hardened boundary.
 - **No per-tool/per-person access policies** — planned for a future paid tier.
 - **No signed audit log yet** (planned for a paid tier) — until then,
   actions are observable only via `/mcp/events` and client logs.

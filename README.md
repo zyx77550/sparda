@@ -10,27 +10,33 @@
 
 ---
 
-**Compile your backend into a deterministic behavior runtime.**
+**A compiler for backend behavior. The LLVM of web applications.**
 
-For twenty years, software communicated via APIs. Then AI agents arrived. The industry's response was simply to expose more endpoints (MCP). But an agent doesn't understand your application; it only sees a list of disconnected tools. That is enough for a human, but not for an autonomous machine.
+For twenty years software communicated through APIs. Then AI agents arrived, and the industry's answer was to expose more endpoints (MCP). But an agent doesn't *understand* an application from a list of disconnected tools — and neither can a linter, a debugger, or a deploy gate reason about a codebase they only read line by line.
 
-SPARDA analyzes your Express, FastAPI, or Next.js application, extracts its behavior, and compiles it into a **SPARDA Behavior Graph (SBG)**. 
+SPARDA compiles your backend — routes, database queries, state mutations, permissions, side-effects — into one language-agnostic, mathematical graph: the **Unified Behavior Graph (UBG)**, serialized as `.sparda/ubg.json` under the **SBIR** specification ([SPARDA Behavior IR](docs/SBIR_SPEC_V1.1.md)). Compile once; then every tool is a simple pass over that graph.
 
-This graph acts as a local, deterministic runtime that powers:
-* **MCP Server Integration**: Exposing your endpoints to AI clients dynamically.
-* **SPARDA Twin**: An executable, offline simulation clone of your backend for safe agent testing.
-* **SPARDA Immune**: Real-time graph-based anomaly defense, latency alerts, and auto-quarantine.
-* **SPARDA Evolution**: Statically inferred grammar mapping and in-memory workflow optimization.
+**What the graph unlocks — 100% local, deterministic, zero runtime dependencies, zero API key:**
 
-All executed 100% locally, with zero runtime dependencies and zero cloud connection.
+| Command | What it does |
+|---|---|
+| **`ubg`** | Compile the codebase to its behavior graph (Express · FastAPI · Next.js natively; **any** stack via OpenAPI) |
+| **`apocalypse`** | *Prove the deploy* — no guard, invariant, transaction or aggregate boundary can be broken (SARIF + CI gate) |
+| **`timeless`** | *Time-travel* — record a production request, replay it byte-identically, export the bug as a test |
+| **`heal`** | *Self-heal, proven* — bug → fix → the machine proves the fix is correct and breaks nothing |
+| **`mirror`** | *Execute the graph* — serve the compiled behavior over HTTP with no framework and no source |
+| **`openapi`** | *Emit the standard* — produce an OpenAPI 3.1 spec from the graph |
+| **`verify`** | *Prove the compiler's own laws* (determinism, soundness, round-trip) on your app |
+| **`init` / `dev`** | Expose the graph to AI clients as a live MCP server (+ Twin, Immune, Evolution runtime layer) |
 
 ```bash
-npx sparda-mcp init   # Scan your app, compile the UBG, inject the SPARDA Runtime
-npx sparda-mcp dev    # Connect Claude Desktop / Cursor over stdio
+npx sparda-mcp ubg          # compile your backend → .sparda/ubg.json
+npx sparda-mcp apocalypse   # prove the current tree is safe to deploy
 ```
 
-No OpenAPI spec to write. No cloud account. No API key. No server to host.
-Exposing raw APIs to AI is the old way. SPARDA compiles the whole system's behavior.
+No cloud account. No server to host. Exposing raw APIs to AI is the old way — SPARDA compiles the whole system's behavior, then proves, replays, heals, and serves it.
+
+**Nomenclature:** **SBIR** is the specification (the format, like "JSON"); **UBG** is the compiled graph itself (the artifact, `ubg.json`). The MCP server is one *output* of the graph, not the product.
 
 ## Quickstart
 
@@ -68,7 +74,7 @@ To see SPARDA in action instantly without modifying your codebase:
 ```bash
 npx sparda-mcp demo
 ```
-This runs the entire lifecycle (detect → parse → generate → inject → remove) on a bundled demo app in a temporary folder, illustrating all six guarantees in 10 seconds.
+This runs the entire MCP lifecycle (detect → parse → generate → inject → remove) on a bundled demo app in a temporary folder, in about 10 seconds. For the compiler itself, run `npx sparda-mcp ubg` then `apocalypse` on any Express/FastAPI app.
 
 ## Black Box Report
 
@@ -138,6 +144,28 @@ const db = box.wrapClient(pgPool);           // your query client, tapped
 ```
 
 The closed loop nobody else has: **production bug → recorded flight → failing test → AI writes the fix → `apocalypse` proves the fix breaks no guard, invariant or transaction → deploy.** Replay is per-request (concurrent-race capture is out of scope for v1 — stated, not hidden).
+
+## Self-Healing, Proven: `sparda heal`
+
+The loop above, as **one gesture** — and the machine judges the fix, whoever wrote it:
+
+```bash
+npx sparda-mcp heal <flightId>                       # diagnose + write the fix brief
+# ...apply the fix (a human, or --agent "your-ai-cli")...
+npx sparda-mcp heal <flightId> --check --expect '{"status":404}'
+```
+
+The brief is built from the graph itself — it hands the fixer the handler's `file:line`, the capabilities the fix must not grow, and the guards it must not remove. Then the **gate** — the actual product — proves the fix on three axes at once:
+
+1. **Behavior** — lenient replay of the recorded flight (same deterministic inputs) now produces the *expected* response, not the recorded bug. The fix may reformulate a query (the tap is relabeled, allowed); it may **not** change the effect order or kinds.
+2. **Compiler laws** — `verify` still passes: the graph is still sound and deterministic.
+3. **No regression** — `apocalypse` diff against the frozen pre-fix graph: zero new critical/high findings, no guard removed, no blast radius grown.
+
+```
+✓ HEALED & PROVEN — same recorded inputs, correct output, zero law broken, zero protection lost. Ship it.
+```
+
+The gate is honest in both directions: an unfixed bug, or a "fix" that silently drops a guard, keeps it **closed** (exit 1). This is the difference between an AI that writes plausible code and a system that *proves* the code is correct — the trust layer the agent era is missing.
 
 ## Any Backend On Earth: OpenAPI Lowering
 
