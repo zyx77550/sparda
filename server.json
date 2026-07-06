@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
-  "description": "Turn any Express or FastAPI app into an MCP server in 3 minutes. Reversible and secure.",
+  "description": "Compile any backend into a deterministic behavior graph. Statically prove security, simulate APIs without code, and replay bugs locally.",
   "version": "0.12.0",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
