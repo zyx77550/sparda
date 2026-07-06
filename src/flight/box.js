@@ -29,6 +29,7 @@ export function createFlightBox() {
   const als = new AsyncLocalStorage();
   const originals = {};
   let armed = false;
+  let insideUUID = false;
 
   function arm() {
     if (armed) return;
@@ -40,7 +41,7 @@ export function createFlightBox() {
 
     Date.now = function spardaDateNow() {
       const store = als.getStore();
-      if (!store) return originals.dateNow();
+      if (!store || insideUUID) return originals.dateNow();
       if (store.mode === 'record') {
         const v = originals.dateNow();
         tapOut(store, 'time', 'Date.now', v);
@@ -51,7 +52,7 @@ export function createFlightBox() {
 
     Math.random = function spardaRandom() {
       const store = als.getStore();
-      if (!store) return originals.random();
+      if (!store || insideUUID) return originals.random();
       if (store.mode === 'record') {
         const v = originals.random();
         tapOut(store, 'random', 'Math.random', v);
@@ -67,9 +68,14 @@ export function createFlightBox() {
           const store = als.getStore();
           if (!store) return originals.randomUUID();
           if (store.mode === 'record') {
-            const v = originals.randomUUID();
-            tapOut(store, 'uuid', 'crypto.randomUUID', v);
-            return v;
+            insideUUID = true;
+            try {
+              const v = originals.randomUUID();
+              tapOut(store, 'uuid', 'crypto.randomUUID', v);
+              return v;
+            } finally {
+              insideUUID = false;
+            }
           }
           return takeTap(store, 'uuid', 'crypto.randomUUID');
         },
