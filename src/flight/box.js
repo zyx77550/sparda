@@ -30,6 +30,7 @@ export function createFlightBox() {
   const originals = {};
   let armed = false;
   let insideUUID = false;
+  let insideFetch = false;
 
   function arm() {
     if (armed) return;
@@ -41,9 +42,11 @@ export function createFlightBox() {
 
     Date.now = function spardaDateNow() {
       const store = als.getStore();
-      if (!store || insideUUID) return originals.dateNow();
+      if (!store || insideUUID || insideFetch) return originals.dateNow();
       if (store.mode === 'record') {
         const v = originals.dateNow();
+        const stack = new Error().stack;
+        console.error(`[SPARDA_DEBUG] recorded time tap at stack:\n${stack}`);
         tapOut(store, 'time', 'Date.now', v);
         return v;
       }
@@ -52,7 +55,7 @@ export function createFlightBox() {
 
     Math.random = function spardaRandom() {
       const store = als.getStore();
-      if (!store || insideUUID) return originals.random();
+      if (!store || insideUUID || insideFetch) return originals.random();
       if (store.mode === 'record') {
         const v = originals.random();
         tapOut(store, 'random', 'Math.random', v);
@@ -89,11 +92,16 @@ export function createFlightBox() {
       const method = (init?.method ?? 'GET').toUpperCase();
       const label = `${method} ${url}`;
       if (store.mode === 'record') {
-        const res = await originals.fetch(input, init);
-        const text = (await res.text()).slice(0, MAX_BODY_BYTES);
-        const headers = { 'content-type': res.headers.get('content-type') ?? '' };
-        tapOut(store, 'http', label, { status: res.status, headers, body: text });
-        return new Response(text, { status: res.status, headers });
+        insideFetch = true;
+        try {
+          const res = await originals.fetch(input, init);
+          const text = (await res.text()).slice(0, MAX_BODY_BYTES);
+          const headers = { 'content-type': res.headers.get('content-type') ?? '' };
+          tapOut(store, 'http', label, { status: res.status, headers, body: text });
+          return new Response(text, { status: res.status, headers });
+        } finally {
+          insideFetch = false;
+        }
       }
       const rec = takeTap(store, 'http', label);
       return new Response(rec.body, { status: rec.status, headers: rec.headers });
