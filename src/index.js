@@ -25,9 +25,12 @@ const opts = {
   app: flags.has('--app'),
   learn: flags.has('--learn'),
   germinate: flags.has('--germinate'),
+  check: flags.has('--check'),
   port: getOpt('port', null),
   out: getOpt('out', null),
   openapi: getOpt('openapi', null),
+  expect: getOpt('expect', null),
+  agent: getOpt('agent', null),
   cwd: process.cwd(),
 };
 
@@ -127,6 +130,11 @@ try {
       await runVerify(opts);
       break;
     }
+    case 'heal': {
+      const { runHeal } = await import('./commands/heal.js');
+      await runHeal(opts, rest);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -149,6 +157,8 @@ Usage:
   npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
   npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
   npx sparda-mcp verify    Prove the compiler's own laws (determinism, soundness, round-trip) on this app
+  npx sparda-mcp heal      Close the loop: <flightId> writes the fix brief; --check gates the fix
+                           (--expect '{"status":200}' states correctness; --agent "cmd" lets an AI try)
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)

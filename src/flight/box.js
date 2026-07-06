@@ -45,8 +45,6 @@ export function createFlightBox() {
       if (!store || insideUUID || insideFetch) return originals.dateNow();
       if (store.mode === 'record') {
         const v = originals.dateNow();
-        const stack = new Error().stack;
-        console.error(`[SPARDA_DEBUG] recorded time tap at stack:\n${stack}`);
         tapOut(store, 'time', 'Date.now', v);
         return v;
       }

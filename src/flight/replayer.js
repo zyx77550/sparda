@@ -8,8 +8,8 @@
 //   3. every tap was consumed (the code didn't silently skip a step).
 import http from 'node:http';
 
-export async function replayFlight(app, flight, box) {
-  const store = box.makeReplayStore(flight);
+export async function replayFlight(app, flight, box, { lenient = false } = {}) {
+  const store = box.makeReplayStore(flight, { lenient });
 
   const server = http.createServer((req, res) => {
     box.runWith(store, () => app(req, res));
@@ -51,6 +51,7 @@ export async function replayFlight(app, flight, box) {
     expected,
     actual,
     divergences: store.divergences,
+    relabels: store.relabels ?? [],
     leftover,
   };
 }
