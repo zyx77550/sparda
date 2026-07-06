@@ -7,7 +7,13 @@
 // context is untouched (AsyncLocalStorage decides), so arming the box in
 // production changes nothing for non-instrumented paths.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import crypto from 'node:crypto';
 import { saveFlight } from './format.js';
+
+if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
+  // Polyfill global crypto for Node 18 and test runner environments
+  globalThis.crypto = crypto;
+}
 
 const MAX_BODY_BYTES = 262144; // 256 KB per recorded http body — bounded flights
 
