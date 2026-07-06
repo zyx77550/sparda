@@ -3,9 +3,9 @@
 > Living document. Describes the **present**. Rewritten at the end of every
 > session that changes anything (history goes to `sessions/`, not here).
 
-**Last updated:** 2026-07-05 (c) · **SBIR v1.2 & Timeless SHIPPED & v0.10.1 LIVE.** Includes capabilities pass, lifetimes pass, SQL state machines, Timeless Flight Recorder, and the static behavior prover (Apocalypse).
-**Version:** 0.10.1 live (published on npm + registry).
-**Branch state:** main branch. Tests **357/357 Vitest + 10/10 router self-test** green; ESLint 0 errors, Prettier-clean.
+**Last updated:** 2026-07-06 (c) · **OpenAPI, Mirror & Verify SHIPPED & v0.12.0 LIVE.** Includes capabilities, lifetimes, SQL/Prisma state machines, Timeless Flight Recorder, OpenAPI ingestion/emission, Mirror VM simulation, and compiler verification (verify).
+**Version:** 0.12.0 live (published on npm + registry).
+**Branch state:** main branch. Tests **384/384 Vitest + 10/10 router self-test** green; ESLint 0 errors, Prettier-clean.
 
 ## ✅ Done (works, tested)
 
@@ -121,8 +121,9 @@
 - **v0.8.0 — Round 3 Complete (Twin, Grammar, Evolve, Germinate)** — Real mock server simulation (`twin --learn` / `twin`), syntax grammar graphs (`grammar`), genetic mutations (`evolve`), full germination (`seed import --germinate`). Published as `sparda-mcp@0.8.0` on npm + MCP Registry.
 - **v0.8.1 — ADR-022 localKey security backport** — Restricts secret leak by removing the `localKey` from the generated `sparda.json` manifest. It is written dynamically to `.sparda/key` (local, gitignored) and resolved dynamically at runtime (env -> file -> fail-closed 503). Published as `sparda-mcp@0.8.1` on npm + MCP Registry.
 - **v0.9.0 — Rebranding & UBG Compiler** — Pivot from generator wrapper to Unified Behavior Graph (UBG/SBIR) compiler. Added passes `DeadPathElimination`, `StateMinimization` and `TypePropagation`. Integrated a static security deployment prover `sparda apocalypse`. Published as `sparda-mcp@0.9.0`.
-- **v0.10.0 — SBIR v1.2 & Timeless Flight Recorder** — Infers capabilities, SQL entity lifetimes (CRUD mapping), and DDL state machines statics. Added `sparda timeless` (FlightBox recorder & replay middleware using AsyncLocalStorage, exporting strict FIFO tap logs to Vitest test cases). Published as `sparda-mcp@0.10.0`.
 - **v0.10.1 — FlightBox Singleton & CI Audit Fixes** — Resolved critical FlightBox instantiation duplicate singleton bug, fixed replay middleware overlap with live recording store, added Python-missing guards to Vitest runner, and fixed router-selftest ADR-022 integrations. Published as `sparda-mcp@0.10.1`.
+- **v0.11.0 — Prisma State Layer & GitHub Action Integration** — Compiles `schema.prisma` files directly, infers enums as state machines, maps relations, and integrates a GitHub Action to output SARIF reports. Published as `sparda-mcp@0.11.0`.
+- **v0.12.0 — OpenAPI Ingestion/Emission, Mirror VM & Verify** — Ingests external API specs (`ubg --openapi`), hosts mock simulated endpoints directly from the graph (`mirror`), generates OpenAPI 3.1 specifications (`openapi`), and verifies compiler correctness invariants (`verify`). Published as `sparda-mcp@0.12.0`.
 
 
 ## ⚠️ Not done / known gaps
