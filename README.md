@@ -135,6 +135,32 @@ const db = box.wrapClient(pgPool);           // your query client, tapped
 
 The closed loop nobody else has: **production bug → recorded flight → failing test → AI writes the fix → `apocalypse` proves the fix breaks no guard, invariant or transaction → deploy.** Replay is per-request (concurrent-race capture is out of scope for v1 — stated, not hidden).
 
+## Any Backend On Earth: OpenAPI Lowering
+
+SPARDA parses Express, FastAPI and Next.js natively — and **every other stack through the format the industry already agreed on**. Go, Java, Rails, Laravel, .NET: if it has an OpenAPI spec, it compiles.
+
+```bash
+npx sparda-mcp ubg --openapi openapi.json
+```
+
+Security schemes become gating `guard` nodes, response schemas become typed returns, declared request bodies count as validated input. Pair the spec with your `.sql` or `schema.prisma` files and the full state layer — invariants, aggregates, state machines — fills in from declared truth. (JSON specs in v1; we refuse to half-parse YAML with zero dependencies.)
+
+## The Mirror VM: delete the framework, the app still answers
+
+The graph is not a diagram — it executes:
+
+```bash
+npx sparda-mcp mirror
+```
+
+```
+MIRROR — the graph is serving. 3 entrypoint(s) on http://127.0.0.1:4477
+  GET    /orders/{orderId}  → {amount, id, status}
+  POST   /orders  🔒 bearerAuth  → {amount, id, status}
+```
+
+No Express. No FastAPI. No source code — just `ubg.json` answering HTTP: guards actually deny (401), responses render the compiled return schemas, unknown paths 404 with the full route table. Front-end teams develop against backends that aren't deployed yet — or aren't written yet (point `mirror` at an OpenAPI spec). Every response carries `x-sparda-mirror: true`; the mirror serves declared behavior, it never invents business values.
+
 To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte.
 
 ## The promise — every word is backed by a test in CI

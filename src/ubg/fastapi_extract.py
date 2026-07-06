@@ -474,8 +474,13 @@ class UbgExtractor:
 
     def run(self):
         self.parse_file(self.entry_file, "", 0)
-        for prefix, file_path, _name in list(self.mounts):
-            self.parse_file(file_path, prefix, 1)
+        # growing queue, NOT a snapshot: a mounted router file can itself
+        # include_router sub-routers (the FastAPI project-template pattern)
+        i = 0
+        while i < len(self.mounts):
+            prefix, file_path, _name, depth = self.mounts[i]
+            i += 1
+            self.parse_file(file_path, prefix, depth)
         self.routes.sort(key=lambda r: (r["path"], r["method"]))
         return {
             "routes": self.routes,
@@ -587,7 +592,7 @@ class UbgExtractor:
         for node in tree.body:
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 self.collect_mount(node.value, abs_file, prefix, import_map,
-                                   router_vars, router_prefixes)
+                                   router_vars, router_prefixes, depth)
                 continue
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -668,7 +673,7 @@ class UbgExtractor:
         return None
 
     def collect_mount(self, call, abs_file, prefix, import_map, router_vars,
-                      router_prefixes):
+                      router_prefixes, depth=0):
         if not (isinstance(call.func, ast.Attribute)
                 and call.func.attr == "include_router" and call.args):
             return
@@ -687,7 +692,7 @@ class UbgExtractor:
         resolved = import_map.get(router_name)
         cum = (prefix + mount_prefix).replace("//", "/")
         if resolved:
-            self.mounts.append((cum, resolved, router_name))
+            self.mounts.append((cum, resolved, router_name, depth + 1))
         elif router_name in router_vars:
             pass  # same-file router: its routes are collected in this pass
         else:

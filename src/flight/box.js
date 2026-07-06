@@ -187,14 +187,17 @@ export function createFlightBox() {
     };
   }
 
-  // replay plumbing — one store per replayed request
-  function makeReplayStore(flight) {
+  // replay plumbing — one store per replayed request.
+  // lenient: labels may differ (a FIX reformulates a query — same kind, same
+  // order, new text); relabels are reported, never silent. Running out of
+  // taps stays fatal in both modes — fail-loud is not negotiable.
+  function makeReplayStore(flight, { lenient = false } = {}) {
     const queues = new Map();
     for (const tap of flight.taps) {
       if (!queues.has(tap.kind)) queues.set(tap.kind, []);
       queues.get(tap.kind).push(tap);
     }
-    return { mode: 'replay', queues, divergences: [] };
+    return { mode: 'replay', queues, divergences: [], relabels: [], lenient };
   }
 
   const runWith = (store, fn) => als.run(store, fn);
@@ -250,6 +253,10 @@ function takeTap(store, kind, label) {
     );
   }
   if (tap.label !== label) {
+    if (store.lenient) {
+      store.relabels.push({ kind, was: tap.label, now: label });
+      return tap.result;
+    }
     const d = { kind, expected: tap.label, got: label };
     store.divergences.push(d);
     throw new FlightDivergence(

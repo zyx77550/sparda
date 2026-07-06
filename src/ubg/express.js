@@ -58,6 +58,7 @@ export function extractExpress(cwd, entryFile) {
     const appVars = new Set();
     const routerVars = new Set();
     for (const node of mod.ast.program.body) collectAppVars(node, appVars, routerVars);
+    const routeArrays = collectRouteArrays(mod.ast.program.body);
 
     walkStatements(mod.ast.program.body);
 
@@ -72,6 +73,22 @@ export function extractExpress(cwd, entryFile) {
         if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier')
           continue;
         const objName = callee.object.type === 'Identifier' ? callee.object.name : null;
+
+        // declarative mount loop: defaultRoutes.forEach((r) => router.use(r.path, r.route))
+        // — the array of { path: '<literal>', route: <Identifier> } IS the router table
+        if (callee.property.name === 'forEach' && objName && routeArrays.has(objName)) {
+          for (const entry of routeArrays.get(objName)) {
+            mounts.push({
+              prefix: joinPath(prefix, entry.path),
+              file: mod.imports.get(entry.ident) ?? null,
+              ident: entry.ident,
+              fromFile: relFile,
+              depth: depth + 1,
+            });
+          }
+          continue;
+        }
+
         if (!objName || (!appVars.has(objName) && !routerVars.has(objName))) continue;
         const method = callee.property.name;
         const args = expr.arguments;
@@ -187,6 +204,55 @@ export function extractExpress(cwd, entryFile) {
         fn: arg,
       };
     }
+    // factory middleware: validate(schema), rateLimit({…}) — the factory
+    // name is known, the produced closure is out of static reach (blind node)
+    if (arg.type === 'CallExpression') {
+      const name =
+        arg.callee.type === 'Identifier'
+          ? arg.callee.name
+          : (arg.callee.property?.name ?? 'anonymous');
+      return {
+        name,
+        sourceFile: relFile,
+        sourceLine: arg.loc?.start.line ?? 0,
+        fn: null,
+      };
+    }
+
+    // controller.method — resolve through the import to the exported function
+    // (including the catchAsync-wrapped const idiom)
+    if (
+      arg.type === 'MemberExpression' &&
+      arg.object.type === 'Identifier' &&
+      arg.property.type === 'Identifier'
+    ) {
+      const importedFrom = mod.imports.get(arg.object.name);
+      if (importedFrom) {
+        const target = parseModule(importedFrom);
+        const fn = target.functions.get(arg.property.name);
+        if (fn) {
+          const fromRel = rel(importedFrom);
+          if (!scannedFiles.includes(fromRel)) {
+            scannedFiles.push(fromRel);
+            for (const [name, f] of target.functions)
+              helpers.push({ name, sourceFile: fromRel, sourceLine: f.line, fn: f.node });
+          }
+          return {
+            name: `${arg.object.name}.${arg.property.name}`,
+            sourceFile: fromRel,
+            sourceLine: fn.line,
+            fn: fn.node,
+          };
+        }
+      }
+      return {
+        name: `${arg.object.name}.${arg.property.name}`,
+        sourceFile: relFile,
+        sourceLine: arg.loc?.start.line ?? 0,
+        fn: null,
+      };
+    }
+
     if (arg.type !== 'Identifier') return null;
 
     const local = mod.functions.get(arg.name);
@@ -229,6 +295,35 @@ export function extractExpress(cwd, entryFile) {
   function rel(abs) {
     return path.relative(cwd, abs).split(path.sep).join('/');
   }
+}
+
+// const defaultRoutes = [{ path: '/auth', route: authRoute }, …] — collected
+// per file so a later .forEach mount loop can be unrolled statically
+function collectRouteArrays(body) {
+  const arrays = new Map();
+  for (const node of body) {
+    const decl = node.type === 'VariableDeclaration' ? node : null;
+    if (!decl) continue;
+    for (const d of decl.declarations) {
+      if (d.id?.type !== 'Identifier' || d.init?.type !== 'ArrayExpression') continue;
+      const entries = [];
+      for (const el of d.init.elements) {
+        if (el?.type !== 'ObjectExpression') continue;
+        let entryPath = null;
+        let ident = null;
+        for (const prop of el.properties) {
+          if (prop.type !== 'ObjectProperty' || prop.key.type !== 'Identifier') continue;
+          if (prop.key.name === 'path' && prop.value.type === 'StringLiteral')
+            entryPath = prop.value.value;
+          if (prop.key.name === 'route' && prop.value.type === 'Identifier')
+            ident = prop.value.name;
+        }
+        if (entryPath && ident) entries.push({ path: entryPath, ident });
+      }
+      if (entries.length) arrays.set(d.id.name, entries);
+    }
+  }
+  return arrays;
 }
 
 function collectAppVars(node, appVars, routerVars) {

@@ -9,6 +9,7 @@ export async function runUbg(opts) {
   const { report, json, outPath } = compileUBG(opts.cwd, {
     write: true,
     out: opts.out,
+    openapi: opts.openapi ?? null,
   });
 
   if (opts.json) {

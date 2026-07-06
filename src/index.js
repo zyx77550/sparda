@@ -27,6 +27,7 @@ const opts = {
   germinate: flags.has('--germinate'),
   port: getOpt('port', null),
   out: getOpt('out', null),
+  openapi: getOpt('openapi', null),
   cwd: process.cwd(),
 };
 
@@ -111,6 +112,21 @@ try {
       await runTimeless(opts, rest);
       break;
     }
+    case 'mirror': {
+      const { runMirror } = await import('./commands/mirror.js');
+      await runMirror(opts);
+      break;
+    }
+    case 'openapi': {
+      const { runOpenapi } = await import('./commands/openapi.js');
+      await runOpenapi(opts);
+      break;
+    }
+    case 'verify': {
+      const { runVerify } = await import('./commands/verify.js');
+      await runVerify(opts);
+      break;
+    }
     default:
       console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
 
@@ -130,6 +146,9 @@ Usage:
   npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
   npx sparda-mcp apocalypse  Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
   npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
+  npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
+  npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
+  npx sparda-mcp verify    Prove the compiler's own laws (determinism, soundness, round-trip) on this app
 
 Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
        --probe (init: also run the app to discover dynamic routes the AST missed)

@@ -145,6 +145,19 @@ function collectTopLevel(node, facts, absFile, exported) {
         if (resolved) {
           if (d.id.type === 'Identifier') facts.imports.set(d.id.name, resolved);
         }
+      } else if (init.type === 'CallExpression') {
+        // wrapper idiom: const register = catchAsync(async (req, res) => …)
+        // — the wrapped function IS the behavior; the wrapper is plumbing
+        const fnArg = init.arguments.find(
+          (a) => a.type === 'ArrowFunctionExpression' || a.type === 'FunctionExpression',
+        );
+        if (fnArg) {
+          facts.functions.set(d.id.name, {
+            node: fnArg,
+            line: d.loc?.start.line ?? 0,
+            exported,
+          });
+        }
       }
     }
     // destructured require: const { a, b } = require('./x')

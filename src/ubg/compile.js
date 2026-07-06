@@ -8,6 +8,7 @@ import { clearModuleCache } from './extract.js';
 import { extractExpress } from './express.js';
 import { extractNext } from './nextjs.js';
 import { extractFastAPI } from './fastapi.js';
+import { extractOpenAPI } from './openapi.js';
 import { parseSqlSchemas } from './sql.js';
 import { parsePrismaSchemas } from './prisma.js';
 import { translate } from './translate.js';
@@ -18,15 +19,18 @@ import { serializeGraph, sourceHashOf, writeGraph } from './serialize.js';
 
 export function compileUBG(
   cwd,
-  { write = true, out = null, optimizePasses = true } = {},
+  { write = true, out = null, optimizePasses = true, openapi = null } = {},
 ) {
   clearModuleCache(); // each compile run parses fresh — no stale-file ghosts
 
-  const stack = detectStack(cwd);
+  // --openapi: the universal lowering — no framework detection, ANY backend
+  // that carries a spec enters the graph (Go, Java, Rails, .NET, whatever)
+  const stack = openapi ? { framework: 'openapi', entryFile: openapi } : detectStack(cwd);
   const extractors = {
     express: () => extractExpress(cwd, stack.entryFile),
     nextjs: () => extractNext(cwd, stack.entryFile),
     fastapi: () => extractFastAPI(cwd, stack.entryFile, stack.pythonCmd),
+    openapi: () => extractOpenAPI(cwd, stack.entryFile),
   };
   if (!extractors[stack.framework]) {
     throw Object.assign(

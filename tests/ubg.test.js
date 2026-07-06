@@ -416,6 +416,63 @@ describe('UBG: Prisma state layer (no .sql anywhere)', () => {
   });
 });
 
+describe('UBG: OpenAPI universal lowering', () => {
+  const OPENAPI_FIXTURE = path.join(here, 'fixtures', 'ubg-openapi');
+  const { graph, report } = compileUBG(OPENAPI_FIXTURE, {
+    write: false,
+    openapi: 'openapi.json',
+  });
+
+  it('compiles a spec into entrypoints — any backend on earth', () => {
+    expect(report.framework).toBe('openapi');
+    const ids = nodesOf(graph, 'entrypoint')
+      .map((n) => n.id)
+      .sort();
+    expect(ids).toEqual([
+      'entrypoint:DELETE /orders/{orderId}',
+      'entrypoint:GET /orders/{orderId}',
+      'entrypoint:POST /orders',
+    ]);
+    const get = graph.nodes.get('entrypoint:GET /orders/{orderId}');
+    expect(get.meta.inputs).toContainEqual(
+      expect.objectContaining({ name: 'orderId', in: 'path', type: 'integer' }),
+    );
+  });
+
+  it('security schemes become gating guards; opted-out routes stay open', () => {
+    const guard = nodesOf(graph, 'guard').find((n) => n.label === 'bearerAuth');
+    expect(guard).toBeDefined();
+    const gated = edgesOf(graph, 'gate').map((e) => e.to);
+    // POST and DELETE inherit global security; GET declares security: []
+    expect(gated.length).toBe(2);
+    const reachGet = edgesOf(graph, 'control_flow').filter(
+      (e) => e.meta.route === 'entrypoint:GET /orders/{orderId}',
+    );
+    expect(reachGet.some((e) => e.to === guard.id)).toBe(false);
+  });
+
+  it('response schemas become typed returns; declared bodies count as validated', () => {
+    expect(graph.nodes.get('entrypoint:GET /orders/{orderId}').meta.returns).toEqual({
+      id: 'integer',
+      amount: 'number',
+      status: 'string',
+    });
+    expect(graph.nodes.get('entrypoint:POST /orders').meta.inputValidated).toBe(true);
+  });
+
+  it('rejects YAML honestly instead of half-parsing it', () => {
+    expect(() =>
+      compileUBG(OPENAPI_FIXTURE, { write: false, openapi: 'spec.yaml' }),
+    ).toThrow(/YAML|not found/);
+  });
+
+  it('stays byte-deterministic', () => {
+    const a = compileUBG(OPENAPI_FIXTURE, { write: false, openapi: 'openapi.json' });
+    const b = compileUBG(OPENAPI_FIXTURE, { write: false, openapi: 'openapi.json' });
+    expect(a.json).toBe(b.json);
+  });
+});
+
 describe.skipIf(!hasPython)('UBG: FastAPI compilation', () => {
   const { graph, report } = compileUBG(FASTAPI_FIXTURE, { write: false });
 
