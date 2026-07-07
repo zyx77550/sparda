@@ -102,7 +102,12 @@ export function extractOpenAPI(cwd, specPath) {
 function opSecurity(op, globalSecurity, known) {
   const local = op.security ? op.security.flatMap((s) => Object.keys(s)) : null;
   const active = local ?? globalSecurity;
-  return [...new Set(active.filter((s) => known.includes(s) || active.length))].sort();
+  // keep referenced schemes that are actually declared in components; if a
+  // spec references a scheme it never defined it is malformed, but the intent
+  // to protect the endpoint is clear — fall back to the raw references then.
+  // (The previous `|| active.length` made the filter a no-op — a real bug.)
+  const declared = active.filter((s) => known.includes(s));
+  return [...new Set(declared.length ? declared : active)].sort();
 }
 
 function paramsOf(op, item, rawPath) {

@@ -584,3 +584,52 @@ describe('UBG: schema invariants', () => {
     expect(Object.keys(c.nodes[1].meta)).toEqual(['a', 'z']);
   });
 });
+
+describe('UBG: audited-bug regressions', () => {
+  // verify.js "fixed point" check was vacuous (compared canonicalize(g) with
+  // itself). The real property: re-canonicalizing an already-canonical graph
+  // is a no-op. This test would have failed on a non-idempotent canonicalizer.
+  it('canonicalizeGraph is a genuine fixed point on real graphs', () => {
+    const { graph } = compileUBG(path.join(here, 'fixtures', 'ubg-semantics'), {
+      write: false,
+    });
+    const once = canonicalizeGraph(graph);
+    const twice = canonicalizeGraph(once);
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
+  });
+
+  // openapi.js opSecurity filtered on `known.includes(s) || active.length`,
+  // which is always truthy — the filter never ran. A route referencing a mix
+  // of a declared and an UNdeclared scheme must only surface the declared one.
+  it('OpenAPI security keeps only declared schemes when some are declared', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-oas-'));
+    try {
+      fs.writeFileSync(
+        path.join(tmp, 'spec.json'),
+        JSON.stringify({
+          openapi: '3.0.3',
+          info: { title: 't', version: '1' },
+          components: {
+            securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
+          },
+          paths: {
+            '/x': {
+              post: {
+                security: [{ bearerAuth: [], mysteryAuth: [] }],
+                responses: { 201: { description: 'ok' } },
+              },
+            },
+          },
+        }),
+      );
+      const { graph } = compileUBG(tmp, { write: false, openapi: 'spec.json' });
+      const guards = [...graph.nodes.values()]
+        .filter((n) => n.kind === 'guard')
+        .map((n) => n.label);
+      expect(guards).toContain('bearerAuth');
+      expect(guards).not.toContain('mysteryAuth'); // undeclared → filtered out
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

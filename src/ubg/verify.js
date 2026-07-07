@@ -36,10 +36,17 @@ export function verifyProject(cwd, { openapi = null } = {}) {
     /^[0-9a-f]{64}$/.test(a.graph.meta.sourceHash),
   );
 
-  // Canonical form is idempotent: canonicalize(canonicalize(g)) == canonicalize(g)
-  const canon1 = a.json;
-  const canon2 = JSON.stringify(canonicalizeGraph(reviveGraph(a.graph)), null, 2) + '\n';
-  record('Determinism (§3.3)', 'canonical form is a fixed point', canon1 === canon2);
+  // Canonical form is a fixed point: re-canonicalizing an ALREADY-canonical
+  // graph must be a no-op. This is a real idempotence check — the previous
+  // version compared canonicalize(g) with canonicalize(g) (trivially equal)
+  // and proved nothing.
+  const once = canonicalizeGraph(a.graph);
+  const twice = canonicalizeGraph(once);
+  record(
+    'Determinism (§3.3)',
+    'canonical form is a fixed point',
+    JSON.stringify(once) === JSON.stringify(twice),
+  );
 
   // Structural integrity — every edge lands on a real node, every kind known.
   let structural = true;
@@ -143,10 +150,4 @@ function openApiRoundTrip(graph, cwd) {
   } catch (err) {
     return { pass: false, detail: err.message.split('\n')[0] };
   }
-}
-
-// canonicalizeGraph wants a live graph (Map nodes); rebuild one from the
-// canonical arrays so we can re-canonicalize and check the fixed point
-function reviveGraph(liveGraph) {
-  return liveGraph; // compileUBG returns the live graph; canonicalize accepts it
 }
