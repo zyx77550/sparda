@@ -29,8 +29,11 @@ export function createFlightBox() {
   const als = new AsyncLocalStorage();
   const originals = {};
   let armed = false;
-  let insideUUID = false;
-  let insideFetch = false;
+  // Node 18: fetch (undici) and crypto.randomUUID call Date.now()/Math.random()
+  // internally — those must NOT be recorded as entropy taps. The suppression
+  // flag lives ON THE STORE (per-request), not on the box: a global flag would
+  // let one request's fetch window swallow a concurrent request's entropy taps
+  // and silently corrupt its flight.
 
   function arm() {
     if (armed) return;
@@ -42,7 +45,7 @@ export function createFlightBox() {
 
     Date.now = function spardaDateNow() {
       const store = als.getStore();
-      if (!store || insideUUID || insideFetch) return originals.dateNow();
+      if (!store || store.suppressEntropy) return originals.dateNow();
       if (store.mode === 'record') {
         const v = originals.dateNow();
         tapOut(store, 'time', 'Date.now', v);
@@ -53,7 +56,7 @@ export function createFlightBox() {
 
     Math.random = function spardaRandom() {
       const store = als.getStore();
-      if (!store || insideUUID || insideFetch) return originals.random();
+      if (!store || store.suppressEntropy) return originals.random();
       if (store.mode === 'record') {
         const v = originals.random();
         tapOut(store, 'random', 'Math.random', v);
@@ -69,13 +72,13 @@ export function createFlightBox() {
           const store = als.getStore();
           if (!store) return originals.randomUUID();
           if (store.mode === 'record') {
-            insideUUID = true;
+            store.suppressEntropy = true;
             try {
               const v = originals.randomUUID();
               tapOut(store, 'uuid', 'crypto.randomUUID', v);
               return v;
             } finally {
-              insideUUID = false;
+              store.suppressEntropy = false;
             }
           }
           return takeTap(store, 'uuid', 'crypto.randomUUID');
@@ -90,7 +93,7 @@ export function createFlightBox() {
       const method = (init?.method ?? 'GET').toUpperCase();
       const label = `${method} ${url}`;
       if (store.mode === 'record') {
-        insideFetch = true;
+        store.suppressEntropy = true;
         try {
           const res = await originals.fetch(input, init);
           const text = (await res.text()).slice(0, MAX_BODY_BYTES);
@@ -98,7 +101,7 @@ export function createFlightBox() {
           tapOut(store, 'http', label, { status: res.status, headers, body: text });
           return new Response(text, { status: res.status, headers });
         } finally {
-          insideFetch = false;
+          store.suppressEntropy = false;
         }
       }
       const rec = takeTap(store, 'http', label);
