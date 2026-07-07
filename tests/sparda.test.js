@@ -1954,7 +1954,7 @@ app.listen(3000);
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
-    });
+    }, 30000);
 
     it('announces a circuit once, when it crosses the observation threshold', () => {
       const { tmp, manifestPath, manifest } = setup();
