@@ -3,7 +3,7 @@
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
   "description": "Compile backends to behavior graphs. Statically prove security, simulate APIs, and replay bugs.",
-  "version": "0.13.3",
+  "version": "0.14.0",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "sparda-mcp",
-      "version": "0.13.2",
+      "version": "0.14.0",
       "transport": {
         "type": "stdio"
       },
