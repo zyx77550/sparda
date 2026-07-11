@@ -11,6 +11,7 @@ const SPARDA_POLICIES = __SPARDING_POLICIES__;
 // runtime — env first, then the gitignored .sparda/key — and fails CLOSED:
 // no key, no /mcp surface. A deploy that ships without .sparda/ is inert.
 __FS_IMPORT__
+__CRYPTO_IMPORT__
 let SPARDA_LOCAL_KEY = process.env.SPARDA_LOCAL_KEY || null;
 if (!SPARDA_LOCAL_KEY) {
   try {
@@ -128,7 +129,12 @@ process.on('uncaughtExceptionMonitor', (err__ANY_TYPE__) => spardaEvent('process
 const SPARDA_PENDING__STATS_TYPE__ = {};
 const SPARDA_CONFIRM_TTL_MS = Number(process.env.SPARDA_CONFIRM_TTL_MS ?? 120000);
 function spardaNonce() {
-  return 'cfm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  // Cryptographically-secure, unguessable write-confirmation nonce via node:crypto
+  // (randomUUID exists since Node 14.17 — unlike globalThis.crypto, which is only a
+  // default global from Node 19). Math.random() is NOT crypto-safe: its xorshift128+
+  // state is reconstructible from a few outputs, so it must never mint a token that
+  // GATES a live-app write. Parity with FastAPI's uuid4.
+  return 'cfm_' + spardaCrypto.randomUUID();
 }
 function spardaSweepPending() {
   const now = Date.now();

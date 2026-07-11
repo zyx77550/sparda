@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { toolNameFor } from '../parser/express.js';
 import { carryOverManifest, defaultSpardingMemory, ensureSpardaKey } from './manifest.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
+import { makeInjectionMarkers } from './injection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MARK_START = '# >>> sparda-injection (do not edit this block) >>>';
-const MARK_END = '# <<< sparda-injection <<<';
+const { MARK_START, MARK_END, stripForReinit, stripForRemoval } =
+  makeInjectionMarkers('#');
 
 export function generateFastAPI({
   cwd,
@@ -159,13 +160,9 @@ function injectIntoEntry({ entryAbs, cwd, pythonCmd }) {
   // preserve the file's own line endings (Windows checkouts are CRLF)
   const eol = src.includes('\r\n') ? '\r\n' : '\n';
 
-  // strip previous injection blocks (idempotence)
-  let body = src;
-  const blockRx = new RegExp(
-    `\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}\\r?\\n?`,
-    'g',
-  );
-  body = body.replace(blockRx, eol);
+  // strip previous injection blocks (idempotence) — shared inverse-safe strip.
+  // The block boundaries are normalized back to `eol` by the split/join below.
+  const body = stripForReinit(src);
 
   // Let's find the FastAPI() call assignment to inject right after it
   // ([ \t]*) — NOT (\s*): \s matches newlines and would swallow blank lines/CR into the "indent" (E-007)
@@ -227,11 +224,7 @@ export function removeInjection(cwd, manifest, pythonCmd = 'python') {
     const abs = path.resolve(cwd, relFile);
     if (!fs.existsSync(abs)) continue;
     const src = fs.readFileSync(abs, 'utf8');
-    const blockRx = new RegExp(
-      `\\r?\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}`,
-      'g',
-    );
-    const out = src.replace(blockRx, '');
+    const out = stripForRemoval(src);
 
     if (verifyPythonSyntax(abs, out, pythonCmd)) {
       atomicWrite(abs, out);
@@ -280,8 +273,4 @@ function ensureGitignore(cwd) {
   }
   fs.writeFileSync(gi, `${line}\n`);
   return 'created';
-}
-
-function escapeRx(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

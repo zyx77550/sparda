@@ -82,7 +82,7 @@ export function run(graph) {
   for (const e of graph.edges) {
     if (e.kind === 'control_flow') {
       if (!cfOut.has(e.from)) cfOut.set(e.from, []);
-      cfOut.get(e.from).push(e.to);
+      cfOut.get(e.from).push({ to: e.to, route: e.meta?.route ?? null });
     }
     if (e.kind === 'mutation') {
       if (!mutOut.has(e.from)) mutOut.set(e.from, []);
@@ -104,7 +104,10 @@ export function run(graph) {
         const domain = assigned.get(sid);
         if (domain) touched.add(domain);
       }
-      queue.push(...(cfOut.get(id) ?? []));
+      for (const next of cfOut.get(id) ?? []) {
+        // route-tagged chain edges: never walk into a sibling route's chain
+        if (next.route === null || next.route === ep.id) queue.push(next.to);
+      }
     }
     if (touched.size) ep.meta.mutatesDomains = [...touched].sort();
   }

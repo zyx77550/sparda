@@ -128,7 +128,10 @@ if (!globalThis.__SPARDA_WIRED__) {
 const SPARDA_PENDING = {};
 const SPARDA_CONFIRM_TTL_MS = Number(process.env.SPARDA_CONFIRM_TTL_MS ?? 120000);
 function spardaNonce() {
-  return 'cfm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  // Cryptographically-secure, unguessable write-confirmation nonce (Web Crypto is a global
+  // in every Next.js runtime). Math.random() is NOT crypto-safe and must never mint a token
+  // that GATES a live-app write.
+  return 'cfm_' + globalThis.crypto.randomUUID();
 }
 function spardaSweepPending() {
   const now = Date.now();

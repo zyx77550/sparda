@@ -29,14 +29,27 @@ export async function runMirror(opts) {
     server.listen(port, '127.0.0.1', resolve);
   });
 
+  const stateful = routes.filter((r) => r.transitions.length || r.reflect);
   console.log(
-    `MIRROR — the graph is serving. ${routes.length} entrypoint(s) on http://127.0.0.1:${port}`,
+    `MIRROR — the graph is serving. ${routes.length} entrypoint(s) on http://127.0.0.1:${port}` +
+      (stateful.length ? ` · ${stateful.length} live the inferred lifecycle` : ''),
   );
   for (const r of routes) {
-    console.log(
-      `  ${r.method.toUpperCase().padEnd(6)} ${r.path}${r.guarded ? '  🔒 ' + r.guards.join(',') : ''}${r.returns ? '  → {' + Object.keys(r.returns).join(', ') + '}' : ''}`,
-    );
+    const guard = r.guarded ? '  🔒 ' + r.guards.join(',') : '';
+    const shape = r.returns ? '  → {' + Object.keys(r.returns).join(', ') + '}' : '';
+    const life = r.transitions.length
+      ? '  ⟳ ' + r.transitions.map((t) => `${t.field}:${t.from}→${t.to}`).join(', ')
+      : r.reflect
+        ? `  ↩ reflects ${r.reflect.field}`
+        : '';
+    console.log(`  ${r.method.toUpperCase().padEnd(6)} ${r.path}${guard}${shape}${life}`);
   }
-  console.log('  (every response carries x-sparda-mirror: true — Ctrl+C to stop)');
+  console.log(
+    '  (every response carries x-sparda-mirror: true' +
+      (stateful.length
+        ? '; ⟳ routes enforce the state machine (409 on illegal moves)'
+        : '') +
+      ' — Ctrl+C to stop)',
+  );
   return { server, routes, port };
 }

@@ -36,6 +36,7 @@ let tpl = fs
   // ADR-022: mirror the generator's CJS substitution for the runtime key
   // resolution import — without it the placeholder check below fails
   .replace('__FS_IMPORT__', "const spardaFs = require('node:fs');")
+  .replace('__CRYPTO_IMPORT__', "const spardaCrypto = require('node:crypto');")
   .replace('__TOOLS_JSON__', JSON.stringify(tools, null, 2))
   .replace('__LOCAL_KEY__', 'testkey')
   .replace('__PORT__', String(PORT))

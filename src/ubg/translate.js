@@ -13,6 +13,7 @@
 import {
   addEdge,
   addNode,
+  cmp,
   createGraph,
   effectId,
   entrypointId,
@@ -65,9 +66,9 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
   const helperByName = new Map(); // name -> nodeId (first wins, sorted for determinism)
   const sortedHelpers = [...helpers].sort(
     (a, b) =>
-      a.sourceFile.localeCompare(b.sourceFile) ||
+      cmp(a.sourceFile, b.sourceFile) ||
       a.sourceLine - b.sourceLine ||
-      a.name.localeCompare(b.name),
+      cmp(a.name, b.name),
   );
   for (const h of sortedHelpers) {
     // extractors on non-JS runtimes (FastAPI) pre-compute the scan — the

@@ -8,6 +8,7 @@
 // the code doesn't constrain it (over-approximation, said out loud).
 // Annotation-only.
 import { reachabilityOf } from '../reach.js';
+import { cmp } from '../schema.js';
 
 export const name = 'StateMachineInference';
 
@@ -64,9 +65,7 @@ export function run(graph) {
     if (!transitions.length && !declared.length) continue;
     transitions.sort(
       (a, b) =>
-        a.from.localeCompare(b.from) ||
-        a.to.localeCompare(b.to) ||
-        (a.via[0] ?? '').localeCompare(b.via[0] ?? ''),
+        cmp(a.from, b.from) || cmp(a.to, b.to) || cmp(a.via[0] ?? '', b.via[0] ?? ''),
     );
     state.meta.stateMachine = {
       field,

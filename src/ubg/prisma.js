@@ -9,6 +9,7 @@
 // case-insensitive matching against code literals.
 import fs from 'node:fs';
 import path from 'node:path';
+import { cmp } from './schema.js';
 
 const SCHEMA_CANDIDATES = ['prisma/schema.prisma', 'schema.prisma', 'db/schema.prisma'];
 
@@ -163,7 +164,8 @@ function parseModel(modelName, body, line, sourceFile, enums, modelNames, skippe
     aliases: mappedTable && mappedTable !== name ? [mappedTable] : [],
     columns,
     invariants: invariants.sort((a, b) =>
-      `${a.type} ${(a.fields ?? []).join(',')}`.localeCompare(
+      cmp(
+        `${a.type} ${(a.fields ?? []).join(',')}`,
         `${b.type} ${(b.fields ?? []).join(',')}`,
       ),
     ),

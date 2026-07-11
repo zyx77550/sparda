@@ -7,7 +7,15 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { webcrypto } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+
+// The generated Next.js route is web-standard and mints its confirm nonce via
+// globalThis.crypto.randomUUID() — a global every Next.js runtime provides, and
+// Node >=19 provides natively. On Node 18 (a CI matrix cell) the bare test runner
+// has no such global, so provide it here exactly as the real runtime would. This
+// emulates the environment, it does not weaken the router.
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
 import { detectStack } from '../src/detect.js';
 import { parseNextProject } from '../src/parser/nextjs.js';
 import { generateNext } from '../src/generator/nextjs.js';

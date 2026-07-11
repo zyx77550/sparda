@@ -10,6 +10,8 @@
 // B's edges are remapped onto A, B's identity is preserved in A.meta.merged.
 // Runs to fixpoint; candidates processed in sorted order so the result never
 // depends on Map iteration.
+import { cmp } from '../schema.js';
+
 export const name = 'StateMinimization';
 
 export function run(graph) {
@@ -58,7 +60,7 @@ function findMergeCandidate(graph) {
     candidates.push([aId, bId]);
   }
   if (!candidates.length) return null;
-  candidates.sort((x, y) => x[0].localeCompare(y[0]) || x[1].localeCompare(y[1]));
+  candidates.sort((x, y) => cmp(x[0], y[0]) || cmp(x[1], y[1]));
   return { a: candidates[0][0], b: candidates[0][1] };
 }
 

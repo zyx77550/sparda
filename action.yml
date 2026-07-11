@@ -1,38 +1,65 @@
-# SPARDA Apocalypse — deployment proof as a CI gate.
-# Compiles the repo to its behavior graph and proves no declared guard,
-# invariant, transaction scope or aggregate boundary can be broken. Fails the
-# job on any critical/high finding. Optionally uploads SARIF so findings land
-# in the GitHub Security tab.
+# SPARDA — behavior proof + PR review from the compiled graph. 100% local,
+# deterministic, no keys. Two modes:
 #
-#   - uses: zyx77550/sparda@main
-#     with:
-#       working-directory: .
-#       sarif: 'true'
-name: 'SPARDA Apocalypse'
-description: 'Prove the deploy — guards, invariants, transactions, aggregates — from the compiled behavior graph. 100% local, deterministic, no keys.'
+#   mode: apocalypse (default) — prove the deploy, fail the job on any
+#   critical/high finding. Optionally upload SARIF to the Security tab.
+#     - uses: zyx77550/sparda@main
+#       with: { sarif: 'true' }
+#
+#   mode: review — comment the BEHAVIOR diff of the PR (which endpoints changed,
+#   whose blast radius grew, which guard/invariant it dropped) as ONE sticky
+#   comment that updates on every push. Comment-only by default (never blocks a
+#   merge); opt into gating with fail-on-severity.
+#     on: pull_request
+#     permissions: { contents: read, pull-requests: write }
+#     - uses: actions/checkout@v4
+#       with: { fetch-depth: 0 }
+#     - uses: zyx77550/sparda@main
+#       with: { mode: 'review' }
+name: 'SPARDA'
+description: 'Prove the deploy and review PRs from the compiled behavior graph — guards, invariants, transactions, aggregates. 100% local, deterministic, no keys.'
 author: 'Residual Labs'
 branding:
   icon: 'shield'
   color: 'red'
 
 inputs:
+  mode:
+    description: "'apocalypse' (prove the deploy, default) or 'review' (comment the PR behavior diff)"
+    required: false
+    default: 'apocalypse'
   working-directory:
-    description: 'Directory of the app to prove (where package.json lives)'
+    description: 'Directory of the app (where package.json lives)'
     required: false
     default: '.'
-  sarif:
-    description: 'Also emit .sparda/apocalypse.sarif and upload it to code scanning'
-    required: false
-    default: 'false'
   version:
     description: 'sparda-mcp version to run (npm dist-tag or semver)'
     required: false
     default: 'latest'
+  # --- apocalypse mode ---
+  sarif:
+    description: 'apocalypse: also emit .sparda/apocalypse.sarif and upload it to code scanning'
+    required: false
+    default: 'false'
+  # --- review mode ---
+  base-ref:
+    description: 'review: base git ref to diff against (default: the PR base branch)'
+    required: false
+    default: ''
+  comment:
+    description: 'review: post/update a sticky PR comment with the behavior diff'
+    required: false
+    default: 'true'
+  fail-on-severity:
+    description: "review: fail the check on findings — 'none' (default, comment-only), 'high', or 'critical'"
+    required: false
+    default: 'none'
 
 runs:
   using: 'composite'
   steps:
-    - name: Prove the deploy
+    - name: Prove the deploy (apocalypse)
+      if: ${{ inputs.mode == 'apocalypse' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
@@ -43,8 +70,36 @@ runs:
         fi
 
     - name: Upload SARIF to code scanning
-      if: ${{ inputs.sarif == 'true' && always() }}
+      if: ${{ inputs.mode == 'apocalypse' && inputs.sarif == 'true' && always() }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ inputs.working-directory }}/.sparda/apocalypse.sarif
         category: sparda-apocalypse
+
+    - name: Review the PR behavior diff
+      if: ${{ inputs.mode == 'review' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -e
+        BASE="${{ inputs.base-ref }}"
+        if [ -z "$BASE" ]; then
+          # the PR's target branch — fetch its tip so the base can be compiled
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          BASE="origin/${{ github.base_ref }}"
+        fi
+        BODY="${RUNNER_TEMP:-/tmp}/sparda-review.md"
+        set +e
+        npx --yes sparda-mcp@${{ inputs.version }} review --base "$BASE" --markdown > "$BODY"
+        RC=$?
+        set -e
+        cat "$BODY" || true
+        if [ "${{ inputs.comment }}" = "true" ] && [ -s "$BODY" ]; then
+          SPARDA_REVIEW_BODY_FILE="$BODY" node "${{ github.action_path }}/.github/sparda-pr-comment.mjs" || true
+        fi
+        case "${{ inputs.fail-on-severity }}" in
+          none) exit 0 ;;                 # comment-only: never block the merge
+          *) exit $RC ;;                  # gate: review exits 1 on critical/high
+        esac

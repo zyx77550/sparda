@@ -7,10 +7,11 @@ import { parse } from '@babel/parser';
 import { toolNameFor } from '../parser/express.js';
 import { carryOverManifest, defaultSpardingMemory, ensureSpardaKey } from './manifest.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
+import { makeInjectionMarkers } from './injection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MARK_START = '// >>> sparda-injection (do not edit this block) >>>';
-const MARK_END = '// <<< sparda-injection <<<';
+const { MARK_START, MARK_END, stripForReinit, stripForRemoval } =
+  makeInjectionMarkers('//');
 
 export function generateExpress({ cwd, entryFile, moduleType, port, routes }) {
   const taken = new Set([
@@ -115,6 +116,12 @@ export function generateExpress({ cwd, entryFile, moduleType, port, routes }) {
       '__FS_IMPORT__',
       isESM ? "import spardaFs from 'node:fs';" : "const spardaFs = require('node:fs');",
     )
+    .replace(
+      '__CRYPTO_IMPORT__',
+      isESM
+        ? "import spardaCrypto from 'node:crypto';"
+        : "const spardaCrypto = require('node:crypto');",
+    )
     .replace('__PORT__', String(port))
     .replace(/__REQ_TYPE__/g, reqType)
     .replace(/__RES_TYPE__/g, resType)
@@ -188,13 +195,8 @@ function injectIntoEntry({ entryAbs, moduleType, routerFileName, cwd }) {
       ? `import { spardaRouter } from '${importSpec}';`
       : `const { spardaRouter } = require('${importSpec}');`;
 
-  // strip previous injection blocks (idempotence)
-  let body = src;
-  const blockRx = new RegExp(
-    `\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}\\n?`,
-    'g',
-  );
-  body = body.replace(blockRx, '\n');
+  // strip previous injection blocks (idempotence) — shared inverse-safe strip
+  const body = stripForReinit(src);
 
   let ast;
   try {
@@ -276,11 +278,7 @@ export function removeInjection(cwd, manifest) {
     const abs = path.resolve(cwd, relFile);
     if (!fs.existsSync(abs)) continue;
     const src = fs.readFileSync(abs, 'utf8');
-    const blockRx = new RegExp(
-      `\\n?${escapeRx(MARK_START)}[\\s\\S]*?${escapeRx(MARK_END)}`,
-      'g',
-    );
-    const out = src.replace(blockRx, '');
+    const out = stripForRemoval(src);
     try {
       parse(out, { sourceType: 'unambiguous', plugins: ['typescript', 'jsx'] });
       atomicWrite(abs, out);
@@ -306,8 +304,4 @@ export function ensureGitignore(cwd) {
   }
   fs.writeFileSync(gi, `${line}\n`);
   return 'created';
-}
-
-function escapeRx(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

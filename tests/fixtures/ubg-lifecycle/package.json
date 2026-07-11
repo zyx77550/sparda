@@ -1,0 +1,11 @@
+{
+  "name": "ubg-lifecycle-fixture",
+  "private": true,
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

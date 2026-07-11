@@ -54,6 +54,24 @@ export async function runRemove(opts) {
         `✗ Could not safely remove from ${r.file} — restore from .sparda/backup/`,
       );
   }
+
+  // Hard rule #4 safety: if any injected file could NOT be cleanly reverted, STOP before
+  // any destructive cleanup. Deleting `.sparda/` here would erase the very `.sparda/backup/`
+  // we just told the operator to restore from — so nothing is removed until the tree is
+  // known-clean. The manifest and backups stay put for a manual (or retried) recovery.
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) {
+    console.log(
+      `\n✗ ${failed.length} file(s) could not be reverted automatically. Nothing else was deleted —` +
+        ` sparda.json, generated files and .sparda/backup/ are preserved.`,
+    );
+    console.log(
+      '  Restore the file(s) above from .sparda/backup/, then re-run `npx sparda-mcp remove`.',
+    );
+    process.exitCode = 1;
+    return { removed: false, failed: failed.map((r) => r.file) };
+  }
+
   for (const f of manifest.generatedFiles ?? []) {
     const abs = path.resolve(opts.cwd, f);
     if (fs.existsSync(abs)) {
@@ -85,6 +103,7 @@ export async function runRemove(opts) {
   fs.rmSync(path.join(opts.cwd, '.sparda'), { recursive: true, force: true });
   console.log('✓ Deleted sparda.json and .sparda/');
   console.log('\nSPARDA removed. `git diff` should be clean.');
+  return { removed: true };
 }
 
 // Undo exactly what init's ensureGitignore did (recorded in the manifest),

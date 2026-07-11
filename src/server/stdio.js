@@ -28,6 +28,17 @@ import { resolveContext, injectContext, fingerprintContext } from './context-car
 import { resolveSpardaKey } from '../generator/manifest.js';
 
 const EVENT_POLL_MS = Number(process.env.SPARDA_EVENT_POLL_MS ?? 5000);
+// Advertised MCP server version — read from package.json so it can never drift from the
+// published package (it was pinned at a stale '0.5.2' for many releases).
+const SPARDA_VERSION = (() => {
+  try {
+    return JSON.parse(
+      fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ).version;
+  } catch {
+    return '0.0.0';
+  }
+})();
 // the sampling budgets below are also what the recycling gauge counts as "avoided"
 // when cached knowledge short-circuits a call — the estimate is honest by construction
 const DIAGNOSIS_TOKENS = 120;
@@ -99,7 +110,7 @@ export async function startStdioBridge({ cwd, portOverride }) {
   const disabled = () => Object.entries(toolSpecs).filter(([, t]) => !t.enabled);
 
   const server = new Server(
-    { name: `sparda-${path.basename(cwd)}`, version: '0.5.2' },
+    { name: `sparda-${path.basename(cwd)}`, version: SPARDA_VERSION },
     {
       capabilities: {
         tools: { listChanged: true },

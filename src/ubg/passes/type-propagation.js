@@ -21,7 +21,7 @@ export function run(graph) {
   for (const e of graph.edges) {
     if (e.kind === 'control_flow') {
       if (!cfOut.has(e.from)) cfOut.set(e.from, []);
-      cfOut.get(e.from).push(e.to);
+      cfOut.get(e.from).push({ to: e.to, route: e.meta?.route ?? null });
     }
     if (e.kind === 'data_flow' && graph.nodes.get(e.from)?.kind === 'state') {
       if (!dfIn.has(e.to)) dfIn.set(e.to, []);
@@ -37,7 +37,9 @@ export function run(graph) {
     const inputTypes = {};
     for (const p of ep.meta.inputs ?? []) inputTypes[p.name] = p.type;
 
-    // everything this entrypoint reaches: its handler(s), effects, helpers
+    // everything this entrypoint reaches: its handler(s), effects, helpers —
+    // chain edges are route-tagged so shared middlewares never leak a sibling
+    // route's shapes into this entrypoint
     const reach = bfs(ep.id, cfOut);
 
     // columns visible to this entrypoint = union of columns of tables read
@@ -109,7 +111,10 @@ function bfs(start, out) {
     const id = queue.shift();
     if (seen.has(id)) continue;
     seen.add(id);
-    for (const next of out.get(id) ?? []) if (!seen.has(next)) queue.push(next);
+    for (const next of out.get(id) ?? []) {
+      if (next.route !== null && next.route !== start) continue;
+      if (!seen.has(next.to)) queue.push(next.to);
+    }
   }
   seen.delete(start);
   return seen;

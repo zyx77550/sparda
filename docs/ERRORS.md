@@ -239,3 +239,108 @@ anything that smells familiar. Newest last.
   the dev's local one. Never put a backslash or the delimiting quote inside an
   f-string `{expression}` — build the value in a variable first. The Python 3.10
   CI cell is the oracle for this; keep it in the matrix.
+
+## E-017 — `sparda remove` deleted the backup it just told you to restore
+- **Symptom:** on a rare unclean revert (the injection-stripped entry file no
+  longer parses → `removeInjection` returns `{ok:false}`), remove printed
+  "restore from .sparda/backup/" and then deleted `.sparda/` anyway — erasing
+  the backup in the same run.
+- **Root cause:** `commands/remove.js` ran the destructive cleanup
+  (`fs.rmSync('.sparda', …)`) unconditionally, after the per-file results were
+  only *logged*, never *gated on*.
+- **Fix:** if any file failed to revert, STOP before any deletion — preserve
+  `sparda.json`, generated files and `.sparda/backup/`, set `exitCode=1`, tell
+  the operator what to restore. Nothing is removed until the tree is known-clean.
+- **Rule:** never destroy a recovery artifact on the same path that recommends
+  it. Gate destructive cleanup on the success of every reversible step (rule #4).
+
+## E-018 — Injection removal left a stray blank line at the top of a file
+- **Symptom:** `init → remove` produced a non-clean `git diff` (one extra blank
+  line) when the marked block sat at the very top of the entry file
+  (`insertAt === 0`).
+- **Root cause:** injection inserts the block as whole lines *before* an existing
+  line, adding the block + a *trailing* newline (the leading newline was already
+  the file's). Removal consumed the *leading* newline instead — byte-perfect for
+  a mid-file block, off-by-one-newline for a top-anchored one. Express and
+  FastAPI each carried their own copy of this regex, free to drift.
+- **Fix:** one shared contract, `src/generator/injection.js` —
+  `stripForRemoval` consumes the block + its *trailing* newline (the exact byte
+  inverse of a line splice); `stripForReinit` keeps a single separator. Both
+  generators import it; the duplicated markers/regex/`escapeRx` are gone.
+  Verified byte-identical for mid-file, top-of-file, and CRLF.
+- **Rule:** an operation and its inverse must share one definition, or they drift
+  (rule #4). If you splice lines, invert on lines — not on a hand-tuned regex.
+
+## E-019 — Write-confirmation nonce minted with `Math.random()` (JS routers)
+- **Symptom:** the `cfm_` single-use token that gates live-app writes was
+  predictable — `Math.random()` (V8 xorshift128+) is reconstructible from a few
+  outputs. FastAPI already used `uuid.uuid4()`, so the JS routers were the weak
+  ones (broken parity).
+- **Fix:** `spardaNonce()` → `'cfm_' + globalThis.crypto.randomUUID()` in the
+  Express and Next.js templates (Web Crypto is a Node ≥18 / Next global; no new
+  dep, no new placeholder). `errorId` (log correlation, non-security) left as-is.
+- **Rule:** anything that GATES a state change is security-sensitive — mint it
+  with a CSPRNG, never `Math.random()`. Keep the three router templates at parity.
+
+## E-020 — Canonical graph not byte-identical across locales (`localeCompare`)
+- **Symptom:** the UBG canonical serialization promised "byte-identical, machine
+  after machine" (schema.js) but could differ across hosts. `canonicalizeGraph`
+  sorted NODES by code unit yet EDGES by `String.prototype.localeCompare` — whose
+  collation depends on the host ICU/locale. Under a locale collation `order_items`
+  sorts before `Orders`; under code units the reverse. Same graph → different bytes
+  on a differently-localed machine.
+- **Blast radius:** not just edge order. `localeCompare` also drove graph *content*
+  decisions — SQL table dedup tie-break (which duplicate definition "wins"), the
+  translator's first-wins helper pick, the state-minimization merge-pair pick — plus
+  stored meta arrays (state-machine transitions, SQL/Prisma invariants). All
+  locale-dependent, so two machines could compile the *same* code to *different*
+  graphs, undermining `apocalypse` baseline diffs and the `verify` determinism claim
+  across machines (same-machine runs stayed stable, so CI never caught it).
+- **Fix:** one exported deterministic comparator `cmp(a,b)` (UTF-16 code units) in
+  `schema.js`, used in `canonicalizeGraph` (nodes + edges) and every graph-affecting
+  sort: `sql.js` (table dedup + invariants), `prisma.js` (invariants), `translate.js`
+  (helper pick), `state-machines.js` (transitions), `state-minimization.js` (merge
+  pick). Verified: `Orders`/`order_items` edge order now identical under `LC_ALL=C`
+  and `LC_ALL=en_US.UTF-8`; 399 tests green.
+- **Rule:** determinism that must hold ACROSS machines uses code-unit ordering, never
+  `localeCompare`. Report/human-facing sorts may keep locale order; anything that
+  reaches the canonical bytes (or a content decision behind them) must use `cmp`.
+
+## E-021 — Node 18 CI red: `globalThis.crypto` is undefined (regression from E-019)
+- **Symptom:** after E-019 switched the confirm-nonce to `globalThis.crypto.randomUUID()`,
+  the Node 18 CI cell failed — `TypeError: Cannot read properties of undefined (reading
+  'randomUUID')` in the generated Express router (sparda.test.js) and the standalone
+  Next.js route (nextjs.test.js). Node 22 was green, so local runs never caught it.
+- **Root cause:** `globalThis.crypto` (Web Crypto) only became a **default global in
+  Node 19**; on Node 18 (in the engines range `>=18` and the CI matrix) it is undefined.
+  My E-019 comment claimed it was a "Node >=18 global" — wrong.
+- **Fix:** split by runtime.
+  - **Express router** runs in the host's arbitrary Node ≥18 process, so it must not
+    depend on a global: added a `__CRYPTO_IMPORT__` placeholder rendering
+    `import spardaCrypto from 'node:crypto'` / `require('node:crypto')` (whose
+    `randomUUID` exists since Node 14.17), wired in `generator/express.js` and
+    `tests/router-selftest.cjs`. `spardaNonce` → `spardaCrypto.randomUUID()`.
+  - **Next.js route** is web-standard and always runs in a Next runtime that provides
+    `globalThis.crypto` (both Node and Edge), so it keeps `globalThis.crypto.randomUUID()`;
+    the standalone unit test polyfills `globalThis.crypto = webcrypto` on Node < 19,
+    emulating the runtime it bypasses.
+- **Rule:** the engines floor is Node 18 — never use a Node-19+ global unguarded. Web
+  Crypto as a bare global is 19+; `node:crypto.randomUUID` is the 18-safe CSPRNG. A green
+  local run on Node 22 is not proof; the CI matrix's lowest cell is the oracle.
+
+## E-022 — Node 18 CI red: mirror-stateful tests time out (undici stale keep-alive)
+- **Symptom:** `tests/mirror-stateful.test.js` passed on Node 22 but every `fetch`
+  against the mirror timed out (5000ms) on the Node 18 CI cell. curl was always fine.
+- **Root cause:** the Mirror VM served HTTP/1.1 keep-alive. Each test spins up an
+  ephemeral server (port 0), and the OS recycles port numbers across tests. Node 18's
+  undici caches a keep-alive socket by origin (host:port) and, on the next test that
+  lands on the same recycled port, reuses that now-dead socket — and hangs. (rawRequest
+  hung the same way under rapid sequential reuse; curl opens fresh, so it never saw it.)
+- **Fix:** the mirror now sends `Connection: close` on every response. A mock has no
+  need for keep-alive, and closing per response means no client — undici, the raw-socket
+  helper, anything — can cache or reuse a socket to a since-recycled port. `req.resume()`
+  is kept to drain any request body before close.
+- **Rule:** an ephemeral test server that a pooling client (undici/fetch) hits across
+  many short-lived instances must not invite socket reuse — send `Connection: close` (or
+  disable keep-alive). A green Node 22 run is not proof; undici's pooling differs by
+  Node/undici version, and the CI matrix's lowest cell is the oracle.

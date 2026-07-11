@@ -6,6 +6,7 @@
 // with normalized types, and skip everything else with a reason — never guess.
 import fs from 'node:fs';
 import path from 'node:path';
+import { cmp } from './schema.js';
 
 const EXCLUDE = new Set([
   'node_modules',
@@ -53,9 +54,7 @@ export function parseSqlSchemas(cwd) {
   // deterministic regardless of filesystem enumeration order; last definition
   // wins on duplicates (migrations redefine tables — latest file path sorts last)
   tables.sort((a, b) =>
-    a.name === b.name
-      ? a.sourceFile.localeCompare(b.sourceFile)
-      : a.name.localeCompare(b.name),
+    a.name === b.name ? cmp(a.sourceFile, b.sourceFile) : cmp(a.name, b.name),
   );
   const byName = new Map();
   for (const t of tables) byName.set(t.name, t);
@@ -129,7 +128,7 @@ function sortInvariants(invariants) {
   return [...invariants].sort((a, b) => {
     const ka = `${a.type} ${(a.fields ?? []).join(',')} ${a.expression ?? ''}`;
     const kb = `${b.type} ${(b.fields ?? []).join(',')} ${b.expression ?? ''}`;
-    return ka.localeCompare(kb);
+    return cmp(ka, kb);
   });
 }
 

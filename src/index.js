@@ -26,8 +26,10 @@ const opts = {
   learn: flags.has('--learn'),
   germinate: flags.has('--germinate'),
   check: flags.has('--check'),
+  markdown: flags.has('--markdown'),
   port: getOpt('port', null),
   out: getOpt('out', null),
+  base: getOpt('base', null),
   openapi: getOpt('openapi', null),
   expect: getOpt('expect', null),
   agent: getOpt('agent', null),
@@ -110,6 +112,11 @@ try {
       await runApocalypse(opts);
       break;
     }
+    case 'review': {
+      const { runReview } = await import('./commands/review.js');
+      await runReview(opts);
+      break;
+    }
     case 'timeless': {
       const { runTimeless } = await import('./commands/timeless.js');
       await runTimeless(opts, rest);
@@ -153,6 +160,7 @@ Usage:
   npx sparda-mcp evolve    Trial hypothesis chains against the twin; survivors become suggestions
   npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
   npx sparda-mcp apocalypse  Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
+  npx sparda-mcp review    Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
   npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
   npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
   npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
