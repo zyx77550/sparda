@@ -18,6 +18,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..');
 const CLEAN_APP = path.join(REPO, 'demo-app'); // apocalypse: PROVEN, exit 0
 const BAIT = path.join(here, 'fixtures', 'ubg-semantics'); // apocalypse: NOT PROVEN, exit 1
+const BLIND = path.join(here, 'fixtures', 'ubg-blind'); // apocalypse: NO PROOF, exit 1
+const INLINE_MOUNT = path.join(here, 'fixtures', 'ubg-inline-mount'); // inline-require mount
 
 // Run a wrapper with console.log captured and process.exitCode isolated so a command that
 // sets exitCode=1 (by design, for CI gating) never leaks into vitest's own exit status.
@@ -76,6 +78,15 @@ describe('runApocalypse (wrapper)', () => {
     expect(Array.isArray(parsed.findings)).toBe(true);
     expect(parsed.obligations).toBeGreaterThan(0);
   });
+
+  it('refuses to bless a 0-route compile: NO PROOF, exit 1, never PROVEN', async () => {
+    const { result, out, exitCode } = await run(runApocalypse, { cwd: BLIND });
+    expect(result.verdict.provable).toBe(false);
+    expect(result.verdict.safe).toBe(false);
+    expect(exitCode).toBe(1); // a parser-coverage miss must fail CI, not pass it
+    expect(out).toContain('NO PROOF');
+    expect(out).not.toContain('✓ PROVEN');
+  });
 });
 
 describe('runVerify (wrapper)', () => {
@@ -96,6 +107,16 @@ describe('runUbg (wrapper)', () => {
     const graph = JSON.parse(fs.readFileSync(out, 'utf8'));
     expect(Array.isArray(graph.nodes)).toBe(true);
     expect(graph.nodes.length).toBeGreaterThan(0);
+  });
+
+  it('resolves an inline-require router mount (C-001a): both routes reach the graph', async () => {
+    const out = tmp('ubg-inline.json');
+    const { result } = await run(runUbg, { cwd: INLINE_MOUNT, out });
+    expect(result.report.routes).toBe(2); // app.use('/things', require('./things.controller'))
+    const graph = JSON.parse(fs.readFileSync(out, 'utf8'));
+    const eps = graph.nodes.filter((n) => n.kind === 'entrypoint').map((n) => n.id);
+    expect(eps).toContain('entrypoint:GET /things');
+    expect(eps).toContain('entrypoint:POST /things');
   });
 });
 

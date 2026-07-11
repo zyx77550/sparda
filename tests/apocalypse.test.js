@@ -130,3 +130,34 @@ describe('Apocalypse: baseline diff obligations', () => {
     expect(verdictOf(findings).clean).toBe(true);
   });
 });
+
+// Provability guard — a compile that reached ZERO entrypoints must never read
+// as PROVEN. verdictOf folds `provable` into `safe`/`clean`, so every command
+// that gates on them refuses a blind compile (parser-coverage miss) for free.
+describe('Apocalypse: provability guard (NO PROOF on a 0-route graph)', () => {
+  const emptyGraph = { nodes: [], edges: [] };
+  const realGraph = graphOf(SEMANTICS_FIXTURE); // has entrypoints
+
+  it('a 0-entrypoint graph is not provable — safe & clean are false even with no findings', () => {
+    const v = verdictOf([], emptyGraph);
+    expect(v.entrypoints).toBe(0);
+    expect(v.provable).toBe(false);
+    expect(v.safe).toBe(false); // the CI gate (exit 1) fires
+    expect(v.clean).toBe(false); // never printed as PROVEN
+  });
+
+  it('a graph WITH entrypoints and no findings is provable and clean', () => {
+    const v = verdictOf([], realGraph);
+    expect(v.entrypoints).toBeGreaterThan(0);
+    expect(v.provable).toBe(true);
+    expect(v.clean).toBe(true);
+    expect(v.safe).toBe(true);
+  });
+
+  it('omitting the graph keeps the old semantics (heal regression delta)', () => {
+    const v = verdictOf([]);
+    expect(v.entrypoints).toBe(null);
+    expect(v.provable).toBe(true);
+    expect(v.clean).toBe(true);
+  });
+});

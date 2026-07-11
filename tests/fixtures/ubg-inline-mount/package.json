@@ -1,0 +1,8 @@
+{
+  "name": "ubg-inline-mount-fixture",
+  "private": true,
+  "main": "app.js",
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

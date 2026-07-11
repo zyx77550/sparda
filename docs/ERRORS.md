@@ -344,3 +344,34 @@ anything that smells familiar. Newest last.
   many short-lived instances must not invite socket reuse — send `Connection: close` (or
   disable keep-alive). A green Node 22 run is not proof; undici's pooling differs by
   Node/undici version, and the CI matrix's lowest cell is the oracle.
+
+## C-001 — Parser coverage gaps found in the real-repo corpus run
+- **Symptom:** two real public Express repos compiled to **0 nodes** — SPARDA
+  emitted no routes. Worse, apocalypse then printed **"PROVEN over 0 nodes"** and
+  **exited 0**: a parser-coverage miss silently read as a green proof.
+- **Root cause (two classes):**
+  - **C-001a — inline-require router mounts.** `app.use('/users',
+    require('./users/users.controller'))` (rootpath-style apps): `handleUse`
+    only matched an *Identifier* router arg, so an inline `require()` mount was
+    dropped and the controller's routes never scanned.
+  - **C-001b — TypeScript DI route loaders.** `export default (app) => {…}` /
+    `routes(app)`: the router is a function *parameter*, never an `express()`
+    binding, so there is no literal `app.METHOD(...)` call site to anchor on.
+- **Fix:**
+  - **The risk class is closed for good (the real "never again"):** `verdictOf`
+    is now provability-aware — a graph with **zero entrypoints is `provable:
+    false`**, which forces `safe`/`clean` false. apocalypse and review print
+    **`✗ NO PROOF`** and **exit 1** on a blind compile. A coverage miss can no
+    longer masquerade as a proof, on *any* repo, ever. (`src/ubg/apocalypse.js`
+    `verdictOf`; wired in `src/commands/apocalypse.js` + `review.js`.)
+  - **C-001a fixed:** `handleUse` now resolves an inline-`require()` mount via
+    `mountTargetFile` (`src/ubg/express.js`). Unlocked `cornflourblue`
+    (0 nodes → 7 routes, correct PROVEN). Regression fixture:
+    `tests/fixtures/ubg-inline-mount/`.
+  - **C-001b still backlog** — but now *safe*: it yields NO PROOF (exit 1), not a
+    false PROVEN. Reproduces on `tests/fixtures/ubg-blind/`. Widening the parser
+    to follow DI loaders (treat a route-module's first param as a router) is the
+    next coverage item, no longer a correctness risk.
+- **Rule:** "PROVEN over 0 nodes" is **vacuous** — a zero-entrypoint compile is a
+  coverage miss, never a pass. Enforce it at the verdict, not per-command: any
+  verdict emitter that can't see a route surface must say NO PROOF and fail CI.

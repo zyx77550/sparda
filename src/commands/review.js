@@ -59,7 +59,7 @@ export function reviewGraphs(baseGraph, candidateGraph) {
   const removedEps = [...baseEps].filter((e) => !candEps.has(e)).sort(cmp);
 
   return {
-    verdict: verdictOf(findings),
+    verdict: verdictOf(findings, candidateGraph),
     obligations,
     findings,
     endpoints: { added, removed: removedEps },
@@ -168,7 +168,11 @@ function renderHuman(r) {
   }
 
   const c = v.counts;
-  if (v.clean)
+  if (!v.provable)
+    console.log(
+      "\n✗ NO PROOF — 0 routes reached in the working tree; SPARDA could not see this change's route surface (a parser-coverage gap). An empty graph proves nothing — this is NOT a pass.",
+    );
+  else if (v.clean)
     console.log(
       '\n✓ PROVEN — this diff removes no protection and introduces no new risk.',
     );
@@ -181,9 +185,11 @@ function renderHuman(r) {
 function renderMarkdown(r) {
   const { verdict: v, findings, endpoints } = r;
   const c = v.counts;
-  const head = v.clean
-    ? '✓ **PROVEN** — no protection removed, no new risk introduced.'
-    : `${v.safe ? '⚠ **RISKY**' : '✗ **NOT PROVEN**'} — ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.info} info.`;
+  const head = !v.provable
+    ? "✗ **NO PROOF** — 0 routes reached in the working tree; SPARDA could not see this change's route surface (a parser-coverage gap). An empty graph proves nothing — this is NOT a pass."
+    : v.clean
+      ? '✓ **PROVEN** — no protection removed, no new risk introduced.'
+      : `${v.safe ? '⚠ **RISKY**' : '✗ **NOT PROVEN**'} — ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.info} info.`;
   const lines = [`## 🔍 SPARDA semantic review (vs \`${r.base}\`)`, '', head, ''];
   if (endpoints.added.length || endpoints.removed.length) {
     lines.push('### Endpoint surface');

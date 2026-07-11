@@ -16,7 +16,7 @@ import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 const ICONS = { critical: '✗', high: '✗', medium: '⚠', info: '·' };
 
 export async function runApocalypse(opts) {
-  const { graph } = compileUBG(opts.cwd, { write: false });
+  const { graph, report } = compileUBG(opts.cwd, { write: false });
   const canonical = canonicalizeGraph(graph);
   const baselinePath = path.join(opts.cwd, '.sparda', 'ubg.baseline.json');
 
@@ -42,7 +42,7 @@ export async function runApocalypse(opts) {
   }
 
   const findings = [...staticFindings, ...diffFindings];
-  const verdict = verdictOf(findings);
+  const verdict = verdictOf(findings, canonical);
 
   if (opts.sarif) {
     const sarifPath = path.join(opts.cwd, '.sparda', 'apocalypse.sarif');
@@ -64,7 +64,21 @@ export async function runApocalypse(opts) {
       console.log(`  ${ICONS[f.severity]} [${f.severity}] ${f.rule} — ${f.message}`);
       if (opts.verbose) for (const ev of f.evidence) console.log(`      evidence: ${ev}`);
     }
-    if (verdict.clean) {
+    if (!verdict.provable) {
+      console.log(
+        `✗ NO PROOF — 0 routes reached. SPARDA could not see this app's surface (a parser-coverage gap, not a clean bill of health); an empty graph proves nothing. This is NOT a pass — run with --verbose to see what was skipped.`,
+      );
+      if (opts.verbose) {
+        console.log(`      detected: ${report.framework} · entry ${report.entry}`);
+        if (report.skipped?.length)
+          for (const s of report.skipped)
+            console.log(`      skipped: ${s.reason}${s.file ? ` (${s.file})` : ''}`);
+        else
+          console.log(
+            `      no route call sites reached — routes are likely registered indirectly (a loader / DI pattern the static walk can't follow).`,
+          );
+      }
+    } else if (verdict.clean) {
       console.log(
         `✓ PROVEN — ${obligations} obligation(s) discharged, zero violations. No declared guard, invariant, transaction or aggregate boundary can be broken by this tree.`,
       );

@@ -150,16 +150,23 @@ export function extractExpress(cwd, entryFile) {
 
     function handleUse(args, stmt) {
       if (!args.length) return;
-      // app.use('/prefix', router) → mount for second pass
-      if (args[0].type === 'StringLiteral' && args[1]?.type === 'Identifier') {
-        mounts.push({
-          prefix: joinPath(prefix, args[0].value),
-          file: mod.imports.get(args[1].name) ?? null,
-          ident: args[1].name,
-          fromFile: relFile,
-          depth: depth + 1, // nested mounts keep sinking, scanFile bounds them
-        });
-        return;
+      // app.use('/prefix', router) → mount for second pass. The router arg is
+      // usually an imported Identifier, but the inline-require idiom
+      // `app.use('/x', require('./x.controller'))` (rootpath-style apps) is just
+      // as common — resolve it directly. `undefined` = not a router mount at all
+      // (fall through to global-middleware handling below).
+      if (args[0].type === 'StringLiteral') {
+        const target = mountTargetFile(args[1], mod, absFile);
+        if (target !== undefined) {
+          mounts.push({
+            prefix: joinPath(prefix, args[0].value),
+            file: target, // null = named/required but unresolved → reported in the mounts loop
+            ident: mountIdentName(args[1]),
+            fromFile: relFile,
+            depth: depth + 1, // nested mounts keep sinking, scanFile bounds them
+          });
+          return;
+        }
       }
       // app.use(fn) / app.use(ident) at depth 0 → global middleware
       if (depth === 0) {
@@ -324,6 +331,37 @@ function collectRouteArrays(body) {
     }
   }
   return arrays;
+}
+
+// The second arg of app.use('/p', X): where does the mounted router live?
+//   Identifier            → the import it resolves to (null if unresolved)
+//   require('./x')        → the relative file it resolves to (null if non-relative)
+//   anything else         → undefined (not a router mount; e.g. a middleware call)
+function mountTargetFile(arg, mod, absFile) {
+  if (!arg) return undefined;
+  if (arg.type === 'Identifier') return mod.imports.get(arg.name) ?? null;
+  if (
+    arg.type === 'CallExpression' &&
+    arg.callee.type === 'Identifier' &&
+    arg.callee.name === 'require' &&
+    arg.arguments[0]?.type === 'StringLiteral'
+  ) {
+    return resolveRelImport(absFile, arg.arguments[0].value);
+  }
+  return undefined;
+}
+
+// a readable identifier for the mount's skipped-report when it can't resolve
+function mountIdentName(arg) {
+  if (arg?.type === 'Identifier') return arg.name;
+  if (
+    arg?.type === 'CallExpression' &&
+    arg.callee.type === 'Identifier' &&
+    arg.callee.name === 'require' &&
+    arg.arguments[0]?.type === 'StringLiteral'
+  )
+    return `require('${arg.arguments[0].value}')`;
+  return 'router';
 }
 
 function collectAppVars(node, appVars, routerVars) {

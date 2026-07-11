@@ -251,13 +251,26 @@ export function diffGraphs(baseline, candidate) {
 
 // ---------------------------------------------------------------------------
 
-export function verdictOf(findings) {
+export function verdictOf(findings, graph) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
+  // Provability guard: a compile that reached ZERO entrypoints proved nothing —
+  // an empty graph must never read as PROVEN/RISKY. A parser-coverage miss (a
+  // route surface the static eye could not see) has to be loud, not a silent
+  // green. `safe`/`clean` fold `provable` in, so every caller that gates on them
+  // (apocalypse & review both `exit 1` on !safe) refuses a blind compile for free.
+  // `graph` omitted (e.g. heal's regression delta, which isn't a whole-app
+  // proof) → provability is not asserted and the old semantics hold.
+  const entrypoints = graph
+    ? graph.nodes.filter((n) => n.kind === 'entrypoint').length
+    : null;
+  const provable = entrypoints === null || entrypoints > 0;
   return {
     counts,
-    safe: counts.critical === 0 && counts.high === 0,
-    clean: findings.length === 0,
+    entrypoints,
+    provable,
+    safe: provable && counts.critical === 0 && counts.high === 0,
+    clean: provable && findings.length === 0,
   };
 }
 
