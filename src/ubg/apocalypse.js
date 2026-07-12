@@ -15,7 +15,7 @@ const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, info: 3 };
 const CONSTRAINING = new Set(['check', 'not_null', 'unique']);
 
 // canonical serialized graph ({ nodes: [], edges: [] }) → indexed view
-function indexGraph(graph) {
+export function indexGraph(graph) {
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
   const cfOut = new Map();
   const mutOut = new Map();
@@ -40,7 +40,7 @@ function indexGraph(graph) {
   return { nodes, cfOut, mutOut, gateTargets, compensators, entrypoints };
 }
 
-function reachOf(epId, cfOut) {
+export function reachOf(epId, cfOut) {
   const seen = new Set();
   const queue = [epId];
   while (queue.length) {
@@ -66,6 +66,12 @@ export function checkGraph(graph) {
   const g = indexGraph(graph);
   const findings = [];
   let obligations = 0;
+  // Behavior polarity (ADR-036): per entrypoint, a ternary vector over the same
+  // obligations checked below — +1 protection present, 0 not applicable, -1
+  // violated. Built HERE so a -1 is literally the same condition as the finding
+  // (one source of truth, no drift). The algebra over these vectors lives in
+  // ubg/polarity.js; this function just records them.
+  const polarity = [];
 
   for (const ep of g.entrypoints) {
     const reach = reachOf(ep.id, g.cfOut);
@@ -77,9 +83,11 @@ export function checkGraph(graph) {
       for (const e of g.mutOut.get(n.id) ?? []) writes.push({ effect: n, stateId: e.to });
     }
     const observables = reached.filter((n) => n?.kind === 'effect' && n.meta.observable);
+    const vec = { auth: 0, validation: 0, atomicity: 0, reversibility: 0, aggregate: 0 };
 
     // O1 — every mutation path must pass a guard
     obligations++;
+    if (writes.length) vec.auth = guards.length ? 1 : -1;
     if (writes.length && guards.length === 0) {
       findings.push({
         rule: 'UNGUARDED_MUTATION',
@@ -92,21 +100,20 @@ export function checkGraph(graph) {
 
     // O2 — writes into constrained tables need validated input
     obligations++;
-    if (!ep.meta.inputValidated) {
-      const constrained = writes.filter((w) =>
-        (g.nodes.get(w.stateId)?.meta.invariants ?? []).some((i) =>
-          CONSTRAINING.has(i.type),
-        ),
-      );
-      if (constrained.length) {
-        findings.push({
-          rule: 'UNVALIDATED_CONSTRAINED_WRITE',
-          severity: 'medium',
-          entrypoint: ep.id,
-          message: `${ep.label} writes ${fmtStates(constrained)} whose declared invariants (CHECK/NOT NULL/UNIQUE) can be violated by unvalidated input`,
-          evidence: constrained.map((w) => w.stateId),
-        });
-      }
+    const constrained = writes.filter((w) =>
+      (g.nodes.get(w.stateId)?.meta.invariants ?? []).some((i) =>
+        CONSTRAINING.has(i.type),
+      ),
+    );
+    if (constrained.length) vec.validation = ep.meta.inputValidated ? 1 : -1;
+    if (!ep.meta.inputValidated && constrained.length) {
+      findings.push({
+        rule: 'UNVALIDATED_CONSTRAINED_WRITE',
+        severity: 'medium',
+        entrypoint: ep.id,
+        message: `${ep.label} writes ${fmtStates(constrained)} whose declared invariants (CHECK/NOT NULL/UNIQUE) can be violated by unvalidated input`,
+        evidence: constrained.map((w) => w.stateId),
+      });
     }
 
     // O3 — multi-table writes inside one aggregate must share a transaction
@@ -122,7 +129,9 @@ export function checkGraph(graph) {
       const states = new Set(ws.map((w) => w.stateId));
       if (states.size < 2) continue;
       const txIds = new Set(ws.map((w) => w.effect.meta.transaction?.id ?? null));
-      if (txIds.size !== 1 || txIds.has(null)) {
+      const atomic = txIds.size === 1 && !txIds.has(null);
+      vec.atomicity = atomic && vec.atomicity !== -1 ? 1 : -1;
+      if (!atomic) {
         findings.push({
           rule: 'NON_ATOMIC_AGGREGATE_WRITE',
           severity: 'high',
@@ -137,17 +146,21 @@ export function checkGraph(graph) {
     // when the entrypoint also mutates state (the write can fail after the
     // world already saw the effect)
     obligations++;
-    for (const obs of observables) {
-      if (obs.meta.compensable) continue;
-      if (g.compensators.has(obs.id)) continue; // the undo itself is not a risk
-      if (!writes.length) continue;
-      findings.push({
-        rule: 'IRREVERSIBLE_OBSERVABLE',
-        severity: 'high',
-        entrypoint: ep.id,
-        message: `${ep.label} makes an irreversible external call (${obs.meta.target ?? obs.label}) while also mutating state — no compensation path exists if the write fails`,
-        evidence: [`${obs.id} (${locOf(obs)})`],
-      });
+    if (observables.length && writes.length) {
+      let bad = false;
+      for (const obs of observables) {
+        if (obs.meta.compensable) continue;
+        if (g.compensators.has(obs.id)) continue; // the undo itself is not a risk
+        bad = true;
+        findings.push({
+          rule: 'IRREVERSIBLE_OBSERVABLE',
+          severity: 'high',
+          entrypoint: ep.id,
+          message: `${ep.label} makes an irreversible external call (${obs.meta.target ?? obs.label}) while also mutating state — no compensation path exists if the write fails`,
+          evidence: [`${obs.id} (${locOf(obs)})`],
+        });
+      }
+      vec.reversibility = bad ? -1 : 1;
     }
 
     // O5 — mutating an aggregate member without touching its root
@@ -160,6 +173,7 @@ export function checkGraph(graph) {
           g.nodes.get(o.stateId)?.meta.role === 'aggregate_root' &&
           g.nodes.get(o.stateId)?.meta.consistencyDomain === state.meta.consistencyDomain,
       );
+      vec.aggregate = touchesRoot && vec.aggregate !== -1 ? 1 : -1;
       if (!touchesRoot) {
         findings.push({
           rule: 'AGGREGATE_MEMBER_BYPASS',
@@ -170,9 +184,11 @@ export function checkGraph(graph) {
         });
       }
     }
+
+    polarity.push({ entrypoint: ep.id, vector: vec });
   }
 
-  return { findings: sortFindings(findings), obligations };
+  return { findings: sortFindings(findings), obligations, polarity };
 }
 
 // ---------------------------------------------------------------------------
