@@ -138,6 +138,12 @@ describe('runPolarity (wrapper)', () => {
     expect(Array.isArray(parsed.polarity)).toBe(true);
     expect(parsed.posture).toHaveProperty('auth');
   });
+
+  it('refuses a 0-route compile: NO POLARITY, exit 1', async () => {
+    const { out, exitCode } = await run(runPolarity, { cwd: BLIND });
+    expect(exitCode).toBe(1);
+    expect(out).toContain('NO POLARITY');
+  });
 });
 
 describe('runImmunize (wrapper)', () => {
@@ -153,6 +159,20 @@ describe('runImmunize (wrapper)', () => {
   it('a risky app freezes to NOT PROVEN', async () => {
     const { result } = await run(runImmunize, { cwd: BAIT, json: true });
     expect(result.capsule.proven).toBe(false);
+  });
+
+  it('writes a capsule to .sparda/immunity.json and prints summary', async () => {
+    const { result, out, exitCode } = await run(runImmunize, { cwd: CLEAN_APP });
+    expect(exitCode).toBe(0);
+    expect(out).toContain('IMMUNITY CAPSULE');
+    expect(out).toContain('✓ PROVEN');
+    expect(fs.existsSync(result.outPath)).toBe(true);
+  });
+
+  it('refuses a 0-route compile: NO CAPSULE, exit 1', async () => {
+    const { out, exitCode } = await run(runImmunize, { cwd: BLIND });
+    expect(exitCode).toBe(1);
+    expect(out).toContain('NO CAPSULE');
   });
 });
 
@@ -194,5 +214,23 @@ describe('runOpenapi (wrapper)', () => {
     expect(Object.keys(result.spec.paths).length).toBeGreaterThan(0);
     const parsed = JSON.parse(out);
     expect(parsed.openapi).toBe(result.spec.openapi);
+  });
+});
+
+import { spawnSync } from 'node:child_process';
+describe('CLI Entrypoint (index.js dispatch)', () => {
+  const CLI = path.join(REPO, 'src', 'index.js');
+  const NODE = process.execPath;
+  it('dispatches fingerprint', () => {
+    const r = spawnSync(NODE, [CLI, 'fingerprint'], { cwd: CLEAN_APP, encoding: 'utf8' });
+    expect(r.stdout).toContain('BEHAVIOR FINGERPRINTS');
+  });
+  it('dispatches polarity', () => {
+    const r = spawnSync(NODE, [CLI, 'polarity'], { cwd: CLEAN_APP, encoding: 'utf8' });
+    expect(r.stdout).toContain('BEHAVIOR POLARITY');
+  });
+  it('dispatches immunize', () => {
+    const r = spawnSync(NODE, [CLI, 'immunize'], { cwd: CLEAN_APP, encoding: 'utf8' });
+    expect(r.stdout).toContain('IMMUNITY CAPSULE');
   });
 });
