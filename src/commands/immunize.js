@@ -5,6 +5,7 @@
 // lookup, no recompile, no LLM, no network. BitNet's move applied to trust.
 //   sparda immunize          write .sparda/immunity.json + a summary
 //   sparda immunize --json   print the capsule to stdout
+import fs from 'node:fs';
 import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
@@ -31,7 +32,9 @@ export async function runImmunize(opts) {
     return { capsule };
   }
 
-  const outPath = path.join(opts.cwd, '.sparda', 'immunity.json');
+  const dotSparda = path.join(opts.cwd, '.sparda');
+  fs.mkdirSync(dotSparda, { recursive: true });
+  const outPath = path.join(dotSparda, 'immunity.json');
   atomicWrite(outPath, JSON.stringify(capsule) + '\n');
   const wire = JSON.stringify(capsule).length;
 
