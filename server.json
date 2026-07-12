@@ -3,7 +3,7 @@
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
   "description": "Compile backends to behavior graphs. Statically prove security, simulate APIs, and replay bugs.",
-  "version": "0.14.1",
+  "version": "0.15.1",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
     "source": "github"
