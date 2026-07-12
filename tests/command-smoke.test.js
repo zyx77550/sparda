@@ -13,6 +13,9 @@ import { runApocalypse } from '../src/commands/apocalypse.js';
 import { runVerify } from '../src/commands/verify.js';
 import { runUbg } from '../src/commands/ubg.js';
 import { runOpenapi } from '../src/commands/openapi.js';
+import { runFingerprint } from '../src/commands/fingerprint.js';
+import { runPolarity } from '../src/commands/polarity.js';
+import { runImmunize } from '../src/commands/immunize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..');
@@ -86,6 +89,70 @@ describe('runApocalypse (wrapper)', () => {
     expect(exitCode).toBe(1); // a parser-coverage miss must fail CI, not pass it
     expect(out).toContain('NO PROOF');
     expect(out).not.toContain('✓ PROVEN');
+  });
+});
+
+describe('runFingerprint (wrapper)', () => {
+  it('prints a portable behavior hash per route on a real app: exit 0', async () => {
+    const { result, out, exitCode } = await run(runFingerprint, { cwd: CLEAN_APP });
+    expect(result.prints.length).toBeGreaterThan(0);
+    expect(exitCode).toBe(0);
+    expect(out).toContain('BEHAVIOR FINGERPRINTS');
+    for (const p of result.prints) expect(p.behaviorHash).toMatch(/^bh1_[0-9a-f]{32}$/);
+  });
+
+  it('--json emits [{ entrypoint, behaviorHash, descriptor }]', async () => {
+    const { out } = await run(runFingerprint, { cwd: CLEAN_APP, json: true });
+    const parsed = JSON.parse(out);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0]).toHaveProperty('behaviorHash');
+    expect(parsed[0]).toHaveProperty('descriptor');
+  });
+
+  it('refuses a 0-route compile: NO FINGERPRINT, exit 1', async () => {
+    const { out, exitCode } = await run(runFingerprint, { cwd: BLIND });
+    expect(exitCode).toBe(1);
+    expect(out).toContain('NO FINGERPRINT');
+  });
+});
+
+describe('runPolarity (wrapper)', () => {
+  it('scores a clean app PROVEN: exit 0, proven true', async () => {
+    const { result, out, exitCode } = await run(runPolarity, { cwd: CLEAN_APP });
+    expect(result.proven).toBe(true);
+    expect(exitCode).toBe(0);
+    expect(out).toContain('PROVEN');
+  });
+
+  it('gates a risky app: exit 1, NOT PROVEN, an exposed axis', async () => {
+    const { result, out, exitCode } = await run(runPolarity, { cwd: BAIT });
+    expect(result.proven).toBe(false);
+    expect(exitCode).toBe(1);
+    expect(out).toContain('NOT PROVEN');
+  });
+
+  it('--json emits { proven, polarity, posture }', async () => {
+    const { out } = await run(runPolarity, { cwd: BAIT, json: true });
+    const parsed = JSON.parse(out);
+    expect(parsed).toHaveProperty('proven');
+    expect(Array.isArray(parsed.polarity)).toBe(true);
+    expect(parsed.posture).toHaveProperty('auth');
+  });
+});
+
+describe('runImmunize (wrapper)', () => {
+  it('--json emits a capsule: one byte per route, proven flag, posture', async () => {
+    const { result, out } = await run(runImmunize, { cwd: CLEAN_APP, json: true });
+    const cap = JSON.parse(out);
+    expect(cap.v).toBe('imm1');
+    expect(cap.bytes).toBe(cap.routes.length);
+    expect(result.capsule.routes.length).toBeGreaterThan(0);
+    for (const r of cap.routes) expect(r.pol).toBeLessThan(256);
+  });
+
+  it('a risky app freezes to NOT PROVEN', async () => {
+    const { result } = await run(runImmunize, { cwd: BAIT, json: true });
+    expect(result.capsule.proven).toBe(false);
   });
 });
 

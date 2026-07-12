@@ -117,6 +117,21 @@ try {
       await runReview(opts);
       break;
     }
+    case 'fingerprint': {
+      const { runFingerprint } = await import('./commands/fingerprint.js');
+      await runFingerprint(opts);
+      break;
+    }
+    case 'polarity': {
+      const { runPolarity } = await import('./commands/polarity.js');
+      await runPolarity(opts);
+      break;
+    }
+    case 'immunize': {
+      const { runImmunize } = await import('./commands/immunize.js');
+      await runImmunize(opts);
+      break;
+    }
     case 'timeless': {
       const { runTimeless } = await import('./commands/timeless.js');
       await runTimeless(opts, rest);
@@ -161,6 +176,9 @@ Usage:
   npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
   npx sparda-mcp apocalypse  Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
   npx sparda-mcp review    Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
+  npx sparda-mcp fingerprint  Portable behavior hash per route — the address for shared diagnoses (--json)
+  npx sparda-mcp polarity  Ternary safety matrix per route — proof as arithmetic (--json)
+  npx sparda-mcp immunize  Freeze proven safety into a tiny capsule (1 byte/route) — .sparda/immunity.json
   npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
   npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
   npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
