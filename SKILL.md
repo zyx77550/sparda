@@ -1,42 +1,32 @@
 ---
 name: sparda-mcp
 description: >-
-  Drive a SPARDA-generated MCP server to its full potential. Use this whenever
-  you are connected to an MCP server built by SPARDA (sparda-mcp) — recognizable
-  by the tools `sparda_get_context`, `sparda_info`, `sparda_confirm`, or composite
-  tools labelled "[Labs circuit]". It teaches the call-context-first workflow, how
-  to exploit the response-recycling flywheel, the circuit-breaker, crystallized
-  circuits and adaptive immunity, and the mandatory two-phase confirm protocol for
-  write tools. Reach for it before calling raw endpoints, before any write, or when
-  a tool returns 202 (awaiting confirmation) or 503 (quarantined).
+  Drive a SPARDA compiled Behavior Runtime to its full potential. Use this whenever
+  you are connected to a backend running the SPARDA Runtime (compiled into a Unified
+  Behavior Graph - UBG) — recognizable by the tools `sparda_get_context`, `sparda_info`,
+  `sparda_confirm`, or composite tools. It teaches the graph-context-first workflow,
+  how to exploit the response-recycling flywheel, the circuit-breaker, crystallized
+  circuits, offline Twin simulations, and the two-phase confirm protocol for writes.
 ---
 
-# Driving a SPARDA MCP server
+# Driving a SPARDA Behavior Runtime
 
-A SPARDA server is **not** a flat list of HTTP endpoints. SPARDA injected a live
-`/mcp` router *inside a real running app*, so its tools are that app's actual
-routes — wrapped in an intelligence layer that makes repeated use **cheaper** (it
-recycles stable answers from memory) and **safer** (it quarantines failing tools
-and gates writes behind human confirmation). This is the runtime half of SPARDA's
-trust layer — "AI writes. SPARDA proves." — the same engine that proves PRs and
-deploys (`sparda review` / `apocalypse`) also guards what you *do* to the live app.
-Used naively it's just an API. Used well, it gets faster and safer the more you
-call it. This skill is how to use it well.
+A SPARDA server is driven by a compiled **Unified Behavior Graph (UBG)** — the graph SPARDA's compiler produces from the host application's states, transitions, permissions, and side-effects, serialized under the **SBIR** specification. Instead of exposing raw, disconnected endpoints, SPARDA compiles the app into a deterministic behavioral model. The local **SPARDA Runtime** dynamically executes this graph inside the live host process, powering the MCP interface, the Twin simulation clone, and the Immune system offline.
+
+> This skill covers the **runtime** (driving a live MCP server) — the live half of SPARDA's trust layer: *"AI writes. SPARDA proves."* The same graph also powers dev-time proof commands you run in the app's repo — `sparda review` (the behavior diff of a PR), `apocalypse` (prove the deploy), `timeless` (record/replay a request), `heal` (prove a fix), `mirror` (serve the graph), `ubg` (compile), `verify` (prove the compiler's laws). Those are CLI, not MCP tools; see the project README.
 
 ## Rule 0 — call `sparda_get_context` first, every session
 
-Before anything else, call **`sparda_get_context`** (no params). It returns the
-*live* picture, so you never guess the surface:
+Before anything else, call **`sparda_get_context`** (no params). It returns the *live* state of the SPARDA Behavior Graph:
 
-- the enabled tools + their descriptions, and SPARDA's suggested **workflows**;
-- `runtime` — current `/mcp/stats` (per-tool call/error counts, tool "purity",
-  quarantine state);
-- the last ~20 **events** (errors, latency anomalies, immune diagnoses);
-- **immune memory** (known failure signatures + cached fixes);
-- **recycling** stats (how many calls were served from memory);
-- a `behavior` snapshot (which response fields are stable).
+- the active routes/tools, workflows, and type-propagated schemas;
+- `runtime` — current stats (calls, errors, quarantine states, Twin mode active);
+- the last ~20 **events** (errors, latency anomalies, immune alerts);
+- **immune memory** (cached antibodies and error diagnoses);
+- **recycling** metrics (flywheel memory hit rates);
+- a `behavior` snapshot of stable variables.
 
-Read it before acting. `sparda_info` gives a lighter summary if you only need counts.
+Read it to orient yourself inside the graph. `sparda_info` gives a lighter summary of counts.
 
 ## The tools you'll see
 
@@ -85,6 +75,16 @@ adapt — don't blindly retry the same call.
 
 **5. Latency anomalies.** A call far slower than a tool's own baseline surfaces as
 an `immune` event in `/mcp/events`. Treat it as a hint to back off or warn the user.
+
+**6. Twin Simulation Mode — practice safely on a clone.**
+When `/mcp/stats` or `sparda_get_context.runtime` contains `"twin": true`, you are connected to a safe, in-memory mock clone of the application.
+- All GET reads return learned exemplars (observed response shapes and mock values).
+- All write tools return simulated `202` echoes but do not write to database or external APIs.
+- Use this twin mode to practice multi-step workflows, debug tool sequences, and test your plans without touching the live production backend.
+
+**7. Grammar & Evolution — discover optimal workflows.**
+- You can query or contribute to the app's grammar (`.sparda/grammar.json`). The grammar maps valid sequences of tool calls (edges).
+- Running `sparda evolve` mutates and runs candidate chains against the twin. The successful evolved sequences are suggested as mid-session workflows.
 
 ## Writing safely — the mandatory two-phase protocol
 
@@ -138,6 +138,17 @@ Writes are **disabled by default**. The protocol is not optional:
 - **General health** → `sparda doctor` checks Node version, framework detection,
   manifest validity, the semantic/immune cache, host reachability, and quarantine;
   it exits non-zero so it can gate CI.
+- **Formal Deployment Proof** → `sparda apocalypse` reads the compiled graph (`ubg.json`) and proves five correctness obligations: catches unguarded mutations, non-atomic aggregate writes, unvalidated writes to constrained tables, uncompensated observable effects, and aggregate root bypasses. Run `sparda apocalypse --save-baseline` to store the reference graph; subsequent runs diff against the baseline to catch dropped guards, dropped SQL invariants, or grown blast radiuses.
+- **Safety Matrix Report** → `sparda dossier` generates an ultra-premium, self-contained HTML matrix of the app's safety proof, ideal for security engineers and audit compliance (Bloc C / Shadow tier).
+- **Deep Framework Resolution** → SPARDA natively traces multi-hop Dependency Injection in NestJS, external controllers in Express, and wrapped handlers in Next.js, mapping them into the final Behavior Graph.
+- **OpenAPI Ingestion** → Run `sparda ubg --openapi <openapi_spec.json>` to compile any non-JS/Python backend (Go, Java, Rails, Laravel, .NET) into a Unified Behavior Graph by mapping security schemes into guards and request/response structures. (JSON specs only — convert YAML once with `npx -y js-yaml spec.yaml > spec.json`.)
+- **Executing the Graph (No code mock)** → Run `sparda mirror` to host a mock HTTP simulation server directly from `ubg.json` without any backend code. Enforces authentication guards, returns typed responses, and acts as a contract sandbox.
+- **Exporting OpenAPI 3.1 Spec** → Run `sparda openapi` to generate a valid, deterministic OpenAPI 3.1 spec dynamically from the compiled behavior graph.
+- **Self-Verification** → Run `sparda verify` to test the compiler's own invariants (byte-determinism, soundness, and spec round-trip) to guarantee trust.
+- **Time-Travel Debugging** → `sparda timeless` records a production request's nondeterminism (db, http, clock, random, uuid) and replays it byte-identically against current code. `sparda timeless replay <id>` re-flies it; `sparda timeless export <id>` turns the bug into a vitest test. Recording is opt-in in the app (deterministic sampling + GDPR redaction built in).
+- **Self-Healing, Proven** → `sparda heal <id>` builds a fix brief from the graph, then `--check --expect '{"status":200}'` gates a candidate fix on three axes at once: the recorded flight now returns the expected response (not the bug), `verify` still passes, and `apocalypse` finds no new critical/high and no removed guard. The gate is honest both ways — an unfixed bug keeps it closed (exit 1).
+- **Clone learning / Transfer sémantique** → Use `sparda seed export` to package your app's descriptions, workflows, and antibodies. Then `sparda seed import --germinate` in another clone to import the structure and germinate simulated twin instances.
+- **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 
 ---
 *This skill ships with `sparda-mcp` and is regenerated from SPARDA's capability
