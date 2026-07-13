@@ -6,6 +6,8 @@
 import { detectStack } from '../detect.js';
 import { clearModuleCache } from './extract.js';
 import { extractExpress } from './express.js';
+import { extractNest } from './nestjs.js';
+import { extractMedusa } from './medusa.js';
 import { extractNext } from './nextjs.js';
 import { extractFastAPI } from './fastapi.js';
 import { extractOpenAPI } from './openapi.js';
@@ -28,6 +30,8 @@ export function compileUBG(
   const stack = openapi ? { framework: 'openapi', entryFile: openapi } : detectStack(cwd);
   const extractors = {
     express: () => extractExpress(cwd, stack.entryFile),
+    nestjs: () => extractNest(cwd, stack.entryFile),
+    medusa: () => extractMedusa(cwd, stack.entryFile),
     nextjs: () => extractNext(cwd, stack.entryFile),
     fastapi: () => extractFastAPI(cwd, stack.entryFile, stack.pythonCmd),
     openapi: () => extractOpenAPI(cwd, stack.entryFile),

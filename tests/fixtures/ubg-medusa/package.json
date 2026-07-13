@@ -1,0 +1,2 @@
+{ "name": "ubg-medusa-fixture", "private": true,
+  "dependencies": { "@medusajs/medusa": "^2.0.0", "@medusajs/framework": "^2.0.0" } }

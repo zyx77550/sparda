@@ -132,6 +132,21 @@ try {
       await runImmunize(opts);
       break;
     }
+    case 'speculate': {
+      const { runSpeculate } = await import('./commands/speculate.js');
+      await runSpeculate(opts);
+      break;
+    }
+    case 'dossier': {
+      const { runDossier } = await import('./commands/dossier.js');
+      await runDossier(opts);
+      break;
+    }
+    case 'genome': {
+      const { runGenome } = await import('./commands/genome.js');
+      await runGenome(opts);
+      break;
+    }
     case 'timeless': {
       const { runTimeless } = await import('./commands/timeless.js');
       await runTimeless(opts, rest);
@@ -179,6 +194,9 @@ Usage:
   npx sparda-mcp fingerprint  Portable behavior hash per route — the address for shared diagnoses (--json)
   npx sparda-mcp polarity  Ternary safety matrix per route — proof as arithmetic (--json)
   npx sparda-mcp immunize  Freeze proven safety into a tiny capsule (1 byte/route) — .sparda/immunity.json
+  npx sparda-mcp speculate  Re-verify vs the frozen capsule by lookup — full proof only on novel shapes (--json)
+  npx sparda-mcp dossier   Render the whole proof as one self-contained HTML page anyone can read (.sparda/dossier.html)
+  npx sparda-mcp genome    Sign this app's proofs into the shared world memory — self-verifying antibodies, zero infra (--json)
   npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
   npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
   npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)

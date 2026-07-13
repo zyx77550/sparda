@@ -1,6 +1,6 @@
 {
   "name": "sparda-mcp",
-  "version": "0.15.0",
+  "version": "0.26.0",
   "mcpName": "io.github.zyx77550/sparda-mcp",
   "description": "Compile backends to behavior graphs. Statically prove security, simulate APIs, and replay bugs.",
   "type": "module",

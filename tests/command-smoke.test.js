@@ -19,7 +19,8 @@ import { runImmunize } from '../src/commands/immunize.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..');
-const CLEAN_APP = path.join(REPO, 'demo-app'); // apocalypse: PROVEN, exit 0
+const CLEAN_APP = path.join(REPO, 'demo-app'); // apocalypse: SURFACE ONLY (routes, no effects), exit 0
+const PROVEN_APP = path.join(here, 'fixtures', 'ubg-proven'); // guarded+validated write: genuine PROVEN
 const BAIT = path.join(here, 'fixtures', 'ubg-semantics'); // apocalypse: NOT PROVEN, exit 1
 const BLIND = path.join(here, 'fixtures', 'ubg-blind'); // apocalypse: NO PROOF, exit 1
 const INLINE_MOUNT = path.join(here, 'fixtures', 'ubg-inline-mount'); // inline-require mount
@@ -58,11 +59,26 @@ afterEach(() => {
 });
 
 describe('runApocalypse (wrapper)', () => {
-  it('proves a clean app: exit 0, verdict safe, PROVEN in output', async () => {
-    const { result, out, exitCode } = await run(runApocalypse, { cwd: CLEAN_APP });
-    expect(result.verdict.safe).toBe(true);
+  it('proves a genuinely clean app (real effect, all obligations held): PROVEN, exit 0', async () => {
+    const { result, out, exitCode } = await run(runApocalypse, { cwd: PROVEN_APP });
+    expect(result.verdict.clean).toBe(true);
+    expect(result.verdict.surfaceOnly).toBe(false);
+    expect(result.verdict.observed).toBeGreaterThan(0); // SPARDA actually saw behavior
     expect(exitCode).toBe(0);
     expect(out).toContain('PROVEN');
+  });
+
+  it('does NOT bless a routes-but-no-behavior app as PROVEN: SURFACE ONLY, exit 0, safe', async () => {
+    // an app whose handlers only echo static JSON has nothing to prove — the honest
+    // verdict is "surface only", never a green PROVEN (the effect-level NO-PROOF guard).
+    const { result, out, exitCode } = await run(runApocalypse, { cwd: CLEAN_APP });
+    expect(result.verdict.surfaceOnly).toBe(true);
+    expect(result.verdict.clean).toBe(false);
+    expect(result.verdict.observed).toBe(0);
+    expect(result.verdict.safe).toBe(true); // not risky → not blocked
+    expect(exitCode).toBe(0);
+    expect(out).toContain('SURFACE ONLY');
+    expect(out).not.toContain('✓ PROVEN');
   });
 
   it('gates a risky deploy: exit 1, critical finding, NOT PROVEN', async () => {
@@ -162,17 +178,70 @@ describe('runImmunize (wrapper)', () => {
   });
 
   it('writes a capsule to .sparda/immunity.json and prints summary', async () => {
-    const { result, out, exitCode } = await run(runImmunize, { cwd: CLEAN_APP });
+    const { result, out, exitCode } = await run(runImmunize, { cwd: PROVEN_APP });
     expect(exitCode).toBe(0);
     expect(out).toContain('IMMUNITY CAPSULE');
     expect(out).toContain('✓ PROVEN');
+    expect(result.capsule.surfaceOnly).toBe(false);
     expect(fs.existsSync(result.outPath)).toBe(true);
+  });
+
+  it('freezes a routes-but-no-behavior app as SURFACE ONLY, not proven, exit 0', async () => {
+    const { result, out, exitCode } = await run(runImmunize, { cwd: CLEAN_APP });
+    expect(exitCode).toBe(0); // surface-only is not risky, so it does not gate
+    expect(result.capsule.surfaceOnly).toBe(true);
+    expect(result.capsule.proven).toBe(false);
+    expect(out).toContain('SURFACE ONLY');
   });
 
   it('refuses a 0-route compile: NO CAPSULE, exit 1', async () => {
     const { out, exitCode } = await run(runImmunize, { cwd: BLIND });
     expect(exitCode).toBe(1);
     expect(out).toContain('NO CAPSULE');
+  });
+});
+
+import { runGenome } from '../src/commands/genome.js';
+describe('runGenome (wrapper)', () => {
+  // genome writes into the app dir (key + genome file + .gitignore), so run on a
+  // throwaway COPY of the clean app — never the fixture itself.
+  const tmpApps = [];
+  const copyApp = () => {
+    const dir = path.join(os.tmpdir(), `sparda-genome-${process.pid}-${Date.now()}`);
+    fs.cpSync(CLEAN_APP, dir, { recursive: true });
+    tmpApps.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const d of tmpApps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('signs antibodies, writes a committable genome + a gitignored private key', async () => {
+    const cwd = copyApp();
+    const { result, out } = await run(runGenome, { cwd });
+    expect(out).toContain('GENOME — signed');
+    expect(result.minted.length).toBeGreaterThan(0);
+    expect(result.identity.issuer).toMatch(/^gk1_/);
+    expect(fs.existsSync(path.join(cwd, 'sparda-genome.jsonl'))).toBe(true);
+    // the private key lands only under .sparda/ …
+    expect(fs.existsSync(path.join(cwd, '.sparda', 'genome.key'))).toBe(true);
+    // … and .sparda/ is git-ignored so it can never be committed
+    expect(fs.readFileSync(path.join(cwd, '.gitignore'), 'utf8')).toContain('.sparda/');
+  });
+
+  it('is idempotent: a second run adds nothing (content-addressed dedup)', async () => {
+    const cwd = copyApp();
+    await run(runGenome, { cwd });
+    const { out } = await run(runGenome, { cwd });
+    expect(out).toContain('+0 new');
+  });
+
+  it('--json emits self-verifying antibodies', async () => {
+    const { out } = await run(runGenome, { cwd: copyApp(), json: true });
+    const abs = JSON.parse(out);
+    expect(Array.isArray(abs)).toBe(true);
+    expect(abs[0].id).toMatch(/^ab1_/);
+    expect(abs[0].sig).toBeTruthy();
   });
 });
 

@@ -6,6 +6,8 @@
 // tool (Swagger UI, client codegen, Postman) reads SPARDA's understanding of
 // a Go/Java/Rails backend it never had a spec for. Deterministic: sorted
 // paths, sorted keys, no timestamps — same graph, same bytes.
+import { cmp } from './schema.js';
+
 const OA_TYPE = {
   string: { type: 'string' },
   integer: { type: 'integer' },
@@ -49,7 +51,7 @@ export function emitOpenAPI(
 
   const entrypoints = [...nodes.values()]
     .filter((n) => n.kind === 'entrypoint')
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => cmp(a.id, b.id));
 
   for (const ep of entrypoints) {
     const oaPath = ep.meta.path.replace(/:(\w+)/g, '{$1}'); // :id → {id}
@@ -69,7 +71,7 @@ export function emitOpenAPI(
         required: p.in === 'path' ? true : Boolean(p.required),
         schema: schemaFor(p.type),
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => cmp(a.name, b.name));
     if (parameters.length) op.parameters = parameters;
 
     if (ep.meta.inputValidated && method !== 'get') {

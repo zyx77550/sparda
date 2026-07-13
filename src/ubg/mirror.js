@@ -18,6 +18,7 @@
 // denials, and state-machine-aware state — never invented business values. Every
 // response carries `x-sparda-mirror: true`.
 import http from 'node:http';
+import { cmp } from './schema.js';
 
 export function createMirrorServer(graph) {
   const { routes, machines } = buildRouteTable(graph);
@@ -176,7 +177,7 @@ function buildRouteTable(graph) {
   }
 
   const routes = [];
-  for (const node of [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+  for (const node of [...nodes.values()].sort((a, b) => cmp(a.id, b.id))) {
     if (node.kind !== 'entrypoint') continue;
     const handlerId = handlerOf.get(node.id);
     const guards = handlerId ? (gateByHandler.get(handlerId) ?? []) : [];

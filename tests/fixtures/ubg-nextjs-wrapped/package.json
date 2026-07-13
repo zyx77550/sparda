@@ -1,0 +1,1 @@
+{ "name": "ubg-nextjs-wrapped", "private": true, "dependencies": { "next": "^14", "@prisma/client": "^5" } }

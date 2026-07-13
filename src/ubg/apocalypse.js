@@ -11,6 +11,8 @@
 // structural reachability" — the prover is exactly as strong as what the code
 // and DDL declare. It proves the absence of whole bug classes, not of bugs.
 
+import { cmp } from './schema.js';
+
 const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, info: 3 };
 const CONSTRAINING = new Set(['check', 'not_null', 'unique']);
 
@@ -36,7 +38,7 @@ export function indexGraph(graph) {
   }
   const entrypoints = graph.nodes
     .filter((n) => n.kind === 'entrypoint')
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => cmp(a.id, b.id));
   return { nodes, cfOut, mutOut, gateTargets, compensators, entrypoints };
 }
 
@@ -125,7 +127,7 @@ export function checkGraph(graph) {
       if (!byDomain.has(domain)) byDomain.set(domain, []);
       byDomain.get(domain).push(w);
     }
-    for (const [domain, ws] of [...byDomain].sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const [domain, ws] of [...byDomain].sort((a, b) => cmp(a[0], b[0]))) {
       const states = new Set(ws.map((w) => w.stateId));
       if (states.size < 2) continue;
       const txIds = new Set(ws.map((w) => w.effect.meta.transaction?.id ?? null));
@@ -267,6 +269,24 @@ export function diffGraphs(baseline, candidate) {
 
 // ---------------------------------------------------------------------------
 
+// State-touching behavior SPARDA could actually fault: state nodes + db/http/fs
+// effects. `entropy` (a bare `new Date()`) is not safety-relevant, so it doesn't
+// count — an app of only time-reads has no behavior to prove. This is the effect-level
+// analogue of the provability guard, shared by the verdict and the immunity capsule so
+// the two artifacts never disagree about whether SPARDA saw anything to prove.
+const OBSERVABLE_EFFECT = new Set(['db_write', 'db_read', 'http_call', 'fs_write']);
+export function countObserved(graph) {
+  let n = 0;
+  for (const node of graph.nodes.values ? graph.nodes.values() : graph.nodes) {
+    if (
+      node.kind === 'state' ||
+      (node.kind === 'effect' && OBSERVABLE_EFFECT.has(node.meta?.effectType))
+    )
+      n++;
+  }
+  return n;
+}
+
 export function verdictOf(findings, graph) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -281,12 +301,30 @@ export function verdictOf(findings, graph) {
     ? graph.nodes.filter((n) => n.kind === 'entrypoint').length
     : null;
   const provable = entrypoints === null || entrypoints > 0;
+  const observed = graph ? countObserved(graph) : null;
+  // only assert surface-only for a WHOLE-app proof (graph given with entrypoints);
+  // a partial graph (heal's delta, entrypoints===null) keeps the old semantics.
+  const surfaceOnly = provable && entrypoints > 0 && observed === 0;
+  // guard provenance: how many guards did SPARDA actually VERIFY (see a deny path in
+  // the body) vs only assert by name (opaque middleware/decorators it couldn't read).
+  // Honest signal — it does not change the verdict, but it tells you how much of the
+  // auth posture rests on trust vs proof.
+  const guards = graph ? graph.nodes.filter((n) => n.kind === 'guard') : [];
+  const guardsVerified = guards.filter((g) => g.meta?.verified).length;
+  // `safe` is the CI gate (block a risky deploy): a surface-only app has no
+  // critical/high findings and is NOT risky, so it does not fail the gate — it just
+  // isn't a positive proof. `clean` is the strong claim (PROVEN) and DOES require
+  // observed behavior, so a hollow "everything's fine" can never read as PROVEN.
   return {
     counts,
     entrypoints,
+    observed,
     provable,
+    surfaceOnly,
+    guards: guards.length,
+    guardsVerified,
     safe: provable && counts.critical === 0 && counts.high === 0,
-    clean: provable && findings.length === 0,
+    clean: provable && !surfaceOnly && findings.length === 0,
   };
 }
 
@@ -294,8 +332,8 @@ function sortFindings(findings) {
   return findings.sort(
     (a, b) =>
       SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
-      a.rule.localeCompare(b.rule) ||
-      a.entrypoint.localeCompare(b.entrypoint),
+      cmp(a.rule, b.rule) ||
+      cmp(a.entrypoint, b.entrypoint),
   );
 }
 

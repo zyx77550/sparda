@@ -375,3 +375,151 @@ anything that smells familiar. Newest last.
 - **Rule:** "PROVEN over 0 nodes" is **vacuous** — a zero-entrypoint compile is a
   coverage miss, never a pass. Enforce it at the verdict, not per-command: any
   verdict emitter that can't see a route surface must say NO PROOF and fail CI.
+
+## E-023 — `sparda immunize` crashed on a fresh project (no `.sparda/` dir)
+- **Symptom:** `sparda immunize` in a directory that had never been compiled threw
+  `ENOENT: … open '.sparda/immunity.json.sparda-tmp'` and exited 2. It only "worked"
+  in dev when another command (`ubg`, `apocalypse`) had already created `.sparda/`.
+  Caught by a smoke test Gemini added (`command-smoke` — the test was right, the code
+  was wrong).
+- **Root cause:** `runImmunize` called `atomicWrite(outPath, …)` without first creating
+  the `.sparda/` directory. `atomicWriteFileSync` writes a `*.sparda-tmp` sibling then
+  renames — both fail if the parent dir doesn't exist. `apocalypse`/`serialize` both
+  `mkdirSync(recursive)` first; `immunize` (new in 0.15.0) forgot to.
+- **Fix:** `fs.mkdirSync(path.dirname(outPath), { recursive: true })` before the write
+  in `src/commands/immunize.js`.
+- **Rule:** any command that writes into `.sparda/` must `mkdirSync(recursive)` the
+  parent first — never assume a prior command created it. A file-writing command must be
+  runnable standalone on a virgin checkout.
+
+## E-024 — Derived artifacts not byte-identical across locales (`localeCompare` again)
+- **Symptom:** E-020 fixed the *graph's* determinism (in `canonicalizeGraph`), but the
+  DERIVED emitters still sorted with `String.prototype.localeCompare`: apocalypse
+  findings + the per-entrypoint iteration order (→ `polarity`, `immunize`, `review`
+  outputs), the emitted OpenAPI spec, the mirror node dump, and the `ubg` report. For
+  mixed-case / punctuation-leading routes the collation diverges from code units, so a
+  machine in a different ICU/locale emits a *different byte stream*. Proven: `/Users`,
+  `/_debug`, `/admin`, `/users` sort in a completely different order under `cmp` vs
+  `localeCompare('en-US')`. (It slipped past earlier because the test fixtures have only
+  lowercase routes, where the two orders happen to agree.)
+- **Root cause:** the determinism contract (`cmp`, code units) was enforced only at
+  `canonicalizeGraph`, not in the artifact emitters downstream of it.
+- **Fix:** replaced every output-reaching `localeCompare` with the exported `cmp` in
+  `src/ubg/apocalypse.js` (entrypoints, findings sort, aggregate-domain sort),
+  `src/ubg/openapi-emit.js`, `src/ubg/mirror.js`, `src/commands/ubg.js`. Regression:
+  `tests/determinism.test.js` builds a graph whose routes make the two orders diverge and
+  asserts the output follows `cmp`, never `localeCompare`.
+- **Rule:** `cmp` (code units), never `localeCompare`, for ANY ordering that reaches a
+  serialized or printed artifact — not just the canonical graph. `localeCompare` is
+  *specified* to be locale-dependent; a green run in one locale is not proof.
+- **Follow-up (logged, not a bug today):** several graph-BUILDING sorts (in `ubg/express`,
+  `nextjs`, `sql`, `prisma`, `link`, `reach`, and the `passes/*`) still use `localeCompare`.
+  They feed `canonicalizeGraph`, which re-sorts by `cmp`, so they don't change the final
+  `ubg.json` bytes today — but convert them for defense-in-depth if any ever starts
+  assigning order-dependent ids/ordinals.
+
+## C-001b — RESOLVED for NestJS: DI-framework apps compiled to 0 routes
+- **Symptom:** NestJS / Medusa / Inversify apps compiled to **0 nodes** (NO PROOF).
+  Routes are `@Get()` decorators, not `app.get()`; the real write lives in a DI'd
+  service; and Nest parameter decorators (`@Body()`) even broke the parse.
+- **Fix (ADR-039):** `src/ubg/nestjs.js` — decorator route table + `@UseGuards` +
+  **static DI resolution via constructor parameter types** (follow `this.svc.m()` to the
+  service method). Plus `extract.js` reads `this.<field>` effects, and the parser uses
+  `decorators-legacy`. A Nest app now yields real findings (proof: `tests/nestjs.test.js`).
+- **Remaining (tracked, not a bug):** string-token runtime DI (`resolve('userService')`)
+  and file-based routing conventions are the next ingestion rungs; non-JS via `--openapi`.
+- **Rule:** ingestion is a LADDER, not one detector. When a framework hides its routes
+  behind decorators/DI/conventions, add a rung that reads the static signal that IS there
+  (here: constructor types) — never just throw "not supported".
+
+## C-001c — RESOLVED for Medusa: file-based routes compiled to 0 (the real wall)
+- **Symptom:** a real `medusajs/medusa` checkout still compiled to **0 routes** even
+  after the Nest extractor — Medusa has **no `@Controller` classes**. Routes are a
+  *filesystem convention* (`src/api/<path>/route.ts`, verb = exported const name), and
+  the DB write lives in a **workflow** call, not an ORM call. NestJS's decorator scan
+  found nothing → NO PROOF on the biggest JS commerce app. This is the wall an automated test re-hit.
+- **Fix (ADR-040):** `src/ubg/medusa.js` — walk `src/api/**/route.{ts,js}`; path from the
+  directory (`[id]`→`:id`); exported `GET/POST/…` = methods; **inverted** auth convention
+  (`export const AUTHENTICATE = false` is the *only* opt-out, else guarded); and a
+  **workflow-verb effect heuristic** (`create*Workflow`→`db_write insert`, `list*`→read)
+  since `scanFunction` sees no ORM op in the body. Detected from `@medusajs/*` + `src/api`.
+- **Proof:** real Medusa (319 route files) went **0 → 476 routes** in ~0.5s, 0 skipped —
+  435 db_writes, 121 state tables, 474 guards, verdict *provable & clean* (honest: Medusa
+  guards nearly every mutation). Fixture: `tests/medusa.test.js` (6). One critical caught
+  on the `AUTHENTICATE=false` public cart mutation — the inversion works.
+- **Remaining rung:** Medusa declares data models in its own DML (not `.sql`/`.prisma`),
+  so O2 (field validation) has no constraint set on Medusa yet. Next rung: DML parsing.
+
+## E-025 — Hollow PROVEN: a green verdict on apps with ZERO resolved behavior
+- **Symptom:** the multi-repo organ stress test found SPARDA printing **✓ PROVEN** on
+  immich (281 NestJS routes, 1 effect), GitHub's OpenAPI (1196 routes, 0 effects), and a
+  stock Express boilerplate (8 routes, 0 effects). "No obligations to fault" was reported as
+  a clean bill of health, when the truth was "SPARDA saw the route surface but not what the
+  code does" (a spec has no bodies; DI/external-controller effects weren't followed).
+- **Fix (ADR-042):** the **behavior guard** — `countObserved(graph)` (state + db/http/fs
+  effects; entropy excluded) in `apocalypse.js`. Routes but `observed===0` → **SURFACE ONLY**,
+  a distinct third verdict: `clean` (PROVEN) requires `!surfaceOnly`, but `safe` (the CI gate)
+  does not (unprovable ≠ unsafe → still exit 0). Shared by verdict, `buildCapsule`, `immunize`,
+  and `dossier` so no two artifacts disagree.
+- **Proof:** immich + GitHub-OpenAPI flipped to SURFACE ONLY; dub/Medusa unchanged. New
+  `tests/fixtures/ubg-proven` is the suite's first *genuine* PROVEN — the old "clean app" test
+  had been asserting a hollow proven on an effect-less echo app the whole time.
+- **Rule:** a behavior compiler that resolved no behavior must not print the same green as one
+  that proved everything. Absence of findings is only a proof when there was something to fault.
+
+## E-026 — NestJS monster read as 1 effect / hollow PROVEN (immich)
+- **Symptom:** the stress test found immich (281 NestJS routes) resolving **1 effect** → a
+  hollow PROVEN. Routes were read but the behavior behind them was invisible.
+- **Root cause (four stacked):** (1) immich imports via tsconfig `baseUrl` (`src/services/x`),
+  which `resolveRelImport` didn't handle; (2) the DB write is 2 DI hops down (controller →
+  service → repository), the resolver did 1; (3) the repository is injected in a `BaseService`
+  the service `extends` (inherited DI — the type is imported in the base module); (4) the DB
+  layer is Kysely (`db.insertInto`) and guards are `@Authenticated()` not `@UseGuards()`.
+- **Fix (ADR-043):** tsconfig `baseUrl`/`paths` resolution; recursive bounded DI (`followDI`);
+  DI map built up the `extends` chain with each entry tagged by its declaring module
+  (`diMapWithMod`); Kysely ops in the scanner; guard-by-decorator-name.
+- **Proof:** immich → **310 effects, 45 tables, 253 guards, NOT PROVEN with 2 genuine** OAuth
+  findings. Fixture `ubg-nestjs-deep` + `nestjs-deep.test.js`. dub/Medusa/OpenAPI unchanged.
+- **Rule:** once you resolve effects deeper, you MUST resolve guards as deep, or precision
+  collapses into false-positive noise (125 → 2 here). Effect depth and guard depth ship together.
+
+## E-027 — stock Express boilerplate read as 0 effects / SURFACE ONLY
+- **Symptom:** a standard Express app (external controllers + services) resolved **0 effects**
+  → SURFACE ONLY. Routes read, behavior invisible.
+- **Root cause (three stacked):** (1) the extractor resolved the `controller.method` handler but
+  not the `service.method()` calls inside it; (2) services are imported through a barrel
+  (`const { x } = require('./services')`, index.js re-exports each); (3) the leaf is Mongoose
+  (`Model.create()`), unrecognised.
+- **Fix (ADR-044):** recursive module-member deep scan (`deepScan`/`followMembers`, express.js);
+  barrel re-export resolution (`parseModule` records `module.exports.x = require`, destructured
+  imports resolve through it); Mongoose ops in the scanner (Capitalized receiver + known op).
+- **Proof:** boilerplate → **9 effects, 2 tables, NOT PROVEN with 3 genuine** findings. Fixture
+  `ubg-express-deep` + `express-deep.test.js`. immich/dub/Medusa unchanged.
+- **Rule:** the CommonJS `obj.method()` chain is the exact analogue of Nest's `this.dep.method()`
+  DI chain — resolve it the same way (recursive, bounded), or the flagship framework stays blind.
+
+## E-028 — Express detection hard-failed on a non-standard entry filename
+- **Symptom:** `findExpressEntry` threw "Could not locate your Express entry" on apps whose
+  entry isn't named `app/server/index/main.{ts,js}` — e.g. parse-server (`src/ParseServer.ts`).
+  A real, supported app was rejected before any analysis ran.
+- **Root cause:** detection only probed a fixed candidate-filename list; anything else missed.
+- **Fix (ADR-045):** a bounded source-tree fallback (`searchExpressEntry`) — scan for a bare
+  `express()` app-factory call, rank a `.listen()`ing server first, exclude node_modules/tests/
+  examples, cap at 400 files. Mirrors the existing FastAPI `searchPyFiles` fallback.
+- **Proof:** parse-server detects as `express @ src/ParseServer.ts` (then honest NO PROOF — a
+  library). Fixture `ubg-express-weird-entry` (entry `bootstrap.ts`) → detected + 2 routes.
+- **Rule:** detection must never hard-fail on a *naming* convention — probe the fast named
+  paths, then fall back to the semantic signal (the `express()`/`FastAPI()` call itself).
+
+## E-029 — Over-broad deny detection turned throwing business logic into fake guards
+- **Symptom:** while hardening guard semantics (ADR-046), treating a bare `throw` / `next(err)`
+  as a deny signal made express-boilerplate flip NOT PROVEN→PROVEN and dub drop 156→152
+  findings — real unguarded mutations got HIDDEN.
+- **Root cause:** `isGuardLike(name, scan)` credits any `scan.guardSignals.deniesWithStatus`
+  as a guard. A service throwing `ApiError(400)` on bad input then classified as a "guard" on
+  the mutation path → the route read as guarded.
+- **Fix:** deny recognition stays **auth-specific** — `res.status(401|403)` / `sendStatus`
+  only, never a generic throw. The no-op-guard downgrade (structural) and `verified` provenance
+  are the safe parts kept.
+- **Rule:** a "deny" that feeds guard classification must be auth-specific (a 401/403), not any
+  error path — or validation logic becomes counterfeit auth and masks the very bugs we hunt.

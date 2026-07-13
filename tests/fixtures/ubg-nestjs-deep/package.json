@@ -1,0 +1,2 @@
+{ "name": "ubg-nestjs-deep", "private": true,
+  "dependencies": { "@nestjs/core": "^10", "@nestjs/common": "^10", "kysely": "^0.27" } }

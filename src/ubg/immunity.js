@@ -11,7 +11,7 @@
 // It is also the atom of the world genome (ADR-035): one app's capsule is its
 // contribution; capsules compose (posture column-sums stack app → fleet → world).
 import { fingerprintGraph } from './fingerprint.js';
-import { checkGraph } from './apocalypse.js';
+import { checkGraph, countObserved } from './apocalypse.js';
 import { cmp } from './schema.js';
 import { AXES, posture, provenByPolarity, packVector, exposedAxes } from './polarity.js';
 
@@ -30,9 +30,13 @@ export function buildCapsule(graph) {
     }))
     .sort((a, b) => cmp(a.behaviorHash ?? '', b.behaviorHash ?? ''));
 
+  // surface-only apps (routes but zero observed behavior) are NOT proven — the same
+  // honesty guard the apocalypse verdict applies, so capsule and verdict never disagree.
+  const surfaceOnly = routes.length > 0 && countObserved(graph) === 0;
   return {
     v: CAPSULE_VERSION,
-    proven: provenByPolarity(polarity),
+    proven: !surfaceOnly && provenByPolarity(polarity),
+    surfaceOnly,
     routes,
     posture: posture(polarity),
     bytes: routes.length, // the whole app's safety, one byte per route

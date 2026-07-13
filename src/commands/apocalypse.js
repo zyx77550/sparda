@@ -78,6 +78,13 @@ export async function runApocalypse(opts) {
             `      no route call sites reached — routes are likely registered indirectly (a loader / DI pattern the static walk can't follow).`,
           );
       }
+    } else if (verdict.surfaceOnly) {
+      console.log(
+        `● SURFACE ONLY — ${verdict.entrypoints} route(s) seen, but ZERO behavior resolved (no state, no db/http/fs effects). There was nothing to prove, so this is NOT a clean bill of health — SPARDA saw the surface but not what the code does (a spec, or an effect-resolution gap: DI services, external controllers). Run with --verbose.`,
+      );
+      if (opts.verbose && report.skipped?.length)
+        for (const s of report.skipped)
+          console.log(`      skipped: ${s.reason}${s.file ? ` (${s.file})` : ''}`);
     } else if (verdict.clean) {
       console.log(
         `✓ PROVEN — ${obligations} obligation(s) discharged, zero violations. No declared guard, invariant, transaction or aggregate boundary can be broken by this tree.`,

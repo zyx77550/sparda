@@ -32,9 +32,8 @@ export async function runImmunize(opts) {
     return { capsule };
   }
 
-  const dotSparda = path.join(opts.cwd, '.sparda');
-  fs.mkdirSync(dotSparda, { recursive: true });
-  const outPath = path.join(dotSparda, 'immunity.json');
+  const outPath = path.join(opts.cwd, '.sparda', 'immunity.json');
+  fs.mkdirSync(path.dirname(outPath), { recursive: true }); // .sparda/ may not exist yet
   atomicWrite(outPath, JSON.stringify(capsule) + '\n');
   const wire = JSON.stringify(capsule).length;
 
@@ -45,13 +44,17 @@ export async function runImmunize(opts) {
   const exposed = AXES.filter((a) => capsule.posture[a].exposed > 0)
     .map((a) => `${a}×${capsule.posture[a].exposed}`)
     .join(', ');
-  console.log(
-    `  verdict: ${capsule.proven ? '✓ PROVEN' : '✗ NOT PROVEN'}` +
-      (exposed ? ` — exposed: ${exposed}` : ''),
-  );
+  const verdictText = capsule.surfaceOnly
+    ? '● SURFACE ONLY — routes seen, no behavior resolved (nothing to prove)'
+    : capsule.proven
+      ? '✓ PROVEN'
+      : '✗ NOT PROVEN';
+  console.log(`  verdict: ${verdictText}` + (exposed ? ` — exposed: ${exposed}` : ''));
   console.log(
     `  written: .sparda/immunity.json (${wire} bytes on the wire) — portable, offline, lookup by behaviorHash`,
   );
-  if (!capsule.proven) process.exitCode = 1;
+  // surface-only is not a risk (nothing to fault) → don't fail CI; only a real
+  // unproven capsule (an exposed axis) gates.
+  if (!capsule.proven && !capsule.surfaceOnly) process.exitCode = 1;
   return { capsule, outPath };
 }

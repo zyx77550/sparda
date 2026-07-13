@@ -161,3 +161,35 @@ describe('Apocalypse: provability guard (NO PROOF on a 0-route graph)', () => {
     expect(v.clean).toBe(true);
   });
 });
+
+// Behavior guard: routes but ZERO state-touching effects (a spec, or an extractor
+// that saw the surface but not the effects) is SURFACE ONLY — provable but never
+// PROVEN. `safe` stays true (nothing to fault → not risky → doesn't gate CI); only
+// `clean` (the PROVEN claim) folds it in.
+describe('Apocalypse: behavior guard (SURFACE ONLY on a routes-but-no-effects graph)', () => {
+  const PROVEN_FIXTURE = path.join(here, 'fixtures', 'ubg-proven');
+
+  it('a graph with routes but no observed behavior is surfaceOnly and not clean', () => {
+    // hand-built: 2 entrypoints, only logic nodes, no effects/state
+    const g = {
+      nodes: [
+        { id: 'entrypoint:GET /a', kind: 'entrypoint', meta: {} },
+        { id: 'entrypoint:GET /b', kind: 'entrypoint', meta: {} },
+        { id: 'logic:a', kind: 'logic', meta: {} },
+      ],
+      edges: [],
+    };
+    const v = verdictOf([], g);
+    expect(v.observed).toBe(0);
+    expect(v.surfaceOnly).toBe(true);
+    expect(v.clean).toBe(false); // never PROVEN
+    expect(v.safe).toBe(true); // but not risky → does not gate CI
+  });
+
+  it('a graph WITH a real effect is not surfaceOnly, and clean with no findings', () => {
+    const v = verdictOf([], graphOf(PROVEN_FIXTURE));
+    expect(v.observed).toBeGreaterThan(0);
+    expect(v.surfaceOnly).toBe(false);
+    expect(v.clean).toBe(true);
+  });
+});

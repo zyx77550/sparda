@@ -1,0 +1,18 @@
+// UBG proven fixture — the "what a real proof looks like" app: one guarded,
+// validated, single-row write. Genuinely clean across all five obligations.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Note {
+  id   Int    @id @default(autoincrement())
+  text String
+  done Boolean @default(false)
+
+  @@map("notes")
+}

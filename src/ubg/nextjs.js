@@ -108,8 +108,9 @@ export function extractNext(cwd, appDir) {
       helpers.push({ name, sourceFile: relFile, sourceLine: f.line, fn: f.node });
     }
 
+    const handlers = verbHandlers(mod);
     for (const verb of [...VERBS].sort()) {
-      const f = mod.functions.get(verb);
+      const f = handlers.get(verb);
       if (!f) continue;
       const key = `${verb} ${urlPath}`;
       if (seen.has(key)) {
@@ -138,7 +139,7 @@ export function extractNext(cwd, appDir) {
             role: 'handler',
             sourceFile: relFile,
             sourceLine: f.line,
-            fn: f.node,
+            fn: f.fn, // resolved handler node, or null (route registered, body blind)
           },
         ],
         description: '',
@@ -149,4 +150,62 @@ export function extractNext(cwd, appDir) {
   function rel(abs) {
     return path.relative(cwd, abs).split(path.sep).join('/');
   }
+}
+
+// Every exported HTTP verb in a route file → { fn|null, line }. A route EXISTS as soon
+// as it exports `GET`/`POST`/… — regardless of whether we can see the handler body. Real
+// Next apps rarely inline the handler: they alias it (`export const GET = handler`), wrap
+// it (`export const POST = withAuth(postHandler)`), or re-export it (`export { GET }`).
+// The old lookup only matched an inline function, so it silently dropped ~90% of routes on
+// cal.com / formbricks. We register the route either way, resolving the body when we can
+// (a local function, or the wrapped/aliased local function) and leaving it blind otherwise.
+function verbHandlers(mod) {
+  const out = new Map();
+  const set = (name, fn, line) => {
+    if (VERBS.has(name) && !out.has(name))
+      out.set(name, { fn: fn ?? null, line: line ?? 0 });
+  };
+  for (const node of mod.ast.program.body) {
+    if (node.type !== 'ExportNamedDeclaration') continue;
+    const d = node.declaration;
+    if (d?.type === 'FunctionDeclaration' && d.id) {
+      set(d.id.name, d, d.loc?.start.line);
+    } else if (d?.type === 'VariableDeclaration') {
+      for (const decl of d.declarations) {
+        if (decl.id?.type === 'Identifier')
+          set(decl.id.name, resolveHandlerExpr(decl.init, mod), decl.loc?.start.line);
+      }
+    } else if (!d && node.specifiers) {
+      // export { GET, postHandler as POST } — resolve the local binding to a function
+      for (const spec of node.specifiers) {
+        if (spec.type !== 'ExportSpecifier' || spec.exported.type !== 'Identifier')
+          continue;
+        set(
+          spec.exported.name,
+          mod.functions.get(spec.local.name)?.node,
+          spec.local.loc?.start.line,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+// resolve an `export const VERB = <init>` right-hand side to a scannable function node,
+// or null (route still registered, body blind). Handles inline fns, local aliases, and
+// wrapper calls whose handler is an inline fn or a local-function identifier argument.
+function resolveHandlerExpr(init, mod) {
+  if (!init) return null;
+  if (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')
+    return init;
+  if (init.type === 'Identifier') return mod.functions.get(init.name)?.node ?? null;
+  if (init.type === 'CallExpression') {
+    for (const a of init.arguments)
+      if (a.type === 'ArrowFunctionExpression' || a.type === 'FunctionExpression')
+        return a;
+    for (const a of init.arguments)
+      if (a.type === 'Identifier' && mod.functions.get(a.name))
+        return mod.functions.get(a.name).node;
+  }
+  return null;
 }

@@ -4,6 +4,7 @@
 // there. Artifact: .sparda/ubg.json — regenerable, deterministic, never
 // committed. `--json` prints the raw graph, `--out <file>` redirects it.
 import { compileUBG } from '../ubg/compile.js';
+import { cmp } from '../ubg/schema.js';
 
 export async function runUbg(opts) {
   const { report, json, outPath } = compileUBG(opts.cwd, {
@@ -73,7 +74,7 @@ export async function runUbg(opts) {
 
 const fmtCounts = (obj) =>
   Object.entries(obj)
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => cmp(a, b))
     .map(([k, v]) => `${k} ${v}`)
     .join(' · ');
 

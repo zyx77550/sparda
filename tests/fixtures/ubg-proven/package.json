@@ -1,0 +1,10 @@
+{
+  "name": "ubg-proven-fixture",
+  "private": true,
+  "main": "src/app.js",
+  "dependencies": {
+    "express": "^4.21.0",
+    "@prisma/client": "^5.20.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -23,7 +23,16 @@ import {
   makeNode,
   stateId,
 } from './schema.js';
-import { isGuardLike, scanFunction } from './extract.js';
+import { isGuardLike, isNoOpGuard, scanFunction } from './extract.js';
+
+// Is this chain step / helper a REAL guard? Named or deny-bodied like a guard, and
+// NOT a visible no-op pass-through (a disabled `(req,res,next)=>next()` guards nothing).
+// `verified` = we SAW a deny path (body visible + throw/deny-status/next(err)); an opaque
+// middleware/decorator (fn:null) is trusted by name but marked unverified — honest either way.
+function guardFacts(name, scan, fn) {
+  const isGuard = isGuardLike(name, scan) && !isNoOpGuard(fn);
+  return { isGuard, verified: Boolean(scan?.guardSignals?.deniesWithStatus) };
+}
 
 export function translate({ framework, routes, globalMiddlewares, helpers, tables }) {
   const graph = createGraph({ framework });
@@ -74,7 +83,8 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
     // extractors on non-JS runtimes (FastAPI) pre-compute the scan — the
     // microscope only runs when we hold an actual babel node
     const scan = h.scan ?? scanFunction(h.fn);
-    const kind = isGuardLike(h.name, scan) ? 'guard' : 'logic';
+    const gf = guardFacts(h.name, scan, h.fn);
+    const kind = gf.isGuard ? 'guard' : 'logic';
     const id =
       kind === 'guard'
         ? guardId(h.sourceFile, h.name, h.sourceLine)
@@ -89,7 +99,9 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
         {
           role: 'function',
           async: scan.async,
-          ...(kind === 'guard' ? { guardType: guardTypeOf(h.name, scan) } : {}),
+          ...(kind === 'guard'
+            ? { guardType: guardTypeOf(h.name, scan), verified: gf.verified }
+            : {}),
         },
       ),
     );
@@ -191,8 +203,8 @@ function translateRoute(
 // A chain step (middleware or handler) becomes a guard or logic node.
 function ensureChainNode(graph, step, scanCache) {
   const scan = step.scan ?? scanFunction(step.fn);
-  const kind =
-    isGuardLike(step.name, scan) && step.role !== 'handler' ? 'guard' : 'logic';
+  const gf = guardFacts(step.name, scan, step.fn);
+  const kind = gf.isGuard && step.role !== 'handler' ? 'guard' : 'logic';
   const id =
     kind === 'guard'
       ? guardId(step.sourceFile, step.name, step.sourceLine)
@@ -216,7 +228,9 @@ function ensureChainNode(graph, step, scanCache) {
       {
         role: step.role,
         async: scan.async,
-        ...(kind === 'guard' ? { guardType: guardTypeOf(step.name, scan) } : {}),
+        ...(kind === 'guard'
+          ? { guardType: guardTypeOf(step.name, scan), verified: gf.verified }
+          : {}),
         ...(step.role === 'handler' && scan.returnShapes.length
           ? { returnShapes: scan.returnShapes }
           : {}),

@@ -22,6 +22,64 @@ const SQL_VERBS = {
   upsert: { effectType: 'db_write', op: 'upsert' },
 };
 const SUPABASE_OPS = new Set(['select', 'insert', 'update', 'upsert', 'delete']);
+// Kysely: the op names its own table (db.insertInto('t')), one op = one verb.
+const KYSELY_OPS = {
+  insertinto: 'insert',
+  updatetable: 'update',
+  deletefrom: 'delete',
+  selectfrom: 'select',
+  replaceinto: 'upsert',
+  mergeinto: 'upsert',
+};
+// Active-record ORM ops, keyed by method name. Covers Mongoose (`User.create()`),
+// TypeORM (`User.save()`/`repo.save()`), and Sequelize (`User.findAll()`/`destroy()`) —
+// they share the `Model.op()` / `repository.op()` shape, so one table serves all three.
+const MODEL_OPS = {
+  // writes — inserts
+  create: 'insert',
+  insertmany: 'insert',
+  bulkcreate: 'insert', // sequelize
+  save: 'insert', // mongoose / typeorm
+  insert: 'insert', // typeorm repository
+  // writes — updates
+  updateone: 'update',
+  updatemany: 'update',
+  replaceone: 'update',
+  findbyidandupdate: 'update',
+  findoneandupdate: 'update',
+  findoneandreplace: 'update',
+  increment: 'update', // sequelize / typeorm
+  decrement: 'update',
+  upsert: 'upsert',
+  // writes — deletes
+  deleteone: 'delete',
+  deletemany: 'delete',
+  findbyidanddelete: 'delete',
+  findoneanddelete: 'delete',
+  findbyidandremove: 'delete',
+  remove: 'delete', // mongoose / typeorm
+  destroy: 'delete', // sequelize
+  softdelete: 'delete', // typeorm
+  softremove: 'delete',
+  // reads
+  find: 'select',
+  findall: 'select', // sequelize
+  findone: 'select',
+  findbyid: 'select',
+  findbypk: 'select', // sequelize
+  findby: 'select', // typeorm
+  findoneby: 'select', // typeorm
+  countdocuments: 'select',
+  estimateddocumentcount: 'select',
+  count: 'select',
+  distinct: 'select',
+  exists: 'select',
+  paginate: 'select',
+};
+// Drizzle: `db.insert(users).values(...)` / `db.update(users).set(...)` / `db.delete(users)`
+// — the table is an IDENTIFIER (the schema object), not a string. Distinct from Kysely
+// (which names the table in the method: insertInto) and supabase (.from('t')).
+const DRIZZLE_OPS = { insert: 'insert', update: 'update', delete: 'delete' };
 const PRISMA_OPS = {
   findmany: 'select',
   findunique: 'select',
@@ -66,6 +124,7 @@ const moduleCache = new Map(); // absFile -> module facts (parse once per compil
 
 export function clearModuleCache() {
   moduleCache.clear();
+  tsconfigCache.clear();
 }
 
 // absFile → { ast, functions: Map<name,{node,line,exported}>, imports: Map<local,abs>, error }
@@ -75,7 +134,9 @@ export function parseModule(absFile) {
     ast: null,
     functions: new Map(),
     imports: new Map(),
+    reexports: new Map(), // barrel: `module.exports.x = require('./x')` → x -> file
     error: null,
+    _file: absFile, // the module's own path — DI resolution reports source locations
   };
   moduleCache.set(absFile, facts);
 
@@ -89,7 +150,11 @@ export function parseModule(absFile) {
   try {
     facts.ast = parse(src, {
       sourceType: 'unambiguous',
-      plugins: ['typescript', 'jsx', ['decorators', { decoratorsBeforeExport: true }]],
+      // decorators-legacy = TypeScript's `experimentalDecorators`, which is what
+      // NestJS/Medusa/TypeORM actually compile with. Unlike the modern `decorators`
+      // plugin it allows PARAMETER decorators (`@Body()`, `@Param()`) — without this
+      // every Nest controller is a parse error and the app reads as 0 routes.
+      plugins: ['typescript', 'jsx', 'decorators-legacy'],
       attachComment: true,
     });
   } catch (err) {
@@ -171,9 +236,18 @@ function collectTopLevel(node, facts, absFile, exported) {
       ) {
         const resolved = resolveRelImport(absFile, d.init.arguments[0].value);
         if (!resolved) continue;
+        // if the required module is a barrel, resolve each destructured member to the
+        // sub-module it re-exports (`{ userService }` → user.service.js, not index.js).
+        const barrel = resolved === absFile ? null : parseModule(resolved);
         for (const prop of d.id.properties) {
-          if (prop.type === 'ObjectProperty' && prop.value.type === 'Identifier')
-            facts.imports.set(prop.value.name, resolved);
+          if (
+            prop.type === 'ObjectProperty' &&
+            prop.value.type === 'Identifier' &&
+            prop.key.type === 'Identifier'
+          ) {
+            const viaBarrel = barrel?.reexports.get(prop.key.name);
+            facts.imports.set(prop.value.name, viaBarrel ?? resolved);
+          }
         }
       }
     }
@@ -183,16 +257,58 @@ function collectTopLevel(node, facts, absFile, exported) {
     const resolved = resolveRelImport(absFile, node.source.value);
     if (!resolved) return;
     for (const spec of node.specifiers) facts.imports.set(spec.local.name, resolved);
+    return;
+  }
+  // barrel re-export: `module.exports.userService = require('./user.service')` or
+  // `exports.userService = require('./user.service')`. Records member → file so a
+  // `const { userService } = require('./services')` resolves to the real module.
+  if (
+    node.type === 'ExpressionStatement' &&
+    node.expression.type === 'AssignmentExpression' &&
+    node.expression.left.type === 'MemberExpression' &&
+    node.expression.left.property.type === 'Identifier'
+  ) {
+    const left = node.expression.left;
+    const isExports =
+      (left.object.type === 'Identifier' && left.object.name === 'exports') ||
+      (left.object.type === 'MemberExpression' &&
+        left.object.object.type === 'Identifier' &&
+        left.object.object.name === 'module' &&
+        left.object.property.type === 'Identifier' &&
+        left.object.property.name === 'exports');
+    const rhs = node.expression.right;
+    if (
+      isExports &&
+      rhs.type === 'CallExpression' &&
+      rhs.callee.type === 'Identifier' &&
+      rhs.callee.name === 'require' &&
+      rhs.arguments[0]?.type === 'StringLiteral'
+    ) {
+      const resolved = resolveRelImport(absFile, rhs.arguments[0].value);
+      if (resolved) facts.reexports.set(left.property.name, resolved);
+    }
   }
 }
 
 export function resolveRelImport(fromFile, spec) {
-  if (!spec.startsWith('.')) return null;
-  const cleanSpec = spec.replace(/\.(m?[jt]s|cjs)$/, '');
-  const base = path.resolve(path.dirname(fromFile), cleanSpec);
+  const clean = (s) => s.replace(/\.(m?[jt]s|cjs)$/, '');
+  if (spec.startsWith('.')) {
+    return firstModuleFile(path.resolve(path.dirname(fromFile), clean(spec)));
+  }
+  // Non-relative: a TS baseUrl/paths alias (`src/services/x`, `@app/x`) — the shape
+  // real monorepos (immich, Nest apps) use instead of `../../`. Without this the
+  // cross-module hop (controller → service → repository) dead-ends and effects behind
+  // DI are invisible. A bare npm package (`kysely`, `@nestjs/common`) simply resolves
+  // to nothing here (no matching file under the project), which is correct.
+  return resolveAliasedImport(fromFile, clean(spec));
+}
+
+// probe the standard TS/JS extensions + index files for a resolved base path.
+function firstModuleFile(base) {
   for (const cand of [
     base,
     `${base}.ts`,
+    `${base}.tsx`,
     `${base}.js`,
     `${base}.mjs`,
     `${base}.cjs`,
@@ -204,6 +320,86 @@ export function resolveRelImport(fromFile, spec) {
     } catch {
       // race between existsSync and statSync — treat as unresolvable
     }
+  }
+  return null;
+}
+
+// tsconfig baseUrl + paths, resolved from the nearest ancestor project. Cached per
+// directory so the walk-up + read happens once. `null` = no project found.
+const tsconfigCache = new Map();
+function projectConfig(fromFile) {
+  const chain = [];
+  let dir = path.dirname(fromFile);
+  for (let i = 0; i < 40; i++) {
+    if (tsconfigCache.has(dir)) {
+      const v = tsconfigCache.get(dir);
+      for (const d of chain) tsconfigCache.set(d, v);
+      return v;
+    }
+    chain.push(dir);
+    const tsc = path.join(dir, 'tsconfig.json');
+    let v;
+    if (fs.existsSync(tsc)) v = readTsconfig(tsc, dir);
+    else if (fs.existsSync(path.join(dir, 'package.json')))
+      v = { baseDir: dir, paths: {} };
+    if (v) {
+      for (const d of chain) tsconfigCache.set(d, v);
+      return v;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  for (const d of chain) tsconfigCache.set(d, null);
+  return null;
+}
+
+function readTsconfig(file, dir) {
+  try {
+    const raw = fs
+      .readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
+      .replace(/(^|[^:"])\/\/.*$/gm, '$1'); // line comments (not URLs/keys)
+    const co = JSON.parse(raw).compilerOptions ?? {};
+    return {
+      baseDir: co.baseUrl ? path.resolve(dir, co.baseUrl) : dir,
+      paths: co.paths ?? {},
+    };
+  } catch {
+    return { baseDir: dir, paths: {} };
+  }
+}
+
+function resolveAliasedImport(fromFile, spec) {
+  const cfg = projectConfig(fromFile);
+  if (!cfg) return null;
+  const candidates = [];
+  // explicit tsconfig `paths` (e.g. "@app/*": ["src/app/*"])
+  for (const [pattern, targets] of Object.entries(cfg.paths)) {
+    const star = pattern.indexOf('*');
+    if (star === -1) {
+      if (pattern === spec) for (const t of targets) candidates.push(t);
+      continue;
+    }
+    const pre = pattern.slice(0, star);
+    const post = pattern.slice(star + 1);
+    if (
+      spec.startsWith(pre) &&
+      spec.endsWith(post) &&
+      spec.length >= pre.length + post.length
+    ) {
+      const mid = spec.slice(pre.length, spec.length - post.length);
+      for (const t of targets) candidates.push(t.replace('*', mid));
+    }
+  }
+  // implicit baseUrl resolution + the near-universal `src/` root fallback, so the
+  // common `baseUrl:"."` + `"src/*":["src/*"]` config works even if paths is absent.
+  const bases = candidates
+    .map((c) => path.resolve(cfg.baseDir, c))
+    .concat([path.resolve(cfg.baseDir, spec), path.resolve(cfg.baseDir, 'src', spec)]);
+  for (const b of bases) {
+    const hit = firstModuleFile(b);
+    if (hit) return hit;
   }
   return null;
 }
@@ -405,6 +601,24 @@ function inspectCall(node, out, ctx) {
     return;
   }
 
+  // ---- kysely builder: db.insertInto('t').values(...) / .updateTable('t').set(...)
+  // / .deleteFrom('t') / .selectFrom('t'). The table is the op's OWN string arg
+  // (not a chained .from()), so read it straight off arguments[0].
+  if (KYSELY_OPS[methodLower] !== undefined && callee.type === 'MemberExpression') {
+    const arg0 = node.arguments[0];
+    const table = arg0?.type === 'StringLiteral' ? arg0.value : null;
+    if (table) {
+      const op = KYSELY_OPS[methodLower];
+      pushEffect(out, ctx, {
+        effectType: op === 'select' ? 'db_read' : 'db_write',
+        op,
+        table: table.toLowerCase(),
+        line,
+      });
+      return;
+    }
+  }
+
   // ---- supabase/knex builder: X.from('t').insert(...) or knex('t').update(...)
   if (SUPABASE_OPS.has(methodLower)) {
     const table = builderTableOf(callee.object);
@@ -424,12 +638,16 @@ function inspectCall(node, out, ctx) {
   // raw material StateMachineInference reads (lowercased, same trade-off)
   if (PRISMA_OPS[methodLower] !== undefined) {
     const obj = callee.object;
+    // `prisma.user.create(...)` OR the class-based `this.prisma.user.create(...)`
+    // that NestJS services / Express controller classes use — `clientBaseName`
+    // reads the client name off a bare Identifier or a `this.<field>`.
+    const client = obj.type === 'MemberExpression' ? clientBaseName(obj.object) : null;
     if (
       obj.type === 'MemberExpression' &&
       !obj.computed &&
       obj.property.type === 'Identifier' &&
-      obj.object.type === 'Identifier' &&
-      /prisma|client|db/i.test(obj.object.name)
+      client &&
+      /prisma|client|db/i.test(client)
     ) {
       const op = PRISMA_OPS[methodLower];
       const data = prismaLiteralsOf(node.arguments[0], 'data');
@@ -445,6 +663,51 @@ function inspectCall(node, out, ctx) {
       });
       return;
     }
+  }
+
+  // ---- drizzle: db.insert(users).values(...) / db.update(users) / db.delete(users).
+  // The table is the schema-object IDENTIFIER passed to the op (not a string). Only a
+  // db-like receiver qualifies, so it never fires on an arbitrary `.insert()`.
+  if (DRIZZLE_OPS[methodLower] !== undefined && callee.type === 'MemberExpression') {
+    const recv =
+      callee.object.type === 'Identifier'
+        ? callee.object.name
+        : clientBaseName(callee.object);
+    const arg0 = node.arguments[0];
+    if (
+      recv &&
+      /^(db|database|drizzle|tx|trx|conn|client)$/i.test(recv) &&
+      arg0?.type === 'Identifier'
+    ) {
+      pushEffect(out, ctx, {
+        effectType: 'db_write',
+        op: DRIZZLE_OPS[methodLower],
+        table: arg0.name.toLowerCase(),
+        line,
+      });
+      return;
+    }
+  }
+
+  // ---- active-record ORM: User.create(...) / User.findAll(...) / User.save(...) — a
+  // Capitalized model receiver with a known op (Mongoose / TypeORM active-record /
+  // Sequelize). Capitalization is the shared convention and keeps this from firing on
+  // `Math.random()`-style utility calls. Repository-pattern (`userRepository.save()`) is
+  // deliberately NOT matched here — in Nest it is reached through DI into the repo
+  // method's real query, so matching it too would double-count.
+  if (
+    MODEL_OPS[methodLower] !== undefined &&
+    callee.object.type === 'Identifier' &&
+    /^[A-Z]/.test(callee.object.name)
+  ) {
+    const op = MODEL_OPS[methodLower];
+    pushEffect(out, ctx, {
+      effectType: op === 'select' ? 'db_read' : 'db_write',
+      op,
+      table: callee.object.name.toLowerCase(),
+      line,
+    });
+    return;
   }
 
   // ---- HTTP clients: axios.get(...), got.post(...) — the member IS the method
@@ -560,6 +823,16 @@ function responseJsonShape(node) {
 
 // res.status(401|403) anywhere in the chain → guard denial signal
 function deniedStatusOf(node) {
+  const isDeny = (v) => v === 401 || v === 403;
+  // res.sendStatus(401) / res.status(401)... — a direct deny status
+  if (
+    node.type === 'CallExpression' &&
+    node.callee?.type === 'MemberExpression' &&
+    node.callee.property?.name === 'sendStatus' &&
+    node.arguments[0]?.type === 'NumericLiteral' &&
+    isDeny(node.arguments[0].value)
+  )
+    return true;
   let cur = node;
   while (cur) {
     if (
@@ -567,7 +840,7 @@ function deniedStatusOf(node) {
       cur.callee?.type === 'MemberExpression' &&
       cur.callee.property?.name === 'status' &&
       cur.arguments[0]?.type === 'NumericLiteral' &&
-      (cur.arguments[0].value === 401 || cur.arguments[0].value === 403)
+      isDeny(cur.arguments[0].value)
     )
       return true;
     cur =
@@ -577,6 +850,35 @@ function deniedStatusOf(node) {
         : null;
   }
   return false;
+}
+
+// A visible middleware that is a pure unconditional pass-through — `(req,res,next) =>
+// next()` or `function(req,res,next){ next() }` — cannot deny anything: it is a NO-OP
+// guard (a disabled/stubbed auth). Narrow by design: any conditional, throw, deny, or
+// other work means it is NOT a no-op (a real guard, or a delegating one, stays a guard).
+export function isNoOpGuard(fnNode) {
+  if (!fnNode) return false;
+  const body = fnNode.body;
+  // arrow with expression body: `(...)=> next()`
+  if (body && body.type !== 'BlockStatement') return isBareNextCall(body);
+  const stmts = (body?.body ?? []).filter((s) => s.type !== 'EmptyStatement');
+  if (stmts.length !== 1) return false;
+  const s = stmts[0];
+  const expr =
+    s.type === 'ExpressionStatement'
+      ? s.expression
+      : s.type === 'ReturnStatement'
+        ? s.argument
+        : null;
+  return isBareNextCall(expr);
+}
+function isBareNextCall(node) {
+  return (
+    node?.type === 'CallExpression' &&
+    node.callee?.type === 'Identifier' &&
+    node.callee.name === 'next' &&
+    node.arguments.length === 0
+  );
 }
 
 // { a: 1, b: x, c: 'y' } → { a: 'number', b: 'unknown:x', c: 'string' }
@@ -636,8 +938,27 @@ function literalArg(arg) {
 
 function rootIdentifier(memberExpr) {
   let cur = memberExpr;
-  while (cur.type === 'MemberExpression') cur = cur.object;
+  while (cur.type === 'MemberExpression') {
+    // `this.foo.bar()` — the effective root is the class field `foo`, so
+    // class-based access (NestJS services, controller classes) is read like a
+    // bare `foo.bar()`. Without this, everything rooted at `this` is invisible.
+    if (cur.object.type === 'ThisExpression')
+      return cur.property.type === 'Identifier' ? cur.property.name : null;
+    cur = cur.object;
+  }
   return cur.type === 'Identifier' ? cur.name : null;
+}
+
+// the name a member/identifier refers to, unwrapping `this.<field>` → `<field>`.
+function clientBaseName(node) {
+  if (node.type === 'Identifier') return node.name;
+  if (
+    node.type === 'MemberExpression' &&
+    node.object.type === 'ThisExpression' &&
+    node.property.type === 'Identifier'
+  )
+    return node.property.name;
+  return null;
 }
 
 // knex('users') → users ; supabase.from('users') → users ;

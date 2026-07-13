@@ -41,10 +41,30 @@ export function detectStack(cwd) {
         expressVersion: deps.express,
       };
     }
-    const known = ['@nestjs/core', 'fastify', 'koa'].find((d) => deps[d]);
+    // Medusa: file-based routing under src/api — a route IS a file
+    // (`src/api/<path>/route.ts`), not an `app.get()` or a @Controller. Checked
+    // before Nest because a Medusa app may transitively pull Nest deps.
+    if (deps['@medusajs/medusa'] || deps['@medusajs/framework']) {
+      const apiDir = ['src/api', 'api'].find((d) => {
+        const abs = path.join(cwd, d);
+        return fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+      });
+      if (apiDir) return { framework: 'medusa', entryFile: apiDir, port: 9000 };
+      // Medusa dep but no api dir: fall through (a plugin/lib package, not an app).
+    }
+    // NestJS (and DI-framework) apps: routes live in @Controller classes,
+    // scanned from the source tree rather than followed from a single entry.
+    if (deps['@nestjs/core'] || deps['@nestjs/common']) {
+      const entryFile = ['src', 'app', '.'].find((d) => {
+        const abs = path.join(cwd, d);
+        return fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+      });
+      return { framework: 'nestjs', entryFile: entryFile ?? '.', port: 3000 };
+    }
+    const known = ['fastify', 'koa'].find((d) => deps[d]);
     if (known)
       throw err(
-        `${known} detected — not supported yet. Express & FastAPI only in v0.`,
+        `${known} detected — not supported yet. Express, NestJS & FastAPI in v0.`,
         '+1 the framework vote: github.com/zyx77550/sparda/issues/1',
       );
   }
@@ -200,6 +220,7 @@ function findExpressEntry(cwd, pkg) {
     'src/server.ts',
     'src/index.ts',
     'src/main.ts', // Nx / NestJS-style monorepo layout
+    'src/commands/start.ts',
     'main.ts',
     'app.ts',
     'server.ts',
@@ -222,10 +243,82 @@ function findExpressEntry(cwd, pkg) {
         return path.relative(cwd, abs).split(path.sep).join('/');
     }
   }
+  // No standard-named entry matched — the app's entry is a non-conventional file
+  // (`ParseServer.ts`, `bootstrap.ts`, `application.ts`, …). Scan the tree for the
+  // file that actually creates the app (a bare `express()` call), the same fallback
+  // FastAPI detection already uses. Ranked so a real server (`.listen()`) wins.
+  const found = searchExpressEntry(cwd);
+  if (found) return found;
   throw err(
     'Could not locate your Express entry file (the one calling express()).',
     'Re-run from the project root, or open an issue with your layout.',
   );
+}
+
+// Bounded source-tree scan for the app-creation file: a bare `express()` call (not
+// `express.Router()`/`express.static()`). Ranked: a file that also `.listen()`s (a
+// real server entry) beats a library file; then shallower path; then alphabetical —
+// deterministic. Caps the number of files read so a giant repo can't stall detection.
+function searchExpressEntry(cwd) {
+  const EXCLUDE = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    'coverage',
+    '.next',
+    '.sparda',
+    'test',
+    'tests',
+    '__tests__',
+    'spec',
+    'examples',
+    'example',
+  ]);
+  const APP_CALL = /(?<![.\w])express\s*\(\s*\)/; // `express()` app factory
+  const matches = [];
+  const budget = { files: 0 };
+  const walk = (dir) => {
+    if (budget.files > 400) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') && e.name !== '.') continue;
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!EXCLUDE.has(e.name)) walk(abs);
+      } else if (/\.(m?[tj]s|cjs)$/.test(e.name) && !/\.d\.ts$/.test(e.name)) {
+        if (budget.files++ > 400) return;
+        let src;
+        try {
+          src = fs.readFileSync(abs, 'utf8');
+        } catch {
+          continue;
+        }
+        if (APP_CALL.test(src)) {
+          const rel = path.relative(cwd, abs).split(path.sep).join('/');
+          matches.push({
+            rel,
+            listens: /\.listen\s*\(/.test(src),
+            depth: rel.split('/').length,
+          });
+        }
+      }
+    }
+  };
+  walk(cwd);
+  if (!matches.length) return null;
+  matches.sort(
+    (a, b) =>
+      Number(b.listens) - Number(a.listens) ||
+      a.depth - b.depth ||
+      (a.rel < b.rel ? -1 : 1),
+  );
+  return matches[0].rel;
 }
 
 function detectModuleType(cwd, pkg, entryFile) {

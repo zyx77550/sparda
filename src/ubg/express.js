@@ -6,9 +6,41 @@
 // Depth stays bounded like the v0 parser: entry file + mounted routers.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseModule, resolveRelImport } from './extract.js';
+import { parseModule, resolveRelImport, scanFunction } from './extract.js';
 
 const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
+const MAX_HANDLER_DEPTH = 6;
+
+// merge one scan's findings into another (same contract as the Nest extractor's).
+function mergeScan(into, add) {
+  into.effects.push(...add.effects);
+  into.returnShapes = [...(into.returnShapes ?? []), ...(add.returnShapes ?? [])];
+  into.calls = [...(into.calls ?? []), ...(add.calls ?? [])];
+  into.validatesInput = into.validatesInput || add.validatesInput;
+  into.async = into.async || add.async;
+  if (add.guardSignals?.deniesWithStatus) into.guardSignals.deniesWithStatus = true;
+}
+
+// depth-first walk over an AST subtree, invoking fn on every CallExpression.
+function walkCalls(node, fn) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const n of node) walkCalls(n, fn);
+    return;
+  }
+  if (node.type === 'CallExpression') fn(node);
+  for (const k of Object.keys(node)) {
+    if (
+      k === 'loc' ||
+      k === 'range' ||
+      k === 'leadingComments' ||
+      k === 'trailingComments'
+    )
+      continue;
+    const v = node[k];
+    if (v && typeof v === 'object') walkCalls(v, fn);
+  }
+}
 
 // → { routes, globalMiddlewares, helpers, skipped, scannedFiles }
 export function extractExpress(cwd, entryFile) {
@@ -249,6 +281,7 @@ export function extractExpress(cwd, entryFile) {
             sourceFile: fromRel,
             sourceLine: fn.line,
             fn: fn.node,
+            scan: deepScan(fn.node, target), // follow service/model calls below it
           };
         }
       }
@@ -269,6 +302,7 @@ export function extractExpress(cwd, entryFile) {
         sourceFile: relFile,
         sourceLine: local.line,
         fn: local.node,
+        scan: deepScan(local.node, mod),
       };
     }
     const importedFrom = mod.imports.get(arg.name);
@@ -287,7 +321,13 @@ export function extractExpress(cwd, entryFile) {
               fn: f.node,
             });
         }
-        return { name: arg.name, sourceFile: fromRel, sourceLine: fn.line, fn: fn.node };
+        return {
+          name: arg.name,
+          sourceFile: fromRel,
+          sourceLine: fn.line,
+          fn: fn.node,
+          scan: deepScan(fn.node, target),
+        };
       }
     }
     // known but bodyless — node exists, microscope stays blind
@@ -301,6 +341,55 @@ export function extractExpress(cwd, entryFile) {
 
   function rel(abs) {
     return path.relative(cwd, abs).split(path.sep).join('/');
+  }
+
+  // A handler's real effects = its own body PLUS every module-member call it makes,
+  // followed recursively: `authController.register` → `userService.createUser` →
+  // `User.create()`. This is the CommonJS analogue of the Nest DI hop — the effect is
+  // usually two or three modules below the route, behind `service.method()` calls the
+  // flat scanner can't see. Precomputed so translate uses it as-is (like the Nest scan).
+  function deepScan(fnNode, owningMod) {
+    const base = scanFunction(fnNode);
+    const merged = {
+      ...base,
+      effects: [...base.effects],
+      returnShapes: [...(base.returnShapes ?? [])],
+      calls: [...(base.calls ?? [])],
+    };
+    followMembers(fnNode, owningMod, merged, new Set(), 0);
+    return merged;
+  }
+
+  function followMembers(fnNode, mod, merged, seen, depth) {
+    if (depth >= MAX_HANDLER_DEPTH) return;
+    walkCalls(fnNode, (node) => {
+      const callee = node.callee;
+      if (
+        callee.type !== 'MemberExpression' ||
+        callee.property.type !== 'Identifier' ||
+        callee.object.type !== 'Identifier'
+      )
+        return;
+      const targetFile = mod.imports.get(callee.object.name);
+      if (!targetFile) return;
+      const targetMod = parseModule(targetFile);
+      if (targetMod.error) return;
+      const fn = targetMod.functions.get(callee.property.name);
+      if (!fn) return;
+      const key = `${targetFile}#${callee.property.name}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const fromRel = rel(targetFile);
+      if (!scannedFiles.includes(fromRel)) scannedFiles.push(fromRel);
+      helpers.push({
+        name: `${callee.object.name}.${callee.property.name}`,
+        sourceFile: fromRel,
+        sourceLine: fn.line,
+        fn: fn.node,
+      });
+      mergeScan(merged, scanFunction(fn.node));
+      followMembers(fn.node, targetMod, merged, seen, depth + 1);
+    });
   }
 }
 
