@@ -130,42 +130,49 @@ export function renderDossierHTML(d) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SPARDA dossier — ${esc(d.app)}</title>
 <style>
-  :root{--bg:#0d0e12;--panel:#14161c;--line:#262a34;--ink:#e8eaf0;--soft:#a4a9b8;
-    --faint:#6b7183;--red:#f0575c;--green:#3dd68c;--amber:#e5a23d;--mono:ui-monospace,Menlo,Consolas,monospace;
-    --sans:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;}
-  @media(prefers-color-scheme:light){:root{--bg:#f4f2ee;--panel:#fff;--line:#e3ded5;
-    --ink:#191b21;--soft:#4c5160;--faint:#838a99;--red:#cf3b40;--green:#17915b;--amber:#b47617;}}
-  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55}
-  .wrap{max-width:900px;margin:0 auto;padding:32px 22px 64px}
-  .top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px;font-family:var(--mono);font-size:13px;color:var(--faint)}
+  :root{--bg:oklch(0.16 0.01 255);--panel:oklch(0.22 0.01 255);--line:oklch(0.32 0.01 255);
+    --ink:oklch(0.95 0.01 255);--soft:oklch(0.75 0.01 255);--faint:oklch(0.55 0.01 255);
+    --red:oklch(0.65 0.20 20);--green:oklch(0.75 0.15 150);--amber:oklch(0.75 0.18 70);
+    --mono:"Geist Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:Inter,Geist,-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;}
+  @media(prefers-color-scheme:light){:root{--bg:oklch(0.98 0.005 255);--panel:oklch(1 0 0);
+    --line:oklch(0.90 0.01 255);--ink:oklch(0.20 0.01 255);--soft:oklch(0.40 0.01 255);
+    --faint:oklch(0.60 0.01 255);--red:oklch(0.55 0.20 20);--green:oklch(0.50 0.15 150);--amber:oklch(0.60 0.18 70);}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:48px 24px 80px}
+  .top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:16px;font-family:var(--mono);font-size:13px;color:var(--faint)}
   .top b{color:var(--ink);letter-spacing:.12em}
-  .hero{padding:34px 0 22px}
-  .stamp{display:inline-flex;align-items:center;gap:11px;font-family:var(--mono);font-weight:700;font-size:16px;padding:10px 18px;border-radius:9px;border:1.5px solid;letter-spacing:.03em}
-  .stamp .dot{width:9px;height:9px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,currentColor 22%,transparent)}
-  .ok{color:var(--green);border-color:var(--green);background:color-mix(in srgb,var(--green) 9%,transparent)}
-  .bad{color:var(--red);border-color:var(--red);background:color-mix(in srgb,var(--red) 9%,transparent)}
-  .warn{color:var(--amber);border-color:var(--amber);background:color-mix(in srgb,var(--amber) 9%,transparent)}
-  .hero p{font-size:18px;color:var(--soft);max-width:60ch;margin:18px 0 0}
-  .stats{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:96px}
-  .stat b{display:block;font-size:22px;font-family:var(--mono)}.stat span{font-size:12px;color:var(--faint)}
-  h2{font-size:15px;letter-spacing:.02em;margin:38px 0 12px;color:var(--ink)}
+  .hero{padding:48px 0 32px}
+  .stamp{display:inline-flex;align-items:center;gap:12px;font-family:var(--mono);font-weight:700;font-size:16px;padding:12px 24px;border-radius:12px;border:1.5px solid;letter-spacing:.03em;box-shadow:0 4px 12px -4px color-mix(in oklch,currentColor 30%,transparent)}
+  .stamp .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in oklch,currentColor 22%,transparent)}
+  .ok{color:var(--green);border-color:var(--green);background:color-mix(in oklch,var(--green) 10%,transparent)}
+  .bad{color:var(--red);border-color:var(--red);background:color-mix(in oklch,var(--red) 10%,transparent)}
+  .warn{color:var(--amber);border-color:var(--amber);background:color-mix(in oklch,var(--amber) 10%,transparent)}
+  .hero p{font-size:18px;color:var(--soft);max-width:65ch;margin:24px 0 0;text-wrap:balance}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;margin:32px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;transition:transform 200ms cubic-bezier(0.16,1,0.3,1),border-color 200ms}
+  .stat:hover{transform:translateY(-2px);border-color:var(--soft)}
+  .stat b{display:block;font-size:24px;font-family:var(--mono);letter-spacing:-0.02em;line-height:1.2}.stat span{font-size:13px;color:var(--faint);font-weight:500}
+  h2{font-size:16px;letter-spacing:-0.01em;margin:48px 0 16px;color:var(--ink)}
   h2 small{color:var(--faint);font-weight:400;font-family:var(--mono)}
   table{border-collapse:collapse;font-family:var(--mono);font-size:13px;width:100%;overflow-x:auto;display:block}
-  table thead th{color:var(--faint);font-weight:500;padding:6px 8px;text-align:center;font-size:11px}
-  table tbody th{text-align:left;padding:6px 10px 6px 0;color:var(--ink);font-weight:500;white-space:nowrap}
-  table td{text-align:center;padding:6px 8px;font-weight:700}
+  table thead th{color:var(--faint);font-weight:500;padding:8px 12px;text-align:center;font-size:11px;border-bottom:1px solid var(--line)}
+  table tbody th{text-align:left;padding:12px 16px 12px 8px;color:var(--ink);font-weight:500;white-space:nowrap}
+  table tbody tr{border-bottom:1px solid var(--line);transition:background-color 150ms}
+  table tbody tr:hover{background-color:color-mix(in oklch,var(--panel) 60%,transparent)}
+  table td{text-align:center;padding:12px 8px;font-weight:700}
   td.neg{color:var(--red)}td.pos{color:var(--green)}td.na{color:var(--faint)}
   tr.row-bad th{color:var(--red)}
-  .finding{display:flex;gap:0;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--sev);border-radius:10px;margin:10px 0;overflow:hidden}
-  .finding .sev{font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--sev);padding:14px 12px;align-self:center}
-  .finding .fbody{padding:12px 14px 12px 0}
-  .frule{font-family:var(--mono);font-size:12.5px;color:var(--ink)}.fep{color:var(--faint)}
-  .finding p{margin:6px 0 0;font-size:14px;color:var(--soft)}
+  .finding{display:flex;gap:0;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--sev);border-radius:12px;margin:16px 0;overflow:hidden;transition:transform 200ms cubic-bezier(0.16,1,0.3,1),box-shadow 200ms}
+  .finding:hover{transform:translateY(-2px);box-shadow:0 8px 24px -8px color-mix(in oklch,var(--bg) 80%,transparent)}
+  .finding .sev{font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--sev);padding:16px;align-self:center}
+  .finding .fbody{padding:16px 16px 16px 0}
+  .frule{font-family:var(--mono);font-size:13px;color:var(--ink)}.fep{color:var(--faint)}
+  .finding p{margin:8px 0 0;font-size:14px;color:var(--soft);line-height:1.6}
   .clean{color:var(--green);font-family:var(--mono)}
-  .legend{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
+  .legend{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:12px}
   .legend b.pos{color:var(--green)}.legend b.neg{color:var(--red)}
-  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
 </style></head><body><div class="wrap">
   <div class="top"><b>SPARDA</b><span>AI writes. SPARDA proves.</span></div>
 
