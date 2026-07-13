@@ -14,7 +14,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import traverseModule from '@babel/traverse';
-import { parseModule, scanFunction } from './extract.js';
+import {
+  parseModule,
+  scanFunction,
+  classInModule,
+  baseClassOf,
+  methodInClassChain,
+} from './extract.js';
 
 const traverse = traverseModule.default ?? traverseModule;
 const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
@@ -289,11 +295,11 @@ function resolveMethod(typeName, methodName, ownerMod, cwd, scannedFiles, helper
   const rel = relOf(cwd, file);
   if (!scannedFiles.includes(rel)) scannedFiles.push(rel);
 
-  const m = methodInClassChain(cls, mod, methodName, cwd, 0);
+  const m = methodInClassChain(cls, mod, methodName);
   if (!m) return null;
   helpers.push({
     name: `${typeName}.${methodName}`,
-    sourceFile: m.rel ?? rel,
+    sourceFile: relOf(cwd, moduleFileOf(m.mod)) || rel,
     sourceLine: m.fn.loc?.start.line ?? 0,
     fn: m.fn,
   });
@@ -325,47 +331,8 @@ function diMapWithMod(cls, clsMod) {
   return out;
 }
 
-// find a class declaration named `typeName` at a module's top level.
-function classInModule(mod, typeName) {
-  for (const node of mod.ast.program.body) {
-    const cls =
-      node.type === 'ClassDeclaration'
-        ? node
-        : node.type === 'ExportNamedDeclaration' &&
-            node.declaration?.type === 'ClassDeclaration'
-          ? node.declaration
-          : null;
-    if (cls && cls.id?.name === typeName) return cls;
-  }
-  return null;
-}
-
-// locate `methodName` on the class or, failing that, up the `extends` chain →
-// { fn, mod, rel }. Base-class methods live in the base module, so carry it along.
-function methodInClassChain(cls, mod, methodName, cwd, depth) {
-  for (const m of cls.body.body) {
-    if (
-      m.type === 'ClassMethod' &&
-      m.key.type === 'Identifier' &&
-      m.key.name === methodName
-    )
-      return { fn: m, mod, rel: relOf(cwd, moduleFileOf(mod)) };
-  }
-  if (depth >= MAX_DI_DEPTH) return null;
-  const base = baseClassOf(cls, mod);
-  return base ? methodInClassChain(base.cls, base.mod, methodName, cwd, depth + 1) : null;
-}
-
-// resolve `class X extends Base` → the Base class node + its module, via the import.
-function baseClassOf(cls, mod) {
-  if (cls.superClass?.type !== 'Identifier') return null;
-  const file = mod.imports.get(cls.superClass.name);
-  if (!file || !fs.existsSync(file)) return null;
-  const baseMod = parseModule(file);
-  if (baseMod.error) return null;
-  const baseCls = classInModule(baseMod, cls.superClass.name);
-  return baseCls ? { cls: baseCls, mod: baseMod } : null;
-}
+// classInModule / methodInClassChain / baseClassOf live in extract.js — shared
+// with the Express instantiated-service follower (`new Service().method()`).
 
 const moduleFileOf = (mod) => mod.ast?.loc?.filename ?? mod._file ?? '';
 

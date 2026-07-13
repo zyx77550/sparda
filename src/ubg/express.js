@@ -6,7 +6,14 @@
 // Depth stays bounded like the v0 parser: entry file + mounted routers.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseModule, resolveRelImport, scanFunction } from './extract.js';
+import {
+  parseModule,
+  resolveRelImport,
+  scanFunction,
+  classInModule,
+  baseClassOf,
+  methodInClassChain,
+} from './extract.js';
 
 const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const MAX_HANDLER_DEPTH = 6;
@@ -21,14 +28,14 @@ function mergeScan(into, add) {
   if (add.guardSignals?.deniesWithStatus) into.guardSignals.deniesWithStatus = true;
 }
 
-// depth-first walk over an AST subtree, invoking fn on every CallExpression.
-function walkCalls(node, fn) {
+// depth-first walk over an AST subtree, invoking fn on every node.
+function walkAst(node, fn) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) {
-    for (const n of node) walkCalls(n, fn);
+    for (const n of node) walkAst(n, fn);
     return;
   }
-  if (node.type === 'CallExpression') fn(node);
+  if (typeof node.type === 'string') fn(node);
   for (const k of Object.keys(node)) {
     if (
       k === 'loc' ||
@@ -38,8 +45,37 @@ function walkCalls(node, fn) {
     )
       continue;
     const v = node[k];
-    if (v && typeof v === 'object') walkCalls(v, fn);
+    if (v && typeof v === 'object') walkAst(v, fn);
   }
+}
+
+function walkCalls(node, fn) {
+  walkAst(node, (n) => {
+    if (n.type === 'CallExpression') fn(n);
+  });
+}
+
+// varName → class name for every `const svc = new X(…)` (or `svc = new X(…)`)
+// in the subtree — the raw material of instantiated-service resolution.
+function collectInstances(fnNode) {
+  const map = new Map();
+  walkAst(fnNode, (node) => {
+    if (
+      node.type === 'VariableDeclarator' &&
+      node.id?.type === 'Identifier' &&
+      node.init?.type === 'NewExpression' &&
+      node.init.callee.type === 'Identifier'
+    )
+      map.set(node.id.name, node.init.callee.name);
+    else if (
+      node.type === 'AssignmentExpression' &&
+      node.left.type === 'Identifier' &&
+      node.right?.type === 'NewExpression' &&
+      node.right.callee.type === 'Identifier'
+    )
+      map.set(node.left.name, node.right.callee.name);
+  });
+  return map;
 }
 
 // → { routes, globalMiddlewares, helpers, skipped, scannedFiles }
@@ -51,6 +87,7 @@ export function extractExpress(cwd, entryFile) {
   const scannedFiles = [];
   const visited = new Set();
   const mounts = [];
+  const classBundles = new Map(); // memo of resolved class methods — per extract
 
   scanFile(path.resolve(cwd, entryFile), '', 0);
   // growing queue, NOT a snapshot: a mounted router file can itself mount
@@ -87,12 +124,22 @@ export function extractExpress(cwd, entryFile) {
       helpers.push({ name, sourceFile: relFile, sourceLine: f.line, fn: f.node });
     }
 
+    // Flatten setup-function bodies into the statement stream. The overwhelmingly
+    // common production pattern builds the whole app inside a function —
+    // `export default async function createApp() { const app = express(); …;
+    // app.use('/x', xRouter); return app; }` (directus, and most real apps) — so the
+    // `express()` var and every mount live one level down, invisible to a top-level-only
+    // walk. We descend into function declarations, default-exported functions, top-level
+    // `const f = () => {…}`, and their control-flow blocks — but NOT into function
+    // *arguments* (route handlers), so handler bodies are never mistaken for setup.
+    const statements = flattenSetup(mod.ast.program.body);
+
     const appVars = new Set();
     const routerVars = new Set();
-    for (const node of mod.ast.program.body) collectAppVars(node, appVars, routerVars);
-    const routeArrays = collectRouteArrays(mod.ast.program.body);
+    for (const node of statements) collectAppVars(node, appVars, routerVars);
+    const routeArrays = collectRouteArrays(statements);
 
-    walkStatements(mod.ast.program.body);
+    walkStatements(statements);
 
     function walkStatements(body) {
       for (const stmt of body) {
@@ -243,13 +290,29 @@ export function extractExpress(cwd, entryFile) {
         fn: arg,
       };
     }
-    // factory middleware: validate(schema), rateLimit({…}) — the factory
-    // name is known, the produced closure is out of static reach (blind node)
     if (arg.type === 'CallExpression') {
       const name =
         arg.callee.type === 'Identifier'
           ? arg.callee.name
           : (arg.callee.property?.name ?? 'anonymous');
+      // wrapped INLINE handler: asyncHandler(async (req, res) => {…}) — the
+      // wrapped function IS the behavior (the route-position analogue of the
+      // top-level `const h = catchAsync(…)` idiom). Without this, every
+      // directus-style route reads as a blind node.
+      const fnArg = arg.arguments.find(
+        (a) => a.type === 'ArrowFunctionExpression' || a.type === 'FunctionExpression',
+      );
+      if (fnArg) {
+        return {
+          name,
+          sourceFile: relFile,
+          sourceLine: fnArg.loc?.start.line ?? 0,
+          fn: fnArg,
+          scan: deepScan(fnArg, mod),
+        };
+      }
+      // factory middleware: validate(schema), rateLimit({…}) — the factory
+      // name is known, the produced closure is out of static reach (blind node)
       return {
         name,
         sourceFile: relFile,
@@ -348,6 +411,12 @@ export function extractExpress(cwd, entryFile) {
   // `User.create()`. This is the CommonJS analogue of the Nest DI hop — the effect is
   // usually two or three modules below the route, behind `service.method()` calls the
   // flat scanner can't see. Precomputed so translate uses it as-is (like the Nest scan).
+  //
+  // The same walk also resolves INSTANTIATED services — `const svc = new XService(…);
+  // svc.readMany(…)` (directus and every class-service Express app) — through the
+  // class's `extends` chain, including `this.<m>()` / `super.<m>()` hops inside the
+  // resolved methods. `this.<m>()` dispatches from the INSTANTIATED class, so an
+  // override (ActivityService.readByQuery) wins over the base method it shadows.
   function deepScan(fnNode, owningMod) {
     const base = scanFunction(fnNode);
     const merged = {
@@ -356,41 +425,207 @@ export function extractExpress(cwd, entryFile) {
       returnShapes: [...(base.returnShapes ?? [])],
       calls: [...(base.calls ?? [])],
     };
-    followMembers(fnNode, owningMod, merged, new Set(), 0);
+    followCalls(fnNode, owningMod, merged, new Set(), 0, null, new Set());
     return merged;
   }
 
-  function followMembers(fnNode, mod, merged, seen, depth) {
+  // `seen` dedups sub-scans merged into THIS target; `stack` is the class-method
+  // cycle guard and spans the whole recursion; `clsCtx` (top + declaring class) is
+  // set while walking a class-method body so `this.` / `super.` calls resolve.
+  function followCalls(fnNode, mod, merged, seen, depth, clsCtx, stack) {
     if (depth >= MAX_HANDLER_DEPTH) return;
+    const instances = collectInstances(fnNode);
     walkCalls(fnNode, (node) => {
       const callee = node.callee;
-      if (
-        callee.type !== 'MemberExpression' ||
-        callee.property.type !== 'Identifier' ||
-        callee.object.type !== 'Identifier'
-      )
+      if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier')
         return;
-      const targetFile = mod.imports.get(callee.object.name);
+      const method = callee.property.name;
+      const obj = callee.object;
+
+      // instantiated service: `svc.method()` where `const svc = new X(…)`,
+      // or the direct `new X(…).method()` chain
+      const className =
+        obj.type === 'Identifier' && instances.has(obj.name)
+          ? instances.get(obj.name)
+          : obj.type === 'NewExpression' && obj.callee.type === 'Identifier'
+            ? obj.callee.name
+            : null;
+      if (className) {
+        const bundle = classBundle(className, method, mod, depth, stack);
+        if (bundle && !seen.has(bundle.key)) {
+          seen.add(bundle.key);
+          mergeScan(merged, bundle);
+        }
+        return;
+      }
+
+      // inside a resolved class method: this.<m>() re-dispatches from the top
+      // (instantiated) class; super.<m>() from the declaring class's base
+      if (clsCtx && obj.type === 'ThisExpression') {
+        const bundle = classMethodBundle(
+          clsCtx.topCls,
+          clsCtx.topMod,
+          method,
+          depth,
+          stack,
+        );
+        if (bundle && !seen.has(bundle.key)) {
+          seen.add(bundle.key);
+          mergeScan(merged, bundle);
+        }
+        return;
+      }
+      if (clsCtx && obj.type === 'Super') {
+        const base = baseClassOf(clsCtx.declCls, clsCtx.declMod);
+        const bundle = base
+          ? classMethodBundle(base.cls, base.mod, method, depth, stack)
+          : null;
+        if (bundle && !seen.has(bundle.key)) {
+          seen.add(bundle.key);
+          mergeScan(merged, bundle);
+        }
+        return;
+      }
+
+      if (obj.type !== 'Identifier') return;
+      const targetFile = mod.imports.get(obj.name);
       if (!targetFile) return;
       const targetMod = parseModule(targetFile);
       if (targetMod.error) return;
-      const fn = targetMod.functions.get(callee.property.name);
+      const fn = targetMod.functions.get(method);
       if (!fn) return;
-      const key = `${targetFile}#${callee.property.name}`;
+      const key = `${targetFile}#${method}`;
       if (seen.has(key)) return;
       seen.add(key);
       const fromRel = rel(targetFile);
       if (!scannedFiles.includes(fromRel)) scannedFiles.push(fromRel);
       helpers.push({
-        name: `${callee.object.name}.${callee.property.name}`,
+        name: `${obj.name}.${method}`,
         sourceFile: fromRel,
         sourceLine: fn.line,
         fn: fn.node,
       });
       mergeScan(merged, scanFunction(fn.node));
-      followMembers(fn.node, targetMod, merged, seen, depth + 1);
+      followCalls(fn.node, targetMod, merged, seen, depth + 1, null, stack);
     });
   }
+
+  // `new X(…)` → class X (imported, or declared in the same module) → the
+  // memoized bundle of X.<methodName>.
+  function classBundle(className, methodName, mod, depth, stack) {
+    const file = mod.imports.get(className);
+    const clsMod = file ? parseModule(file) : mod;
+    if (clsMod.error) return null;
+    const cls = classInModule(clsMod, className);
+    if (!cls) return null;
+    return classMethodBundle(cls, clsMod, methodName, depth, stack);
+  }
+
+  // The fully-resolved scan of `<topCls>.<methodName>` — its body plus everything
+  // reachable below it — memoized per (instantiated class, method) across the whole
+  // extract, so a service method reached by N routes is resolved once (same
+  // rationale as the Nest bundleCache; twenty took 34s without it). A bundle is
+  // computed with its OWN dedup set, so the memo never stores a partial.
+  function classMethodBundle(topCls, topMod, methodName, depth, stack) {
+    if (depth >= MAX_HANDLER_DEPTH) return null;
+    const hit = methodInClassChain(topCls, topMod, methodName);
+    if (!hit) return null;
+    const key = `${topMod._file ?? ''}#${topCls.id?.name ?? 'anonymous'}.${methodName}`;
+    const cached = classBundles.get(key);
+    if (cached) return cached;
+    if (stack.has(key)) return null; // reference cycle — contribute nothing, don't cache
+    stack.add(key);
+    const base = scanFunction(hit.fn);
+    const bundle = {
+      ...base,
+      key,
+      effects: [...base.effects],
+      returnShapes: [...(base.returnShapes ?? [])],
+      calls: [...(base.calls ?? [])],
+    };
+    const declRel = rel(hit.mod._file ?? '');
+    if (!scannedFiles.includes(declRel)) scannedFiles.push(declRel);
+    helpers.push({
+      name: `${topCls.id?.name ?? 'anonymous'}.${methodName}`,
+      sourceFile: declRel,
+      sourceLine: hit.fn.loc?.start.line ?? 0,
+      fn: hit.fn,
+    });
+    followCalls(
+      hit.fn,
+      hit.mod,
+      bundle,
+      new Set(),
+      depth + 1,
+      { topCls, topMod, declCls: hit.cls, declMod: hit.mod },
+      stack,
+    );
+    stack.delete(key);
+    classBundles.set(key, bundle);
+    return bundle;
+  }
+}
+
+// Statements the route walk should see = the module top level PLUS the bodies of
+// setup functions and the control-flow blocks inside them, in source order. Bounded
+// (depth + count) and cycle-free by construction. It descends into function *bodies*
+// (declarations, default exports, `const f = () => {}`) and if/for/try/while/block —
+// never into a function passed as a call ARGUMENT, so route handlers stay opaque.
+function flattenSetup(programBody) {
+  const out = [];
+  const blockOf = (n) => (!n ? [] : n.type === 'BlockStatement' ? n.body : [n]);
+  const push = (stmts, depth) => {
+    if (!Array.isArray(stmts) || depth > 6 || out.length > 8000) return;
+    for (const s of stmts) {
+      if (!s || typeof s !== 'object') continue;
+      out.push(s);
+      descend(s, depth);
+    }
+  };
+  const descend = (s, depth) => {
+    switch (s.type) {
+      case 'FunctionDeclaration':
+        push(s.body?.body, depth + 1);
+        break;
+      case 'ExportDefaultDeclaration':
+      case 'ExportNamedDeclaration':
+        if (s.declaration?.body?.body) push(s.declaration.body.body, depth + 1);
+        else if (s.declaration) push([s.declaration], depth);
+        break;
+      case 'VariableDeclaration':
+        for (const d of s.declarations) {
+          const init = d.init;
+          if (
+            (init?.type === 'ArrowFunctionExpression' ||
+              init?.type === 'FunctionExpression') &&
+            init.body?.body
+          )
+            push(init.body.body, depth + 1);
+        }
+        break;
+      case 'IfStatement':
+        push(blockOf(s.consequent), depth);
+        push(blockOf(s.alternate), depth);
+        break;
+      case 'TryStatement':
+        push(s.block?.body, depth);
+        if (s.handler?.body?.body) push(s.handler.body.body, depth);
+        push(s.finalizer?.body, depth);
+        break;
+      case 'ForStatement':
+      case 'ForInStatement':
+      case 'ForOfStatement':
+      case 'WhileStatement':
+      case 'DoWhileStatement':
+        push(blockOf(s.body), depth);
+        break;
+      case 'BlockStatement':
+        push(s.body, depth);
+        break;
+    }
+  };
+  push(programBody, 0);
+  return out;
 }
 
 // const defaultRoutes = [{ path: '/auth', route: authRoute }, …] — collected

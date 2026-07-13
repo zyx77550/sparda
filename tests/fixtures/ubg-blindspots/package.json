@@ -1,0 +1,2 @@
+{ "name": "ubg-blindspots", "type": "module", "main": "src/index.js",
+  "dependencies": { "express": "^4.19.0", "knex": "^3.1.0", "axios": "^1.7.0" } }

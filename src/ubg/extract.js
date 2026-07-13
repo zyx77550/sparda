@@ -405,6 +405,61 @@ function resolveAliasedImport(fromFile, spec) {
 }
 
 // ---------------------------------------------------------------------------
+// Class resolution — shared by the Nest DI follower (this.<dep>.<m>()) and the
+// Express instantiated-service follower (new Service().<m>()). A method lookup
+// climbs the `extends` chain because real services inherit their behavior
+// (directus: ActivityService extends ItemsService, where the DB calls live).
+// ---------------------------------------------------------------------------
+
+const MAX_CLASS_DEPTH = 6;
+
+// find a class declaration named `typeName` at a module's top level (plain,
+// export-named, or export-default with a matching name).
+export function classInModule(mod, typeName) {
+  for (const node of mod.ast?.program.body ?? []) {
+    const cls =
+      node.type === 'ClassDeclaration'
+        ? node
+        : (node.type === 'ExportNamedDeclaration' ||
+              node.type === 'ExportDefaultDeclaration') &&
+            node.declaration?.type === 'ClassDeclaration'
+          ? node.declaration
+          : null;
+    if (cls && cls.id?.name === typeName) return cls;
+  }
+  return null;
+}
+
+// resolve `class X extends Base` → the Base class node + its module, via the import.
+export function baseClassOf(cls, mod) {
+  if (cls.superClass?.type !== 'Identifier') return null;
+  const file = mod.imports.get(cls.superClass.name);
+  if (!file || !fs.existsSync(file)) return null;
+  const baseMod = parseModule(file);
+  if (baseMod.error) return null;
+  const baseCls = classInModule(baseMod, cls.superClass.name);
+  return baseCls ? { cls: baseCls, mod: baseMod } : null;
+}
+
+// locate `methodName` on the class or up its `extends` chain →
+// { fn, mod, cls } where `cls`/`mod` are the DECLARING class and its module
+// (base-class methods live in the base module — the caller needs both for
+// source locations and for resolving `super.<m>()` from the right link).
+export function methodInClassChain(cls, mod, methodName, depth = 0) {
+  for (const m of cls.body.body) {
+    if (
+      m.type === 'ClassMethod' &&
+      m.key.type === 'Identifier' &&
+      m.key.name === methodName
+    )
+      return { fn: m, mod, cls };
+  }
+  if (depth >= MAX_CLASS_DEPTH) return null;
+  const base = baseClassOf(cls, mod);
+  return base ? methodInClassChain(base.cls, base.mod, methodName, depth + 1) : null;
+}
+
+// ---------------------------------------------------------------------------
 // scanFunction — what does this function DO?
 // Plain recursive walk (no scope analysis: deterministic, dependency-free),
 // bounded, source order preserved. Nested function declarations are NOT
@@ -429,8 +484,59 @@ export function scanFunction(fnNode) {
     isolation: 'default',
     tryId: null,
     catchOf: null,
+    reqDerived: collectReqDerived(fnNode),
   });
   return result;
+}
+
+// The request objects a handler names its input through. A table/target sourced from
+// one of these is not a literal, but it is not unknown either: it is precisely "the
+// value the caller supplies here" — a SYMBOLIC target, expressed as a rule.
+const REQ_ROOTS = new Set(['req', 'request', 'ctx', 'context', 'event', 'request_']);
+
+// `req.params.collection` / `req.query.table` / `req.body.type` / `req.collection`
+// → the leaf name, prefixed ':' to mark it symbolic. Null if not request-derived.
+function reqParamName(node, reqDerived) {
+  if (node?.type === 'Identifier') return reqDerived?.get(node.name) ?? null;
+  if (node?.type !== 'MemberExpression' || node.computed) return null;
+  if (node.property.type !== 'Identifier') return null;
+  const root = rootIdentifier(node);
+  if (!root || !REQ_ROOTS.has(root.toLowerCase())) return null;
+  return `:${node.property.name}`;
+}
+
+// map local vars assigned straight from a request member: `const c = req.params.collection`
+// → { c: ':collection' }. One shallow pass; deterministic; bounded by the function body.
+function collectReqDerived(fnNode) {
+  const map = new Map();
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) {
+      for (const x of n) walk(x);
+      return;
+    }
+    if (
+      n.type === 'VariableDeclarator' &&
+      n.id?.type === 'Identifier' &&
+      n.init?.type === 'MemberExpression'
+    ) {
+      const name = reqParamName(n.init, null);
+      if (name) map.set(n.id.name, name);
+    }
+    for (const k of Object.keys(n)) {
+      if (
+        k === 'loc' ||
+        k === 'range' ||
+        k === 'leadingComments' ||
+        k === 'trailingComments'
+      )
+        continue;
+      const v = n[k];
+      if (v && typeof v === 'object') walk(v);
+    }
+  };
+  walk(fnNode.body);
+  return map;
 }
 
 // SBIR §2.2 — transaction wrappers whose function arguments open a scope
@@ -606,13 +712,16 @@ function inspectCall(node, out, ctx) {
   // (not a chained .from()), so read it straight off arguments[0].
   if (KYSELY_OPS[methodLower] !== undefined && callee.type === 'MemberExpression') {
     const arg0 = node.arguments[0];
-    const table = arg0?.type === 'StringLiteral' ? arg0.value : null;
+    const literal = arg0?.type === 'StringLiteral' ? arg0.value.toLowerCase() : null;
+    const symbolic = literal ? null : reqParamName(arg0, ctx.reqDerived);
+    const table = literal ?? symbolic;
     if (table) {
       const op = KYSELY_OPS[methodLower];
       pushEffect(out, ctx, {
         effectType: op === 'select' ? 'db_read' : 'db_write',
         op,
-        table: table.toLowerCase(),
+        table,
+        ...(symbolic ? { symbolic: true } : {}),
         line,
       });
       return;
@@ -621,12 +730,13 @@ function inspectCall(node, out, ctx) {
 
   // ---- supabase/knex builder: X.from('t').insert(...) or knex('t').update(...)
   if (SUPABASE_OPS.has(methodLower)) {
-    const table = builderTableOf(callee.object);
-    if (table) {
+    const resolved = builderTableOf(callee.object, ctx.reqDerived);
+    if (resolved) {
       pushEffect(out, ctx, {
         effectType: methodLower === 'select' ? 'db_read' : 'db_write',
         op: methodLower,
-        table: table.toLowerCase(),
+        table: resolved.symbolic ? resolved.table : resolved.table.toLowerCase(),
+        ...(resolved.symbolic ? { symbolic: true } : {}),
         line,
       });
       return;
@@ -964,20 +1074,29 @@ function clientBaseName(node) {
 // knex('users') → users ; supabase.from('users') → users ;
 // supabase.from('users').select() chains: walk member/call chain to a
 // .from('t') or a base call with a string literal argument.
-function builderTableOf(node) {
+// → { table, symbolic } or null. A request-derived arg (`knex(req.params.table)`,
+// `.from(collection)` where `const collection = req.params.collection`) resolves to a
+// SYMBOLIC table (`:table`) — a precise rule, not an unknown — so generic CRUD
+// endpoints stop reading as blind.
+function builderTableOf(node, reqDerived) {
   let cur = node;
+  const lit = (t) => ({ table: t, symbolic: false });
   for (let hops = 0; hops < 8 && cur; hops++) {
     if (cur.type === 'CallExpression') {
       const c = cur.callee;
-      if (
+      const arg0 = cur.arguments[0];
+      const isFrom =
         c.type === 'MemberExpression' &&
         c.property.type === 'Identifier' &&
-        c.property.name === 'from' &&
-        cur.arguments[0]?.type === 'StringLiteral'
-      )
-        return cur.arguments[0].value;
-      if (c.type === 'Identifier' && cur.arguments[0]?.type === 'StringLiteral')
-        return cur.arguments[0].value; // knex('users')
+        c.property.name === 'from';
+      const isBaseCall = c.type === 'Identifier'; // knex('users')
+      const isThisCall =
+        c.type === 'MemberExpression' && c.object.type === 'ThisExpression';
+      if (isFrom || isBaseCall || isThisCall) {
+        if (arg0?.type === 'StringLiteral') return lit(arg0.value);
+        const sym = reqParamName(arg0, reqDerived);
+        if (sym) return { table: sym, symbolic: true };
+      }
       cur = c.type === 'MemberExpression' ? c.object : null;
     } else if (cur.type === 'MemberExpression') {
       cur = cur.object;

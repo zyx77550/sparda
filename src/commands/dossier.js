@@ -10,6 +10,7 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf } from '../ubg/apocalypse.js';
+import { surveyBlindspots } from '../ubg/blindspots.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { AXES, POLARITY_SYMBOL, exposedAxes } from '../ubg/polarity.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
@@ -20,6 +21,7 @@ export async function runDossier(opts) {
   const { findings, polarity } = checkGraph(canonical);
   const verdict = verdictOf(findings, canonical);
   const capsule = buildCapsule(canonical);
+  const blindspots = surveyBlindspots(canonical, compiled.report);
 
   const data = {
     app: path.basename(path.resolve(opts.cwd)) || 'app',
@@ -38,6 +40,7 @@ export async function runDossier(opts) {
     polarity: polarity.map((p) => ({ entrypoint: p.entrypoint, vector: p.vector })),
     posture: capsule.posture,
     capsuleBytes: capsule.bytes,
+    blindspots,
     sourceHash: (canonical.meta?.sourceHash ?? '').slice(0, 12),
   };
 
@@ -125,6 +128,24 @@ export function renderDossierHTML(d) {
   const statCard = (n, label) =>
     `<div class="stat"><b>${esc(n)}</b><span>${esc(label)}</span></div>`;
 
+  // The honesty section: where the proof stops. No other prover shows this.
+  const b = d.blindspots ?? { spots: [], surface: 0, coverage: { ratio: 1 } };
+  const blindRows = b.spots.length
+    ? b.spots
+        .slice(0, 40)
+        .map(
+          (s) => `
+        <div class="finding" style="--sev:${SEV_COLOR[s.risk] ?? '#8b8f9a'}">
+          <div class="sev">${esc(s.risk)}</div>
+          <div class="fbody">
+            <div class="frule">${esc(s.kind)}${s.location ? ` · <span class="fep">${esc(s.location)}</span>` : ''}</div>
+            <p>${esc(s.label)} — ${esc(s.why)}</p>
+          </div>
+        </div>`,
+        )
+        .join('')
+    : '<p class="clean">Nothing hidden — every route, effect target and guard SPARDA saw was fully resolved.</p>';
+
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -200,6 +221,9 @@ export function renderDossierHTML(d) {
 
   <h2>What SPARDA found</h2>
   ${findingCards}
+
+  <h2>Where the proof stops <small>SPARDA's own blind spots · coverage ${(b.coverage.ratio * 100).toFixed(0)}% · ${b.surface} unseen, ranked by what each could hide</small></h2>
+  ${blindRows}
 
   <footer>
     <span>graph ${esc(d.sourceHash)} · ${esc(d.nodes)} nodes / ${esc(d.edges)} edges</span>

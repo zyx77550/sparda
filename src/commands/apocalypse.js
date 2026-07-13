@@ -11,6 +11,7 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, diffGraphs, verdictOf } from '../ubg/apocalypse.js';
+import { surveyBlindspots } from '../ubg/blindspots.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 const ICONS = { critical: '✗', high: '✗', medium: '⚠', info: '·' };
@@ -43,6 +44,8 @@ export async function runApocalypse(opts) {
 
   const findings = [...staticFindings, ...diffFindings];
   const verdict = verdictOf(findings, canonical);
+  // the honesty companion: where does the proof stop? (see `sparda blindspots`)
+  const blind = surveyBlindspots(canonical, report);
 
   if (opts.sarif) {
     const sarifPath = path.join(opts.cwd, '.sparda', 'apocalypse.sarif');
@@ -54,7 +57,9 @@ export async function runApocalypse(opts) {
   }
 
   if (opts.json) {
-    console.log(JSON.stringify({ verdict, obligations, findings }, null, 2));
+    console.log(
+      JSON.stringify({ verdict, obligations, findings, blindspots: blind }, null, 2),
+    );
   } else {
     console.log(
       `APOCALYPSE — deployment proof over ${canonical.nodes.length} nodes, ${canonical.edges.length} edges` +
@@ -95,10 +100,18 @@ export async function runApocalypse(opts) {
         `${verdict.safe ? '⚠ RISKY' : '✗ NOT PROVEN'} — ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.info} info`,
       );
     }
+    // Honesty companion: where the proof stops. A green verdict over a graph riddled
+    // with blind spots is not omniscience — say so, on the same screen as the verdict.
+    if (blind.surface > 0) {
+      const hi = blind.byRisk.critical + blind.byRisk.high;
+      console.log(
+        `  ◐ blind spots: ${blind.surface} (${hi} high+, ${blind.byRisk.medium} medium, ${blind.byRisk.low} low) · coverage ${(blind.coverage.ratio * 100).toFixed(0)}% — run \`sparda blindspots\` for the map`,
+      );
+    }
   }
 
   if (!verdict.safe) process.exitCode = 1; // CI gates on this
-  return { verdict, findings, obligations };
+  return { verdict, findings, obligations, blindspots: blind };
 }
 
 // SARIF 2.1.0 — GitHub code scanning eats this directly

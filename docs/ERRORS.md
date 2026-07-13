@@ -523,3 +523,50 @@ anything that smells familiar. Newest last.
   are the safe parts kept.
 - **Rule:** a "deny" that feeds guard classification must be auth-specific (a 401/403), not any
   error path — or validation logic becomes counterfeit auth and masks the very bugs we hunt.
+
+## E-030 — Express app built inside createApp() read as 0 routes
+- **Symptom:** directus (and most real Express apps) compiled to **0 routes / NO PROOF** — the
+  whole app is built inside `export default function createApp() { const app = express(); …
+  app.use('/x', xRouter); return app; }`.
+- **Root cause:** the extractor walked only `mod.ast.program.body` (module top level), so the
+  `express()` var and every mount — one level down inside the function — were invisible.
+- **Fix (ADR-047):** `flattenSetup` descends into setup-function bodies + their control-flow
+  blocks (if/for/try/while/block), never into function *arguments* (handlers stay opaque), and
+  feeds the flattened stream to collectAppVars/collectRouteArrays/the route walk.
+- **Proof:** directus 0 → 239 real routes; node-express-boilerplate 8 → 9 (recovered an
+  if-gated `/v1/docs`). Fixture `ubg-express-factory` + `express-factory.test.js`. 532 green.
+- **Rule:** production apps wrap setup in a function — a top-level-only walk misses the whole
+  app. Descend into setup bodies and control flow; stop at function arguments (handlers).
+
+## E-031 — Instantiated services were invisible: directus read SURFACE ONLY
+- **Symptom:** after ADR-047 recovered its 239 routes, directus still compiled to 0 effects —
+  `surfaceOnly`, no real verdict. Every handler builds its service with
+  `new ItemsService(…)` and the DB calls live on the base class it extends.
+- **Root cause:** the Express deep scanner followed module-member calls and Nest DI, but not
+  `new X()` instances; additionally its handlers are *inline* `asyncHandler(async…)` wrappers
+  (blind nodes), and the base-class effects sit behind `this.<m>()`/`super.<m>()` hops and
+  `this.knex('t')` builder calls — four independent blinders stacking on the same app.
+- **Fix (ADR-048):** unwrap inline wrapped handlers; map `const svc = new X(…)`; resolve
+  `svc.method()` up the `extends` chain with `this` re-dispatch from the instantiated class and
+  `super` from the declaring base; read `this.knex('t')` as a table op. Memoized per
+  (class, method) — no perf cliff (E-027's lesson applied from the start).
+- **Proof:** directus SURFACE ONLY → real verdict with observed effects; corpus unchanged
+  everywhere else; fixture `ubg-express-instance` + 4 tests. 536 green.
+- **Rule:** blindness stacks. When an app reads as SURFACE ONLY, hunt for ALL the idioms in its
+  handler → effect path — fixing one blinder and re-testing per-blinder is how you find the
+  next one, and they usually ship together or not at all.
+
+## E-032 — "PROVEN" was silently standing in for "omniscient"
+- **Symptom:** twenty/formbricks/open-webui/directus all read PROVEN while SPARDA had resolved a
+  small fraction of their behavior (GraphQL, un-followed services, Python depth, dynamic query
+  builders). A green verdict looked identical whether SPARDA saw everything or almost nothing.
+- **Root cause:** the verdict reported what was proven but never quantified what was UNSEEN.
+  `surfaceOnly` was all-or-nothing (0 effects); a partially-blind app fell through as clean.
+- **Fix (ADR-049):** the blindspot ledger — opaque-target / blind-mutation / unverified-guard /
+  skipped-surface, ranked by what each could hide, plus a coverage ratio. Reported under every
+  verdict (apocalypse), in the dossier, and as `sparda blindspots` (exit 1 on high+). Verdicts
+  unchanged — it only makes the blindness visible.
+- **Proof:** twenty PROVEN → "coverage 8%, 406 blind"; directus PROVEN → "coverage 13%, 15 high";
+  dub NOT PROVEN → "99%". Fixture `ubg-blindspots` + 7 tests. 543 green.
+- **Rule:** a prover must report the boundary of its own sight. "I proved X" is only honest next
+  to "and here is what I could not see." Measure the unknown; never let green imply omniscient.

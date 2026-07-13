@@ -218,6 +218,10 @@ function ensureChainNode(graph, step, scanCache) {
       existing.meta.returnShapes = cachedScan.returnShapes;
     return { id, scan: cachedScan };
   }
+  // opaque = SPARDA holds NO body for this step (fn:null and no precomputed scan) —
+  // a handler/middleware it registered by name but could not read. The blindspot
+  // ledger uses this to tell "read and empty" apart from "couldn't read".
+  const opaque = !step.fn && !step.scan;
   addNode(
     graph,
     makeNode(
@@ -228,6 +232,7 @@ function ensureChainNode(graph, step, scanCache) {
       {
         role: step.role,
         async: scan.async,
+        ...(opaque ? { opaque: true } : {}),
         ...(kind === 'guard'
           ? { guardType: guardTypeOf(step.name, scan), verified: gf.verified }
           : {}),
@@ -263,6 +268,9 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           effectType: eff.effectType,
           ...(eff.op ? { op: eff.op } : {}),
           ...(eff.table ? { table: eff.table } : {}),
+          // symbolic table (`:collection`): a request-derived target, resolved as a
+          // rule, not a literal — carried so the blindspot ledger doesn't flag it opaque
+          ...(eff.symbolic ? { symbolic: true } : {}),
           ...(eff.target ? { target: eff.target } : {}),
           ...(eff.driver ? { driver: eff.driver } : {}),
           ...(eff.httpMethod ? { httpMethod: eff.httpMethod } : {}),

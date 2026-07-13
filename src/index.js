@@ -142,6 +142,11 @@ try {
       await runDossier(opts);
       break;
     }
+    case 'blindspots': {
+      const { runBlindspots } = await import('./commands/blindspots.js');
+      await runBlindspots(opts);
+      break;
+    }
     case 'genome': {
       const { runGenome } = await import('./commands/genome.js');
       await runGenome(opts);
@@ -196,6 +201,7 @@ Usage:
   npx sparda-mcp immunize  Freeze proven safety into a tiny capsule (1 byte/route) — .sparda/immunity.json
   npx sparda-mcp speculate  Re-verify vs the frozen capsule by lookup — full proof only on novel shapes (--json)
   npx sparda-mcp dossier   Render the whole proof as one self-contained HTML page anyone can read (.sparda/dossier.html)
+  npx sparda-mcp blindspots  Map SPARDA's own blindness: every unseen route/effect/guard, ranked by what it could hide (--json)
   npx sparda-mcp genome    Sign this app's proofs into the shared world memory — self-verifying antibodies, zero infra (--json)
   npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
   npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
