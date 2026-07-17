@@ -26,8 +26,39 @@ import { createSpardaEngine } from './engine.js';
 import { initiateWrite, preapproveWrite, confirmWrite } from './confirmation.js';
 import { resolveContext, injectContext, fingerprintContext } from './context-carrier.js';
 import { resolveSpardaKey } from '../generator/manifest.js';
+import { compileUBG } from '../ubg/compile.js';
+import { canonicalizeGraph } from '../ubg/schema.js';
+import { checkGraph, diffGraphs, verdictOf, verdictState } from '../ubg/apocalypse.js';
+import { surveyBlindspots } from '../ubg/blindspots.js';
 
 const EVENT_POLL_MS = Number(process.env.SPARDA_EVENT_POLL_MS ?? 5000);
+
+// Built-in MCP prompts (workflows) served by every SPARDA server, regardless of the app's own
+// inferred workflows. `prove-my-edit` is the discoverability surface for `sparda_prove`: the
+// workflow an editing agent lists and follows to check its OWN change before committing — the
+// one check an LLM cannot do to itself by re-reading its code.
+export const BUILTIN_WORKFLOWS = [
+  {
+    name: 'prove-my-edit',
+    description:
+      "Prove an edit didn't break a guard before you commit — the check an LLM can't do to itself by re-reading its own code.",
+    steps: [
+      'Call sparda_prove. If you just edited one route, pass route with its method+path (e.g. "DELETE /orders") to focus the finding list — the verdict still reflects the whole app.',
+      'Read the verdict: PROVEN / PARTIAL are safe to commit. SURFACE / NO_PROOF mean SPARDA could not resolve enough to prove it — treat that as "unknown", never as a pass.',
+      'Fix every finding with regression:true first — that edit removed a guard, dropped a route, or grew the blast radius vs the last proven baseline.',
+      'If baselined is false, run `sparda apocalypse --save-baseline` once on a known-good state so future sparda_prove calls can catch regressions.',
+    ],
+  },
+];
+
+// App-inferred workflows (carry-over, sacred) win on a name clash; built-ins fill the rest.
+export function mergeWorkflows(appWorkflows) {
+  const out = [...(appWorkflows ?? [])];
+  for (const b of BUILTIN_WORKFLOWS) {
+    if (!out.some((w) => w.name === b.name)) out.push(b);
+  }
+  return out;
+}
 // Advertised MCP server version — read from package.json so it can never drift from the
 // published package (it was pinned at a stale '0.5.2' for many releases).
 const SPARDA_VERSION = (() => {
@@ -341,6 +372,21 @@ export async function startStdioBridge({ cwd, portOverride }) {
         inputSchema: { type: 'object', properties: {} },
       },
       {
+        name: 'sparda_prove',
+        description:
+          'Prove this app is safe to deploy — NOW, before you commit. Compiles the current source to its behavior graph and discharges the static proof obligations (unguarded mutation, non-atomic aggregate write, unvalidated constrained write). If a baseline was saved (`sparda apocalypse --save-baseline`), it ALSO diffs against it: any finding flagged `regression:true` means your edit removed a guard, dropped a route, or grew the blast radius vs the last proven state — the check an LLM cannot do to itself by re-reading code. Returns a deterministic verdict (PROVEN / PARTIAL / SURFACE / NO_PROOF / RISKY / NOT_PROVEN), the coverage % it resolved, and every finding with its route. The verdict is the exact word `sparda apocalypse` and the badge emit; it never over-claims (a low-coverage clean app reads SURFACE/PARTIAL, never a bare PROVEN). Pass `route` (e.g. "DELETE /orders") to focus the finding list on the route you just edited — the verdict still reflects the whole app.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            route: {
+              type: 'string',
+              description:
+                'Optional. Substring of a route label (method + path, e.g. "POST /invoices") to filter the findings to the route you just edited. Omit to see the whole app.',
+            },
+          },
+        },
+      },
+      {
         name: 'sparda_confirm',
         description:
           'Confirms a pending write or delete operation gated by human-in-the-loop policies using its confirmation token.',
@@ -360,14 +406,14 @@ export async function startStdioBridge({ cwd, portOverride }) {
   }));
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-    prompts: (manifest.semantic?.workflows ?? []).map((w) => ({
+    prompts: mergeWorkflows(manifest.semantic?.workflows).map((w) => ({
       name: w.name,
       description: w.description,
     })),
   }));
 
   server.setRequestHandler(GetPromptRequestSchema, async (req) => {
-    const w = (manifest.semantic?.workflows ?? []).find(
+    const w = mergeWorkflows(manifest.semantic?.workflows).find(
       (x) => x.name === req.params.name,
     );
     if (!w) throw new Error(`unknown prompt: ${req.params.name}`);
@@ -410,6 +456,9 @@ export async function startStdioBridge({ cwd, portOverride }) {
           2,
         ),
       );
+    }
+    if (name === 'sparda_prove') {
+      return text(JSON.stringify(proveApp(cwd, { route: args.route }), null, 2));
     }
     if (name === 'sparda_get_context') {
       const headers = hostHeaders(key, ctx);
@@ -1079,6 +1128,76 @@ function schemaFor(t) {
 
 function text(t) {
   return { content: [{ type: 'text', text: t }] };
+}
+
+// The proof layer, served live over MCP — same compile + obligations as `sparda apocalypse`,
+// so an AI can prove its own edit structurally the moment it writes it, not a CI run later.
+// Reuses `verdictState` verbatim: this tool physically cannot show a word the CLI/badge won't
+// (the no-false-PROVEN invariant is one function, shared). Read-only (write:false); an
+// AI-initiated call, never on the host's request path, so Law 1 holds.
+//   opts.route  — substring; keep only findings on routes whose label matches (focus the
+//                 answer on the route the AI just edited, e.g. "DELETE /orders").
+export function proveApp(cwd, { route } = {}) {
+  let canonical, report;
+  try {
+    const compiled = compileUBG(cwd, { write: false });
+    canonical = canonicalizeGraph(compiled.graph);
+    report = compiled.report;
+  } catch (err) {
+    // A parser gap is NOT a pass — say so honestly, never a silent green.
+    return {
+      verdict: 'NO_PROOF',
+      provable: false,
+      note: `SPARDA could not compile this app's surface (${err.message}). An uncompiled app proves nothing — this is NOT a pass.`,
+    };
+  }
+  const { findings: staticFindings, obligations } = checkGraph(canonical);
+
+  // Baseline diff — the regression check that IS apocalypse's edge over a plain linter: did
+  // this edit REMOVE a guard, drop a route, or grow the blast radius vs the last saved proof?
+  // Only if a baseline was recorded (`sparda apocalypse --save-baseline`); absent → static only.
+  let diffFindings = [];
+  let baselined = false;
+  const baselinePath = path.join(cwd, '.sparda', 'ubg.baseline.json');
+  if (fs.existsSync(baselinePath)) {
+    try {
+      const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+      diffFindings = diffGraphs(baseline, canonical).findings;
+      baselined = true;
+    } catch {
+      // unreadable baseline → degrade to static-only, never crash the AI's call
+    }
+  }
+
+  const all = [...staticFindings, ...diffFindings];
+  const label = (id) => canonical.nodes.find((n) => n.id === id)?.label ?? id;
+  let findings = all.map((f) => ({
+    severity: f.severity,
+    rule: f.rule,
+    route: label(f.entrypoint),
+    regression: diffFindings.includes(f),
+    message: f.message,
+  }));
+  if (route) {
+    const needle = route.toLowerCase();
+    findings = findings.filter((f) => f.route.toLowerCase().includes(needle));
+  }
+
+  const blind = surveyBlindspots(canonical, report);
+  // The verdict word always reflects the WHOLE app (a route filter narrows the finding list,
+  // never the safety claim — an AI must never read "PROVEN" because it hid the rest).
+  const verdict = verdictOf(all, canonical, { coverage: blind.coverage.ratio });
+  return {
+    verdict: verdictState(verdict),
+    provable: verdict.provable,
+    coverage: Math.round(blind.coverage.ratio * 100) / 100,
+    baselined,
+    obligations,
+    counts: verdict.counts,
+    findings,
+    blindspots: { surface: blind.surface, coverage: blind.coverage.ratio },
+    ...(route ? { scopedTo: route } : {}),
+  };
 }
 
 // AI-facing message when the Signal-2 gate (Brief #1) refuses a `sparda_confirm`. Each reason
