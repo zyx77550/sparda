@@ -1,0 +1,2 @@
+{ "name": "ubg-prisma-folder-fixture", "private": true, "type": "module",
+  "dependencies": { "express": "^4.21.0", "@prisma/client": "^5.0.0" } }

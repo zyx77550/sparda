@@ -40,6 +40,34 @@ const opts = {
   cwd: path.resolve(process.cwd(), getOpt('dir', null) ?? getOpt('cwd', null) ?? '.'),
 };
 
+// Per-command help — `sparda <cmd> --help` (or -h) prints usage and exits, instead of running
+// the command (the old behavior: `--help` was ignored and the command just ran). Every command
+// reads opts.cwd, so `--dir <path>` works on all of them; only per-command extras are listed.
+const HELP = {
+  prove: `sparda prove [--dir <path>] [--json | --markdown]\n  The whole trust verdict: proof + coverage + a shareable seal.\n  --markdown  emit a sticky-PR-comment body (used by the GitHub Action).`,
+  apocalypse: `sparda apocalypse [--dir <path>] [--sarif] [--save-baseline]\n  Prove the deploy — exit 1 on any critical/high finding.\n  --sarif         also write .sparda/apocalypse.sarif for the Security tab.\n  --save-baseline freeze this graph; later runs diff against it.`,
+  ubg: `sparda ubg [--dir <path>] [--json] [--out <file>] [--openapi <spec>]\n  Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json).`,
+  stitch: `sparda stitch <dir1> <dir2> [...] [--json]\n  Cross-service proof: join one service's outbound HTTP calls to another's routes,\n  surface cross-service trust boundaries + BOLA no mono-repo tool can see.`,
+  badge: `sparda badge [--dir <path>] [--out <file>] [--json]\n  Emit a shareable SVG badge + README snippet (verdict · coverage · routes).`,
+  dossier: `sparda dossier [--dir <path>] [--json]\n  Render the whole proof as one self-contained, shareable HTML page.`,
+  review: `sparda review [--dir <path>] --base <ref> [--json | --markdown]\n  Semantic behavior diff of the working tree vs a base git ref.`,
+  init: `sparda init [--dir <path>] [--yes]\n  Scan the app, generate & inject the reversible /mcp router.`,
+  dev: `sparda dev [--dir <path>] [--port <n>]\n  Run the MCP stdio bridge (connect an AI client).`,
+  remove: `sparda remove [--dir <path>] [--yes]\n  Remove SPARDA from this project — byte-for-byte clean git diff.`,
+  heal: `sparda heal <flightId> [--check] [--expect <json>] [--agent <cli>]\n  Turn a production bug into a fix brief + a proof gate.`,
+  timeless: `sparda timeless [list | replay <id> | export <id>]\n  Record / replay a production request byte-identically.`,
+  mirror: `sparda mirror [--dir <path>] [--port <n>]\n  Serve the compiled graph over HTTP — no framework, no source.`,
+};
+if (flags.has('--help') || rest.includes('-h')) {
+  if (cmd && HELP[cmd]) console.log(HELP[cmd]);
+  else if (cmd)
+    console.log(
+      `No detailed help for \`${cmd}\`. Run \`sparda\` for the full command list.`,
+    );
+  else console.log('Run `sparda` for the command list, or `sparda <command> --help`.');
+  process.exit(0);
+}
+
 try {
   switch (cmd) {
     case 'demo': {
@@ -119,6 +147,14 @@ try {
     case 'badge': {
       const { runBadge } = await import('./commands/badge.js');
       await runBadge(opts);
+      break;
+    }
+    case 'stitch': {
+      const { runStitch } = await import('./commands/stitch.js');
+      await runStitch(
+        opts,
+        rest.filter((a) => !a.startsWith('--')),
+      );
       break;
     }
     case 'apocalypse': {
@@ -201,6 +237,7 @@ PROVE — the point
   review       Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
   blindspots   Map SPARDA's own blindness — every unseen route/effect/guard, ranked (--json)
   badge        Emit a shareable SVG badge + README snippet (verdict · coverage · routes)
+  stitch       Cross-service proof — join N repos' graphs, find boundary-crossing BOLA
   dossier      Render the whole proof as one self-contained HTML page anyone can read
   verify       Prove the compiler's own laws (determinism, soundness, round-trip)
   heal         Turn a production bug into a fix brief + a gate (--check / --expect / --agent)

@@ -1,0 +1,5 @@
+// datasource/generator are ignored by the parser; an enum lives here, referenced cross-file
+enum LinkStatus {
+  active
+  archived
+}

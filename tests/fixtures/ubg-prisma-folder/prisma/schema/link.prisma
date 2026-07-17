@@ -1,0 +1,7 @@
+model Link {
+  id     String     @id
+  url    String
+  status LinkStatus
+  userId String
+  user   User       @relation(fields: [userId], references: [id])
+}

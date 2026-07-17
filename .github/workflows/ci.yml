@@ -68,6 +68,17 @@ jobs:
       - name: Prettier (check)
         run: npm run format:check
 
+      # Fails if a README route count drifts from bench/route-proof.json (the committed,
+      # reproducible evidence). Keeps the headline honest — no clone, no network.
+      - name: README claims match the bench evidence
+        run: npm run bench:check
+
+      # Mutation testing (home-grown, zero-dep): introduces a mutation into each soundness-/
+      # correctness-critical line and requires a test to KILL it. A surviving mutant = a guarded
+      # line with no test that bites. The reproduction of DNA-polymerase coupled proofreading.
+      - name: Mutation testing (guardian tests must bite)
+        run: npm run mutation
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

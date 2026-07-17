@@ -68,6 +68,10 @@ export function checkGraph(graph) {
   const g = indexGraph(graph);
   const findings = [];
   let obligations = 0;
+  // Resource tables by name — the input to BolaRay ownership-model inference (O7 below).
+  const statesByTable = new Map();
+  for (const n of g.nodes.values())
+    if (n?.kind === 'state' && n.meta?.table) statesByTable.set(n.meta.table, n);
   // Behavior polarity (ADR-036): per entrypoint, a ternary vector over the same
   // obligations checked below — +1 protection present, 0 not applicable, -1
   // violated. Built HERE so a -1 is literally the same condition as the finding
@@ -208,9 +212,15 @@ export function checkGraph(graph) {
       );
       vec.aggregate = touchesRoot && vec.aggregate !== -1 ? 1 : -1;
       if (!touchesRoot) {
+        // ADVISORY (E-046): a direct member-table write is a design-smell, not a proven
+        // violation — many ORMs/apps legitimately write members directly. On a real
+        // schema-rich app it fires in bulk (dub: 174), so it points a human at the pattern,
+        // it never gates the verdict. (Surfaced once the split-schema state layer became
+        // visible; making it hard would have flooded every folder-schema app.)
         findings.push({
           rule: 'AGGREGATE_MEMBER_BYPASS',
           severity: 'info',
+          advisory: true,
           entrypoint: ep.id,
           message: `${ep.label} mutates member table "${state.meta.table}" of aggregate "${state.meta.consistencyDomain}" without going through its root`,
           evidence: [w.stateId],
@@ -238,12 +248,27 @@ export function checkGraph(graph) {
       const tables = [
         ...new Set(idScoped.map((n) => n.meta.table).filter(Boolean)),
       ].sort();
+      // BolaRay (CCS 2024) step 1: infer the ownership MODEL each accessed table SHOULD carry
+      // (from its declared columns/FKs), so the advisory names the scope the access is MISSING
+      // instead of a vague "verify authorization". Still advisory (soundness unchanged): the
+      // schema tells us the model, never the runtime intent — that gap is why O7 never gates.
+      const ownership = tables.map((t) => ({
+        table: t,
+        ...(inferOwnershipModel(t, statesByTable) ?? { model: null, key: null }),
+      }));
+      const hints = ownership
+        .filter((o) => o.model)
+        .map((o) => `${o.table} should be ${o.model} (${o.key})`);
       findings.push({
         rule: 'OBJECT_SCOPE_UNPROVEN',
         severity: 'info',
         advisory: true,
         entrypoint: ep.id,
-        message: `${ep.label} accesses ${tables.join(', ')} by a request-supplied id with no ownership scope proven on the path — verify object-level authorization (BOLA/IDOR)`,
+        ownership,
+        message:
+          `${ep.label} accesses ${tables.join(', ')} by a request-supplied id with no ownership scope proven on the path` +
+          (hints.length ? ` — ${hints.join('; ')}` : '') +
+          ` — verify object-level authorization (BOLA/IDOR)`,
         evidence: idScoped.map((n) => `${n.id} (${locOf(n)})`),
       });
     }
@@ -251,7 +276,55 @@ export function checkGraph(graph) {
     polarity.push({ entrypoint: ep.id, vector: vec });
   }
 
-  return { findings: sortFindings(findings), obligations, polarity };
+  // Lateral inhibition (ADR-060): a rule that fires on a large FRACTION of the routes is a
+  // codebase-wide PATTERN, not N independent findings — 97 identical lines bury the rare, sharp
+  // signals (loss of contrast). Collapse a flooding rule into ONE summary at its MAX severity.
+  // SOUND + verdict-neutral: a hard rule stays hard and still gates (we never HIDE a finding — a
+  // suppressed danger would be a false PROVEN); we only stop it flooding the report. The retina
+  // suppresses uniform light, never an edge.
+  const collapsed = collapseFloods(findings, g.entrypoints.length);
+
+  return { findings: sortFindings(collapsed), obligations, polarity };
+}
+
+// A rule is "pervasive" when it fires on more than this fraction of the routes AND on at least
+// FLOOD_MIN of them — measured on the corpus: real floods sit at 18% (dub member-bypass) / 41%
+// (directus irreversible) on 100+ routes, while the sharp per-route signals (BOLA 10%, unvalidated
+// 11%, unguarded 1%) stay below. The absolute floor keeps a small app (a 2-route fixture where one
+// finding is trivially "50%") from ever collapsing — a pattern needs real breadth to be a pattern.
+const FLOOD_DENSITY = 0.15;
+const FLOOD_MIN = 10;
+export function collapseFloods(findings, totalRoutes) {
+  if (!totalRoutes) return findings;
+  const byRule = new Map();
+  for (const f of findings) {
+    if (!byRule.has(f.rule)) byRule.set(f.rule, []);
+    byRule.get(f.rule).push(f);
+  }
+  const out = [];
+  for (const [rule, list] of [...byRule].sort((a, b) => cmp(a[0], b[0]))) {
+    const routes = new Set(list.map((f) => f.entrypoint));
+    if (routes.size >= FLOOD_MIN && routes.size / totalRoutes > FLOOD_DENSITY) {
+      // strongest severity wins; advisory only if EVERY collapsed finding was advisory (a hard
+      // finding in the flood keeps the summary hard — it must still gate the verdict).
+      const severity = list
+        .map((f) => f.severity)
+        .sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])[0];
+      const anyHard = list.some((f) => !f.advisory);
+      out.push({
+        rule,
+        severity,
+        ...(anyHard ? {} : { advisory: true }),
+        entrypoint: '(codebase-wide)',
+        pervasive: routes.size,
+        message: `${rule} is pervasive — fires on ${routes.size}/${totalRoutes} routes; review the pattern, not each route (all routes listed in evidence)`,
+        evidence: [...routes].sort(),
+      });
+    } else {
+      out.push(...list);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +436,38 @@ export function countProvable(graph) {
     if (node.kind === 'effect' && PROVABLE_EFFECT.has(node.meta?.effectType)) n++;
   }
   return n;
+}
+
+// Ownership-model inference (BolaRay, CCS 2024): from a resource table's declared columns and
+// foreign keys, which object-level authorization model SHOULD it carry? DIRECT_OWNER (a
+// user/owner column), GROUP_SCOPED (a workspace/team/tenant column — caller must belong to the
+// group), TRANSITIVE (ownership reached via a FK to an owned table), or null (a shared/global
+// resource, or intent SPARDA cannot see). Columns are lowercased (prisma.js / sql.js). Pure and
+// bounded. Used ONLY to enrich the O7 advisory — it never changes the verdict (soundness: the
+// schema reveals the model, never the runtime authorization intent, which is the semantic gap
+// OWASP/BolaRay both name as the reason no static tool can PROVE access control).
+const OWNER_DIRECT = /^(user|owner|author|creator)_?id$/;
+const OWNER_GROUP =
+  /^(workspace|project|team|tenant|org|organization|store|customer|partner|program|account|company|group)_?id$/;
+function inferOwnershipModel(tableName, statesByTable, seen = new Set(), depth = 0) {
+  const st = statesByTable.get(tableName);
+  if (!st || seen.has(tableName) || depth > 3) return null;
+  seen.add(tableName);
+  const cols = (st.meta?.columns ?? []).map((c) => c.name);
+  const direct = cols.find((n) => OWNER_DIRECT.test(n));
+  if (direct) return { model: 'direct-owner', key: direct };
+  const group = cols.find((n) => OWNER_GROUP.test(n));
+  if (group) return { model: 'group-scoped', key: group };
+  for (const ref of st.meta?.references ?? []) {
+    if (!ref.table || ref.table === tableName) continue;
+    const sub = inferOwnershipModel(ref.table, statesByTable, seen, depth + 1);
+    if (sub)
+      return {
+        model: 'transitive',
+        key: `${(ref.fields ?? []).join(',')}->${ref.table}.${sub.key}`,
+      };
+  }
+  return null;
 }
 
 // Below this resolved/surface coverage ratio, a CLEAN app cannot claim PROVEN — it

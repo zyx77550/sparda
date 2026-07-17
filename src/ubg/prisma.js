@@ -12,6 +12,48 @@ import path from 'node:path';
 import { cmp } from './schema.js';
 
 const SCHEMA_CANDIDATES = ['prisma/schema.prisma', 'schema.prisma', 'db/schema.prisma'];
+// Prisma's `prismaSchemaFolder` layout (stable since 6.x): the schema is SPLIT across many
+// `*.prisma` files under a directory, no single schema.prisma. Modern apps use it (dub: 36
+// files). Without this, their entire state layer — invariants, aggregates, ownership — is
+// invisible (E-046). These directory candidates are scanned when no single file is found.
+const SCHEMA_DIR_CANDIDATES = ['prisma/schema', 'schema', 'db/schema'];
+
+// Gather every `.prisma` file to parse: the single file if present, else all files in a schema
+// folder (bounded, deterministic order). Returns [{ file, rel }] or [] if nothing found.
+function collectSchemaFiles(cwd, fileCandidates, dirCandidates) {
+  for (const c of fileCandidates) {
+    const abs = path.resolve(cwd, c);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return [abs];
+  }
+  for (const c of dirCandidates) {
+    const abs = path.resolve(cwd, c);
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    const files = [];
+    const walk = (dir, depth) => {
+      if (depth > 3) return;
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p, depth + 1);
+        else if (e.name.endsWith('.prisma')) files.push(p);
+      }
+    };
+    walk(abs, 0);
+    if (files.length) return files;
+  }
+  return [];
+}
 
 const TYPE_MAP = {
   string: 'string',
@@ -36,42 +78,47 @@ export function parsePrismaSchemas(cwd) {
   } catch {
     // no package.json / unparsable — the default candidates stand
   }
-  const file = candidates
-    .map((c) => path.resolve(cwd, c))
-    .find((abs) => fs.existsSync(abs));
-  if (!file) return { tables: [], skipped, sourceFile: null };
+  const files = collectSchemaFiles(cwd, candidates, SCHEMA_DIR_CANDIDATES);
+  if (!files.length) return { tables: [], skipped, sourceFile: null };
 
-  let src;
-  try {
-    src = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    skipped.push({ reason: `unreadable schema.prisma: ${err.message}` });
-    return { tables: [], skipped, sourceFile: null };
+  // Read + strip comments once per file; keep the relative path for correct per-table locs.
+  const parts = [];
+  for (const abs of files) {
+    try {
+      parts.push({
+        rel: path.relative(cwd, abs).split(path.sep).join('/'),
+        clean: fs.readFileSync(abs, 'utf8').replace(/\/\/[^\n]*/g, ''),
+      });
+    } catch (err) {
+      skipped.push({ reason: `unreadable prisma schema: ${err.message}` });
+    }
   }
-  const sourceFile = path.relative(cwd, file).split(path.sep).join('/');
-  const clean = src.replace(/\/\/[^\n]*/g, '');
+  if (!parts.length) return { tables: [], skipped, sourceFile: null };
+  const sourceFile = parts.length === 1 ? parts[0].rel : path.dirname(parts[0].rel);
 
-  // enums first — model fields reference them
+  // Enums and model names are collected ACROSS ALL files first — a model in one file may
+  // reference an enum (or a relation target) declared in another (the whole point of the
+  // folder layout). Then models are parsed per-file so each table keeps its true file:line.
   const enums = new Map(); // lowercase name -> [values lowercase]
-  for (const m of clean.matchAll(/enum\s+(\w+)\s*\{([^}]*)\}/g)) {
-    const values = m[2]
-      .split(/\s+/)
-      .map((v) => v.trim())
-      .filter((v) => v && !v.startsWith('@'))
-      .map((v) => v.toLowerCase());
-    enums.set(m[1].toLowerCase(), values);
+  const modelNames = new Set();
+  for (const { clean } of parts) {
+    for (const m of clean.matchAll(/enum\s+(\w+)\s*\{([^}]*)\}/g)) {
+      const values = m[2]
+        .split(/\s+/)
+        .map((v) => v.trim())
+        .filter((v) => v && !v.startsWith('@'))
+        .map((v) => v.toLowerCase());
+      enums.set(m[1].toLowerCase(), values);
+    }
+    for (const m of clean.matchAll(/model\s+(\w+)\s*\{/g)) modelNames.add(m[1]);
   }
-
-  const modelNames = new Set([...clean.matchAll(/model\s+(\w+)\s*\{/g)].map((m) => m[1]));
 
   const tables = [];
-  for (const m of clean.matchAll(/model\s+(\w+)\s*\{([^}]*)\}/g)) {
-    const modelName = m[1];
-    const body = m[2];
-    const line = clean.slice(0, m.index).split('\n').length;
-    tables.push(
-      parseModel(modelName, body, line, sourceFile, enums, modelNames, skipped),
-    );
+  for (const { rel, clean } of parts) {
+    for (const m of clean.matchAll(/model\s+(\w+)\s*\{([^}]*)\}/g)) {
+      const line = clean.slice(0, m.index).split('\n').length;
+      tables.push(parseModel(m[1], m[2], line, rel, enums, modelNames, skipped));
+    }
   }
   tables.sort((a, b) => a.name.localeCompare(b.name));
   return { tables, skipped, sourceFile };

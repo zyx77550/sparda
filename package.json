@@ -1,6 +1,6 @@
 {
   "name": "sparda-mcp",
-  "version": "0.58.0",
+  "version": "0.62.0",
   "mcpName": "io.github.zyx77550/sparda-mcp",
   "description": "Compile backends to behavior graphs. Statically prove security, simulate APIs, and replay bugs.",
   "type": "module",
@@ -26,7 +26,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,cjs,mjs}\"",
-    "format:check": "prettier --check \"**/*.{js,cjs,mjs}\""
+    "format:check": "prettier --check \"**/*.{js,cjs,mjs}\"",
+    "bench:check": "node bench/check-readme.mjs",
+    "mutation": "node tests/mutation/run.mjs"
   },
   "files": [
     "src",
@@ -55,8 +57,7 @@
     "@babel/parser": "7.26.5",
     "@babel/traverse": "7.26.5",
     "@clack/prompts": "0.9.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "js-tokens": "^10.0.0"
+    "@modelcontextprotocol/sdk": "1.29.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

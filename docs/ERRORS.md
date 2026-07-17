@@ -888,3 +888,37 @@ app.use('/x', xRouter); return app; }`.
   legitimate non-English descriptions (French/Spanish accents) that must NOT over-block.
 - **Rule:** a denylist is only as good as the normalization in front of it. Any text-matching
   defense must fold confusables and neutralize invisibles first, or it is theater.
+
+## E-046 — Prisma split-schema folder unparsed: modern apps' entire state layer invisible
+
+- **Symptom:** on dub (and any app using Prisma's `prismaSchemaFolder` layout — a `prisma/schema/`
+  directory of many `*.prisma` files instead of one `schema.prisma`), `parsePrismaSchemas` returned
+  **0 tables**. The whole state layer — invariants, aggregates, ownership models — was invisible,
+  so schema-derived analysis (UNVALIDATED_CONSTRAINED_WRITE, NON_ATOMIC_AGGREGATE_WRITE, the BOLA
+  ownership model) silently did nothing. Found via measure-first while wiring BolaRay step 1: the
+  ownership-model inference returned `unknown` for 100% of dub's tables because there were none.
+- **Root cause:** `SCHEMA_CANDIDATES` only looked for a single `schema.prisma` file. The folder
+  layout (stable since Prisma 6) was never scanned. A too-generous verdict followed from blindness:
+  an app with an invisible state layer can't fail a state-layer obligation.
+- **Fix (shipped):** `collectSchemaFiles` also scans `prisma/schema` (and `schema`, `db/schema`)
+  directories, gathering every `.prisma` file (bounded, deterministic). Enums and model names are
+  collected across ALL files first (a model may reference an enum/relation in another file — the
+  point of the layout), then models are parsed per-file with correct file:line. dub: **0 → 82
+  tables**. This is the SOUND direction — dub's hard findings went 9 → 96 (newly-visible real
+  posture: 61 unvalidated-constrained-write, 26 non-atomic-aggregate), verdict unchanged
+  (NOT_PROVEN). Corpus oracle re-baselined; only dub moved (the one folder-schema giant).
+- **Consequence handled:** the now-visible aggregate structure made `AGGREGATE_MEMBER_BYPASS`
+  fire in bulk (dub: 174). A direct member-table write is a design-smell, not a proven violation —
+  reclassified **advisory** (info, non-gating), like BOLA, so it points a human at the pattern
+  without flooding the verdict.
+- **Rule:** blindness is never a pass. A schema layout we don't parse is a state layer we can't
+  reason about — and an unreasoned state layer must degrade the verdict (more findings / SURFACE),
+  never grant a hollow PROVEN.
+
+## E-045 addendum — BolaRay ownership-model enrichment (O7 actionable)
+
+- The BOLA advisory (`OBJECT_SCOPE_UNPROVEN`) now infers each accessed table's ownership MODEL
+  from its declared columns/FKs (BolaRay CCS 2024 step 1: direct-owner / group-scoped / transitive)
+  and names the missing scope in the message ("commission should be direct-owner (userid)"). Still
+  advisory — the schema reveals the model, never the runtime intent (the semantic gap OWASP/BolaRay
+  name as why no static tool can PROVE access control). dub: 50/60 advisories now carry a model.
