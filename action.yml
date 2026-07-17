@@ -16,8 +16,8 @@
 #       with: { fetch-depth: 0 }
 #     - uses: zyx77550/sparda@main
 #       with: { mode: 'review' }
-name: 'SPARDA'
-description: 'Prove the deploy and review PRs from the compiled behavior graph — guards, invariants, transactions, aggregates. 100% local, deterministic, no keys.'
+name: 'Sparda MCP'
+description: 'Prove the deploy and review PR behavior graphs — guards, invariants, transactions. 100% local, deterministic, no keys.'
 author: 'Residual Labs'
 branding:
   icon: 'shield'
