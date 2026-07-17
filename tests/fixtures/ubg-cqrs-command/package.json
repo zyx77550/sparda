@@ -1,0 +1,6 @@
+{
+  "name": "ubg-cqrs-command",
+  "private": true,
+  "main": "src/app.js",
+  "dependencies": { "express": "^4.21.0", "mongoose": "^8", "@nestjs/cqrs": "^10" }
+}

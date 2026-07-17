@@ -25,7 +25,7 @@ branding:
 
 inputs:
   mode:
-    description: "'apocalypse' (prove the deploy, default) or 'review' (comment the PR behavior diff)"
+    description: "'apocalypse' (prove the deploy, default), 'review' (comment the PR behavior diff), or 'prove' (comment the trust verdict + badge)"
     required: false
     default: 'apocalypse'
   working-directory:
@@ -75,6 +75,27 @@ runs:
       with:
         sarif_file: ${{ inputs.working-directory }}/.sparda/apocalypse.sarif
         category: sparda-apocalypse
+
+    - name: Comment the trust verdict + badge (prove)
+      if: ${{ inputs.mode == 'prove' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        BODY="${RUNNER_TEMP:-/tmp}/sparda-prove.md"
+        set +e
+        npx --yes sparda-mcp@${{ inputs.version }} prove --markdown > "$BODY"
+        RC=$?
+        set -e
+        cat "$BODY" || true
+        if [ "${{ inputs.comment }}" = "true" ] && [ -s "$BODY" ]; then
+          SPARDA_REVIEW_BODY_FILE="$BODY" node "${{ github.action_path }}/.github/sparda-pr-comment.mjs" || true
+        fi
+        case "${{ inputs.fail-on-severity }}" in
+          none) exit 0 ;;                 # comment-only: never block the merge
+          *) exit $RC ;;                  # gate: prove exits 1 on critical/high
+        esac
 
     - name: Review the PR behavior diff
       if: ${{ inputs.mode == 'review' }}

@@ -1,0 +1,6 @@
+{
+  "name": "ubg-taint-write",
+  "private": true,
+  "main": "src/app.js",
+  "dependencies": { "express": "^4.21.0", "@prisma/client": "^5" }
+}

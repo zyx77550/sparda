@@ -83,7 +83,13 @@ export function translate({ framework, routes, globalMiddlewares, helpers, table
     // extractors on non-JS runtimes (FastAPI) pre-compute the scan — the
     // microscope only runs when we hold an actual babel node
     const scan = h.scan ?? scanFunction(h.fn);
-    const gf = guardFacts(h.name, scan, h.fn);
+    // E-042: a CALLED helper (role `function`) is a guard ONLY by a PROVEN deny, never by
+    // name. Name-trust belongs to explicit chain steps (a middleware you SEE gate the
+    // route — `@Authenticated`, `requireAuth`); a function you merely call that happens to
+    // be named `mapUserAdmin` / `isAdmin` / `sessionStore` is logic, not a guard. Trusting
+    // its name would let it fabricate a gate and hide a real finding (SOUNDNESS Direction 2).
+    const denies = Boolean(scan.guardSignals?.deniesWithStatus);
+    const gf = { isGuard: denies && !isNoOpGuard(h.fn), verified: denies };
     const kind = gf.isGuard ? 'guard' : 'logic';
     const id =
       kind === 'guard'
@@ -190,14 +196,14 @@ function translateRoute(
     }
   }
 
-  attachBody(
-    graph,
-    handlerEntry.id,
-    handlerEntry.scan,
-    helperByName,
-    scanCache,
-    expanded,
-  );
+  // Attach effects from EVERY chain step that has a body, not only the terminal one.
+  // The near-universal directus/Express pattern puts the business logic in a MIDDLEWARE
+  // slot and a response-formatter (`respond`) last — `router.get(path, …, handler,
+  // respond)` — so the real DB work lives one slot before the end. All chain steps are
+  // control-flow-reachable from the entrypoint, so the prover sees them wherever they sit.
+  for (const cn of chainNodes) {
+    if (cn.scan) attachBody(graph, cn.id, cn.scan, helperByName, scanCache, expanded);
+  }
 }
 
 // A chain step (middleware or handler) becomes a guard or logic node.
@@ -256,7 +262,15 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
   let ordinal = 0;
   const created = []; // effects of THIS body — compensation pairs live here
   for (const eff of scan.effects) {
-    const id = effectId(eff.effectType, owner.loc.file, eff.line, ordinal++);
+    let id = effectId(eff.effectType, owner.loc.file, eff.line, ordinal++);
+    // A shared service method reached under two different symbolic bindings
+    // (`this.knex(this.collection)` as `:collection` vs `directus_activity`) lands two
+    // DIFFERENT effects on the same source line. Node ids are content-identity, so bump
+    // the ordinal until free rather than let the second effect collide away. Same-target
+    // effects still share their node (the intended cross-route dedup).
+    const targetOf = (m) => m.table ?? m.target ?? null;
+    while (graph.nodes.has(id) && targetOf(graph.nodes.get(id).meta) !== targetOf(eff))
+      id = effectId(eff.effectType, owner.loc.file, eff.line, ordinal++);
     addNode(
       graph,
       makeNode(
@@ -278,6 +292,15 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           ...(eff.sets ? { sets: eff.sets } : {}),
           ...(eff.where ? { where: eff.where } : {}),
           ...(eff.inserts ? { inserts: eff.inserts } : {}),
+          // taint: the write's payload is provably request-derived (ADR-P1 foothold).
+          // Advisory provenance — it enriches an UNGUARDED_MUTATION, never a finding of
+          // its own (a per-function under-approximation can't see service-layer validation).
+          ...(eff.tainted ? { tainted: true } : {}),
+          // object-scope provenance (ADR-058 B): the query targets a bare `id`, and whether
+          // it is scoped to the caller. A route with an idScoped access and NO ownerScoped
+          // access anywhere on its resolved path is a BOLA candidate (advisory).
+          ...(eff.idScoped ? { idScoped: true } : {}),
+          ...(eff.ownerScoped ? { ownerScoped: true } : {}),
           // SBIR v1.1 §2.2 — transaction scope id is file-qualified here,
           // where the owner's file is known
           ...(eff.txLine != null

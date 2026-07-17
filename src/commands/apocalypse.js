@@ -43,9 +43,10 @@ export async function runApocalypse(opts) {
   }
 
   const findings = [...staticFindings, ...diffFindings];
-  const verdict = verdictOf(findings, canonical);
   // the honesty companion: where does the proof stop? (see `sparda blindspots`)
   const blind = surveyBlindspots(canonical, report);
+  // coverage feeds the verdict: a clean app that resolved almost nothing is SURFACE, not PROVEN
+  const verdict = verdictOf(findings, canonical, { coverage: blind.coverage.ratio });
 
   if (opts.sarif) {
     const sarifPath = path.join(opts.cwd, '.sparda', 'apocalypse.sarif');

@@ -50,3 +50,23 @@ describe('NestJS ingestion — the wall comes down', () => {
     expect(JSON.stringify(graphOf(NEST))).toBe(JSON.stringify(graphOf(NEST)));
   });
 });
+
+// E-034: real Nest monsters (immich, twenty) list `express` as a DIRECT dependency.
+// Detection used to pick the Express branch and hard-fail hunting an express() entry
+// that doesn't exist. It must fall through to the Nest check instead — and an app
+// with an express dep but NO other framework marker must keep the original error.
+describe('E-034 — express dep on a Nest app falls through to nestjs', () => {
+  const MIXED = path.join(here, 'fixtures', 'ubg-nestjs-express-dep');
+
+  it('detects nestjs despite the direct express dependency', () => {
+    const stack = detectStack(MIXED);
+    expect(stack.framework).toBe('nestjs');
+  });
+
+  it('compiles the same routes as the pure Nest fixture', () => {
+    const g = graphOf(MIXED);
+    const eps = g.nodes.filter((n) => n.kind === 'entrypoint').map((n) => n.id);
+    expect(eps).toContain('entrypoint:GET /cats');
+    expect(eps).toContain('entrypoint:POST /cats');
+  });
+});

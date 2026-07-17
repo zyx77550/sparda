@@ -74,12 +74,28 @@ describe('dossier renderer', () => {
     const clean = {
       ...baseData,
       proven: true,
+      state: 'PROVEN',
       findings: [],
       counts: { critical: 0, high: 0, medium: 0, info: 0 },
     };
     const html = renderDossierHTML(clean);
     expect(html).toContain('>PROVEN<');
     expect(html).toContain('every proof obligation was discharged');
+  });
+
+  it('shows PROVEN (PARTIAL) honestly — a low-coverage clean proof never reads as bare PROVEN', () => {
+    const partial = {
+      ...baseData,
+      proven: true,
+      state: 'PARTIAL',
+      coverage: 23,
+      findings: [],
+      counts: { critical: 0, high: 0, medium: 0, info: 0 },
+    };
+    const html = renderDossierHTML(partial);
+    expect(html).toContain('PROVEN (PARTIAL)');
+    expect(html).toContain('UNPROVEN, not safe');
+    expect(html).not.toContain('>PROVEN<'); // must NOT read as a complete proof
   });
 });
 

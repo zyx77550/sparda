@@ -14,26 +14,53 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import traverseModule from '@babel/traverse';
-import {
-  parseModule,
-  scanFunction,
-  classInModule,
-  baseClassOf,
-  methodInClassChain,
-} from './extract.js';
+import { parseModule, classInModule, methodInClassChain } from './extract.js';
+import { createResolver, diMapWithMod, walkAst } from './resolve.js';
+
+// A synthetic scan carrying ONLY the deny signal — attached to an auth-named guard step
+// when a global guard (APP_GUARD / useGlobalGuards) is PROVEN to deny app-wide. The route
+// already had this guard (by name); this upgrades it asserted → verified, never invents a
+// guard on an unguarded route. So it can only sharpen credibility, never hide a hole.
+const GLOBAL_GUARD_SCAN = {
+  effects: [],
+  returnShapes: [],
+  calls: [],
+  async: true,
+  validatesInput: false,
+  guardSignals: { deniesWithStatus: true },
+};
 
 const traverse = traverseModule.default ?? traverseModule;
-const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const EXCLUDE = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.sparda']);
+
+// ADR-055 — recognize the PROTOCOL, not the framework brand. HTTP verbs are a closed,
+// universal vocabulary: every decorator framework embeds one in its route decorator
+// (@Get, @HttpGet, @GetMapping). Matching the verb — not `@Controller` by name — reads
+// a bespoke @RestController/@Endpoint framework (n8n, routing-controllers, home-made)
+// exactly like Nest, with zero per-framework config. The next app that invents its own
+// decorator name is still HTTP underneath, so it is still seen.
+const VERB_DECORATOR = /^(?:http)?(get|post|put|patch|delete)(?:mapping)?$/i;
+// cheap file pre-filter: a route decorator or a controller/resolver brand must appear
+// textually before we pay for a full parse (keeps the twenty-scale monorepo fast).
+const CANDIDATE_RE =
+  /@(?:Controller|RestController|JsonController|Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete)(?:Mapping)?)\b/;
 
 // → { routes, globalMiddlewares, helpers, skipped, scannedFiles } (extractExpress shape)
 export function extractNest(cwd, entryDir) {
-  bundleCache = new Map(); // memo of resolved service methods — per compile
   const routes = [];
   const helpers = [];
   const skipped = [];
   const scannedFiles = [];
+  // the interprocedural engine (ADR-054): follows this.<prop>.<m>() through the
+  // constructor-type DI graph — bounded, cycle-guarded, memoized per compile.
+  const engine = createResolver({ cwd, scannedFiles, helpers });
   const root = path.resolve(cwd, entryDir || '.');
+  // App-wide auth (immich, nocodb, most real Nest apps): a global guard registered via
+  // `{ provide: APP_GUARD, useClass: AuthGuard }` or `useGlobalGuards(...)`. It gates every
+  // route but is invisible to a per-method decorator scan, so its guards read asserted, not
+  // verified (immich: 253 guards, 0 verified). Prove it ONCE here — resolve its canActivate
+  // through DI to a real deny — and every auth-named guard on the app earns `verified`.
+  const globalGuardDenies = detectGlobalDenyGuard(root, engine);
 
   for (const file of walk(root)) {
     // Fast reject: only files that mention `@Controller` can define a route. A big
@@ -46,7 +73,10 @@ export function extractNest(cwd, entryDir) {
     } catch {
       continue;
     }
-    if (!head.includes('@Controller')) continue;
+    // A route lives on a REST controller (any brand) OR a @Resolver (GraphQL) — both
+    // wire their methods and DI identically, so the same machinery serves both. The
+    // pre-filter still skips the DTO/entity/service bulk that carries no route decorator.
+    if (!CANDIDATE_RE.test(head)) continue;
     const mod = parseModule(file);
     const rel = relOf(cwd, file);
     if (mod.error) {
@@ -58,32 +88,56 @@ export function extractNest(cwd, entryDir) {
     traverse(mod.ast, {
       ClassDeclaration(p) {
         const cls = p.node;
-        const controller = decoratorArg(cls.decorators, 'Controller');
-        if (controller === undefined) return; // not a controller
+        const resolver = decoratorArg(cls.decorators, 'Resolver');
+        // Structural admission (ADR-055): a class is a route source if it is a REST
+        // controller by decorator (any brand), a GraphQL @Resolver, OR simply carries a
+        // method with an HTTP-verb decorator — the last case catches a framework whose
+        // class decorator we don't recognize but whose methods still speak HTTP.
+        const ctrlPrefix = controllerPrefixOf(cls); // string prefix, or null
+        const hasVerbMethod = cls.body.body.some(
+          (m) => m.type === 'ClassMethod' && httpDecorator(m.decorators),
+        );
+        if (resolver === undefined && ctrlPrefix === null && !hasVerbMethod) return;
         sawController = true;
-        const prefix = controller.value ?? '';
+        // REST controllers carry a path prefix; GraphQL resolvers do not (operations
+        // are named, not pathed) — their entrypoints live under a `graphql/` namespace.
+        const prefix = resolver !== undefined ? '' : (ctrlPrefix ?? '');
         const di = diMapWithMod(cls, mod); // prop -> { type, mod that declared it }
         const classGuards = useGuards(cls.decorators);
 
         for (const m of cls.body.body) {
           if (m.type !== 'ClassMethod' || !m.key || m.key.type !== 'Identifier') continue;
-          const http = httpDecorator(m.decorators);
+          const http = httpDecorator(m.decorators) ?? graphqlOp(m.decorators, m.key.name);
           if (!http) continue;
           const fullPath = joinPath(prefix, http.path);
           const guards = [...classGuards, ...useGuards(m.decorators)];
 
           // the handler's effects = the controller method body + every service
           // method it delegates to through DI (this.<prop>.<call>())
-          const scan = resolveHandlerScan(m, di, mod, cwd, scannedFiles, helpers);
+          const scan = engine.handlerScan(m, di, mod, cls);
 
           const chain = [
-            ...guards.map((name) => ({
-              name,
-              sourceFile: rel,
-              sourceLine: m.loc?.start.line ?? 0,
-              fn: null,
-              role: 'middleware',
-            })),
+            ...guards.map((name) => {
+              // Prove the guard, don't just trust its name: resolve @UseGuards(X)'s
+              // canActivate and check it can DENY (401/403 or an auth exception). A
+              // resolved deny → the guard node reads VERIFIED, not asserted. Only the
+              // deny SIGNAL is kept — the guard's own reads never enter the app's graph.
+              // Fallback: an auth-named guard on an app with a PROVEN global auth guard is
+              // gated by it (the decorator's metadata triggers the app-wide guard's deny).
+              const scan =
+                guardScan(name, mod, engine) ??
+                (globalGuardDenies && GUARD_DECORATOR.test(name)
+                  ? GLOBAL_GUARD_SCAN
+                  : null);
+              return {
+                name,
+                sourceFile: rel,
+                sourceLine: m.loc?.start.line ?? 0,
+                fn: null,
+                ...(scan ? { scan } : {}),
+                role: 'middleware',
+              };
+            }),
             {
               name: m.key.name,
               sourceFile: rel,
@@ -102,6 +156,7 @@ export function extractNest(cwd, entryDir) {
             params: pathParamsOf(fullPath),
             chain,
             description: '',
+            authOptOut: http.optOut === true, // temp — consumed by the posture pass
           });
         }
       },
@@ -110,8 +165,39 @@ export function extractNest(cwd, entryDir) {
     if (sawController && !scannedFiles.includes(rel)) scannedFiles.push(rel);
   }
 
+  applyAuthPosture(routes);
+
   routes.sort((a, b) => cmp(a.path, b.path) || cmp(a.method, b.method));
   return { routes, globalMiddlewares: [], helpers, skipped, scannedFiles };
+}
+
+// Guarded-by-default posture (ADR-055). If ANY route in the app declared an auth
+// opt-out flag, the app authenticates in its registry/bootstrap by default — a posture
+// invisible to a per-decorator scan. So every route WITHOUT an opt-out gets a synthetic
+// ASSERTED guard (`framework-default-auth`, unverified — surfaced by the blindspot
+// ledger), and a route WITH the opt-out is left genuinely public (its mutations flag,
+// exactly like a Medusa `AUTHENTICATE = false` route). If no opt-out flag appears
+// anywhere, the posture is NOT inferred and nothing is injected — so a plain Nest app
+// (twenty, immich) is byte-for-byte unaffected. This is the ONLY honest way to avoid
+// crying wolf on a framework whose base auth is not in its decorators.
+function applyAuthPosture(routes) {
+  const guardedByDefault = routes.some((r) => r.authOptOut);
+  for (const r of routes) {
+    if (
+      guardedByDefault &&
+      !r.authOptOut &&
+      !r.chain.some((s) => s.role === 'middleware')
+    ) {
+      r.chain.unshift({
+        name: 'framework-default-auth',
+        sourceFile: r.sourceFile,
+        sourceLine: r.sourceLine,
+        fn: null,
+        role: 'middleware',
+      });
+    }
+    delete r.authOptOut; // temp field never reaches the graph
+  }
 }
 
 // --- decorator readers ------------------------------------------------------
@@ -130,17 +216,106 @@ function decoratorArg(decorators, name) {
   return undefined;
 }
 
+// An auth-opt-OUT flag in a route decorator's options object: `@Get('/x', { skipAuth:
+// true })` (n8n), `{ authenticate: false }`, `{ public: true }`. Its very EXISTENCE in
+// an app is the signal that the app is guarded-BY-DEFAULT (why carry an opt-out unless
+// auth is on by default?) — the inference that lets SPARDA read a framework whose base
+// auth lives in its registry/bootstrap, not its decorators (ADR-055, the Medusa
+// inverted-auth pattern generalized).
+const AUTH_OPTOUT_TRUE =
+  /^(skipAuth|authless|noAuth|public|allowUnauthenticated|unauthenticated)$/i;
+
 function httpDecorator(decorators) {
   for (const d of decorators ?? []) {
     const call = d.expression;
     const name = call.type === 'CallExpression' ? idName(call.callee) : idName(call);
     if (!name) continue;
-    const verb = name.toLowerCase();
-    if (!HTTP.has(verb)) continue;
-    const a0 = call.type === 'CallExpression' ? call.arguments[0] : null;
-    return { method: verb, path: a0?.type === 'StringLiteral' ? a0.value : '' };
+    const m = VERB_DECORATOR.exec(name); // @Get / @HttpGet / @GetMapping → get
+    if (!m) continue;
+    const args = call.type === 'CallExpression' ? call.arguments : [];
+    let optOut = false;
+    for (const a of args) {
+      if (a.type !== 'ObjectExpression') continue;
+      for (const p of a.properties) {
+        if (p.type !== 'ObjectProperty' || p.key.type !== 'Identifier') continue;
+        const isTrue = p.value.type === 'BooleanLiteral' && p.value.value === true;
+        const isFalse = p.value.type === 'BooleanLiteral' && p.value.value === false;
+        if (AUTH_OPTOUT_TRUE.test(p.key.name) && isTrue) optOut = true;
+        if (/^authenticate$/i.test(p.key.name) && isFalse) optOut = true;
+      }
+    }
+    return {
+      method: m[1].toLowerCase(),
+      path: args[0]?.type === 'StringLiteral' ? args[0].value : '',
+      optOut,
+    };
   }
   return null;
+}
+
+// The class's route prefix, brand-agnostically (ADR-055). Preference order:
+//   1. a class decorator whose NAME ends in "Controller" (@Controller, @RestController,
+//      @JsonController, …) → its string-literal arg is the prefix ('' for a bare call);
+//   2. else a class decorator carrying a path-shaped ('/…') string literal
+//      (@Endpoint('/api')) — the leading slash keeps @ApiTags('users') & friends out.
+// null = no REST-controller decorator (the caller still admits the class if a method
+// carries a verb decorator, with an empty prefix).
+function controllerPrefixOf(cls) {
+  for (const d of cls.decorators ?? []) {
+    const call = d.expression;
+    const name = call.type === 'CallExpression' ? idName(call.callee) : idName(call);
+    if (name && /controller$/i.test(name)) {
+      const a0 = call.type === 'CallExpression' ? call.arguments[0] : null;
+      return a0?.type === 'StringLiteral' ? a0.value : '';
+    }
+  }
+  for (const d of cls.decorators ?? []) {
+    const call = d.expression;
+    if (
+      call.type === 'CallExpression' &&
+      call.arguments[0]?.type === 'StringLiteral' &&
+      call.arguments[0].value.startsWith('/')
+    )
+      return call.arguments[0].value;
+  }
+  return null;
+}
+
+// A GraphQL operation is the same behavior spine as an HTTP route: @Query/@Subscription
+// READ, @Mutation CHANGES STATE. We map them onto the graph's verbs (get = read,
+// post = mutating) so every downstream pass — guard proof, blast radius, polarity —
+// works unchanged. The operation NAME is the GraphQL field: a string/name-option arg if
+// given, else the method name (the framework default). Namespaced under `graphql/` so a
+// GraphQL op and a REST route with the same word never collide.
+function graphqlOp(decorators, methodName) {
+  for (const d of decorators ?? []) {
+    const call = d.expression;
+    const name = call.type === 'CallExpression' ? idName(call.callee) : idName(call);
+    if (name !== 'Query' && name !== 'Mutation' && name !== 'Subscription') continue;
+    const method = name === 'Mutation' ? 'post' : 'get';
+    return { method, path: `graphql/${gqlName(call, methodName)}` };
+  }
+  return null;
+}
+
+// @Query('foo') → foo ; @Query(() => X, { name: 'foo' }) → foo ; else the method name.
+function gqlName(call, methodName) {
+  if (call.type !== 'CallExpression') return methodName;
+  for (const arg of call.arguments) {
+    if (arg.type === 'StringLiteral') return arg.value;
+    if (arg.type === 'ObjectExpression') {
+      for (const prop of arg.properties) {
+        if (
+          prop.type === 'ObjectProperty' &&
+          prop.key.type === 'Identifier' &&
+          prop.key.name === 'name' &&
+          prop.value.type === 'StringLiteral'
+        )
+          return prop.value.value;
+      }
+    }
+  }
+  return methodName;
 }
 
 // A decorator whose OWN name reads as authorization — the app-specific guard idiom
@@ -149,6 +324,120 @@ function httpDecorator(decorators) {
 // mutation as UNGUARDED (immich guards with `@Authenticated`, not `@UseGuards`).
 const GUARD_DECORATOR =
   /^(auth|authenticated|guard|acl|permission|role|protect|secured|require|jwt|loggedin|signedin)/i;
+
+// Resolve @UseGuards(X) → X's canActivate → keep ONLY whether it can deny (401/403 or
+// an auth exception). Returns a minimal scan carrying just the deny signal, so the guard
+// node earns `verified` without importing the canActivate's own effects (a user-lookup
+// read) into the app's behavior graph. null when X is not a resolvable local class (an
+// opaque/decorator guard stays honestly asserted). `mkGuardScan` is bound to the engine.
+function guardScan(name, mod, engine) {
+  const file = mod.imports.get(name);
+  if (!file) return null;
+  const gmod = parseModule(file);
+  if (gmod.error) return null;
+  const cls = classInModule(gmod, name);
+  if (!cls) return null;
+  const hit = methodInClassChain(cls, gmod, 'canActivate');
+  if (!hit) return null;
+  const full = engine.deepScan(hit.fn, hit.mod);
+  // In a canActivate specifically, `return false` IS the deny (the canonical Nest guard
+  // rejection) — safe to read as a denial here because this walk only ever runs on a
+  // resolved guard method, never on arbitrary code (where `return false` is ambiguous).
+  const deniesByFalse = returnsFalse(hit.fn);
+  return {
+    effects: [],
+    returnShapes: [],
+    calls: [],
+    async: full.async,
+    validatesInput: false,
+    guardSignals: {
+      deniesWithStatus: full.guardSignals.deniesWithStatus || deniesByFalse,
+    },
+  };
+}
+
+// Does the app register a global guard that PROVABLY denies? Scans module files for
+// `{ provide: APP_GUARD, useClass: X }` / `useGlobalGuards(new X())`, resolves X's
+// canActivate THROUGH its DI (the deny often lives one hop deep — immich's AuthGuard
+// delegates to `this.authService.authenticate()` which throws), and returns true on the
+// first proven denier. Bounded: module files are few and the pre-filter is textual.
+function detectGlobalDenyGuard(root, engine) {
+  for (const file of walk(root)) {
+    let head;
+    try {
+      head = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (!/APP_GUARD|useGlobalGuards/.test(head)) continue;
+    const mod = parseModule(file);
+    if (mod.error) continue;
+    for (const name of globalGuardClassNames(mod))
+      if (guardClassDenies(name, mod, engine)) return true;
+  }
+  return false;
+}
+
+// the guard class names registered app-wide in a module: `provide: APP_GUARD, useClass: X`
+// and `useGlobalGuards(new X(), y)`.
+function globalGuardClassNames(mod) {
+  const names = new Set();
+  walkAst(mod.ast.program, (n) => {
+    if (n.type === 'ObjectExpression') {
+      let isAppGuard = false;
+      let useClass = null;
+      for (const p of n.properties) {
+        if (p.type !== 'ObjectProperty' || p.key?.type !== 'Identifier') continue;
+        if (p.key.name === 'provide' && idName(p.value) === 'APP_GUARD')
+          isAppGuard = true;
+        if (p.key.name === 'useClass' && p.value?.type === 'Identifier')
+          useClass = p.value.name;
+      }
+      if (isAppGuard && useClass) names.add(useClass);
+    }
+    if (
+      n.type === 'CallExpression' &&
+      n.callee?.type === 'MemberExpression' &&
+      n.callee.property?.name === 'useGlobalGuards'
+    )
+      for (const a of n.arguments) {
+        if (a.type === 'NewExpression' && a.callee?.type === 'Identifier')
+          names.add(a.callee.name);
+        else if (a.type === 'Identifier') names.add(a.name);
+      }
+  });
+  return names;
+}
+
+// resolve a guard class (imported or same-file) → its canActivate → prove it can deny,
+// following DI so a delegated deny (`this.authService.authenticate()` → throw) is seen.
+function guardClassDenies(name, mod, engine) {
+  const file = mod.imports.get(name);
+  const gmod = file ? parseModule(file) : mod;
+  if (gmod.error) return false;
+  const cls = classInModule(gmod, name);
+  if (!cls) return false;
+  const hit = methodInClassChain(cls, gmod, 'canActivate');
+  if (!hit) return false;
+  const di = diMapWithMod(cls, hit.mod);
+  const scan = engine.handlerScan(hit.fn, di, hit.mod, cls);
+  return Boolean(scan.guardSignals.deniesWithStatus) || returnsFalse(hit.fn);
+}
+
+// does this canActivate body contain a `return false`? (a nested function's return
+// doesn't count — only the guard method's own returns), bounded, deterministic.
+function returnsFalse(fnNode) {
+  let found = false;
+  walkAst(fnNode.body, (n) => {
+    if (
+      n.type === 'ReturnStatement' &&
+      n.argument?.type === 'BooleanLiteral' &&
+      n.argument.value === false
+    )
+      found = true;
+  });
+  return found;
+}
 
 // guards on a class or method: the classes named in `@UseGuards(A, B)` PLUS any
 // decorator that is itself named like an auth/permission gate.
@@ -169,181 +458,9 @@ function useGuards(decorators) {
   return out;
 }
 
-// constructor(private catsService: CatsService) → { catsService: 'CatsService' }
-function constructorDI(cls) {
-  const di = {};
-  const ctor = cls.body.body.find(
-    (m) => m.type === 'ClassMethod' && m.kind === 'constructor',
-  );
-  for (const param of ctor?.params ?? []) {
-    // `private x: T` is a TSParameterProperty wrapping an Identifier with a type
-    const id = param.type === 'TSParameterProperty' ? param.parameter : param;
-    if (id?.type !== 'Identifier') continue;
-    const typeName = typeRefName(id.typeAnnotation?.typeAnnotation);
-    if (typeName) di[id.name] = typeName;
-  }
-  return di;
-}
-
-// --- DI resolution: follow this.<prop>.<method>() through the DI graph ---------
-//
-// Real Nest apps are DEEP: a controller delegates to a service, the service to a
-// repository, and the actual DB call is two hops down (immich: controller → service
-// → repository → kysely). And the wiring is often INHERITED — the service `extends
-// BaseService`, whose constructor injects every repository. So resolution is
-// recursive (bounded) and climbs the `extends` chain to build each class's full DI map.
-
-const MAX_DI_DEPTH = 6;
-
-// A service method reached by N routes must be resolved ONCE, not N times — twenty
-// (a large Nest app with heavily-shared core services) took 34s re-resolving the same
-// method per route. `bundleCache` memoizes each method's full downstream scan (its own
-// body + everything reachable through its DI) across the whole compile, keyed by method
-// identity. Cleared per compile in extractNest.
-let bundleCache = new Map();
-
-function resolveHandlerScan(method, di, ownerMod, cwd, scannedFiles, helpers) {
-  const base = scanFunction(method); // the controller body itself
-  const merged = {
-    ...base,
-    effects: [...base.effects],
-    returnShapes: [...(base.returnShapes ?? [])],
-    calls: [...(base.calls ?? [])],
-  };
-  forEachThisCall(method, di, (dep, methodName) => {
-    mergeScan(
-      merged,
-      methodBundle(dep.type, methodName, dep.mod, cwd, scannedFiles, helpers, new Set()),
-    );
-  });
-  return merged;
-}
-
-// the fully-resolved scan of `type.methodName` (its body + its DI subtree), memoized.
-// `stack` breaks reference cycles: a method currently being computed contributes an
-// empty bundle (and is not cached until complete, so the memo never stores a partial).
-function methodBundle(type, methodName, ownerMod, cwd, scannedFiles, helpers, stack) {
-  const hit = resolveMethod(type, methodName, ownerMod, cwd, scannedFiles, helpers);
-  if (!hit) return EMPTY_BUNDLE;
-  const key = `${hit.rel}#${type}.${methodName}`;
-  const cached = bundleCache.get(key);
-  if (cached) return cached;
-  if (stack.has(key) || stack.size >= MAX_DI_DEPTH) return EMPTY_BUNDLE;
-  stack.add(key);
-  const base = scanFunction(hit.fn);
-  const bundle = {
-    ...base,
-    effects: [...base.effects],
-    returnShapes: [...(base.returnShapes ?? [])],
-    calls: [...(base.calls ?? [])],
-  };
-  forEachThisCall(hit.fn, hit.di, (dep, m) => {
-    mergeScan(
-      bundle,
-      methodBundle(dep.type, m, dep.mod, cwd, scannedFiles, helpers, stack),
-    );
-  });
-  stack.delete(key);
-  bundleCache.set(key, bundle);
-  return bundle;
-}
-
-const EMPTY_BUNDLE = Object.freeze({
-  effects: [],
-  returnShapes: [],
-  calls: [],
-  validatesInput: false,
-  async: false,
-  guardSignals: { deniesWithStatus: false },
-});
-
-// invoke cb(dep, methodName) for every `this.<prop>.<m>()` whose <prop> is a DI'd
-// dependency in `di` (a { prop: { type, mod } } map).
-function forEachThisCall(fnNode, di, cb) {
-  traverse(
-    { type: 'File', program: { type: 'Program', body: [fnNode], directives: [] } },
-    {
-      CallExpression(p) {
-        const callee = p.node.callee;
-        if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier')
-          return;
-        const recv = callee.object; // this.<prop>
-        if (
-          recv.type !== 'MemberExpression' ||
-          recv.object.type !== 'ThisExpression' ||
-          recv.property.type !== 'Identifier'
-        )
-          return;
-        const dep = di[recv.property.name];
-        if (dep) cb(dep, callee.property.name);
-      },
-    },
-    undefined, // minimal scope stand-in; traverse needs one for a File root
-  );
-}
-
-// import <typeName> from `mod`, find the class (following `extends`), locate the
-// method → { fn, mod, di, rel }. `di` is the class's FULL dependency map (its own
-// constructor params + every ancestor's), so the next hop can be followed.
-function resolveMethod(typeName, methodName, ownerMod, cwd, scannedFiles, helpers) {
-  const file = ownerMod.imports.get(typeName);
-  if (!file || !fs.existsSync(file)) return null;
-  const mod = parseModule(file);
-  if (mod.error) return null;
-  const cls = classInModule(mod, typeName);
-  if (!cls) return null;
-  const rel = relOf(cwd, file);
-  if (!scannedFiles.includes(rel)) scannedFiles.push(rel);
-
-  const m = methodInClassChain(cls, mod, methodName);
-  if (!m) return null;
-  helpers.push({
-    name: `${typeName}.${methodName}`,
-    sourceFile: relOf(cwd, moduleFileOf(m.mod)) || rel,
-    sourceLine: m.fn.loc?.start.line ?? 0,
-    fn: m.fn,
-  });
-  // di for the NEXT hop is the resolved class's full dependency map, each entry
-  // tagged with the module that declared it (so an inherited repo type resolves
-  // against the BASE class's imports, not the subclass's).
-  return { fn: m.fn, mod: m.mod, di: diMapWithMod(cls, mod), rel };
-}
-
-// a class's full DI map as { prop: { type, mod } }, merged UP the `extends` chain
-// (base first so a subclass's own param wins). Each entry carries the module that
-// declared it, because that is where its TYPE is imported.
-function diMapWithMod(cls, clsMod) {
-  const chain = [];
-  let curCls = cls;
-  let curMod = clsMod;
-  for (let depth = 0; curCls && depth < MAX_DI_DEPTH; depth++) {
-    chain.push({ cls: curCls, mod: curMod });
-    const base = baseClassOf(curCls, curMod);
-    curCls = base?.cls ?? null;
-    curMod = base?.mod ?? null;
-  }
-  const out = {};
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const { cls: c, mod: m } = chain[i];
-    for (const [prop, type] of Object.entries(constructorDI(c)))
-      out[prop] = { type, mod: m };
-  }
-  return out;
-}
-
-// classInModule / methodInClassChain / baseClassOf live in extract.js — shared
-// with the Express instantiated-service follower (`new Service().method()`).
-
-const moduleFileOf = (mod) => mod.ast?.loc?.filename ?? mod._file ?? '';
-
-function mergeScan(into, add) {
-  into.effects.push(...add.effects);
-  into.returnShapes = [...(into.returnShapes ?? []), ...(add.returnShapes ?? [])];
-  into.calls = [...(into.calls ?? []), ...(add.calls ?? [])];
-  into.validatesInput = into.validatesInput || add.validatesInput;
-  into.async = into.async || add.async;
-  if (add.guardSignals?.deniesWithStatus) into.guardSignals.deniesWithStatus = true;
-}
+// DI resolution — following this.<prop>.<method>() through the constructor-type
+// DI graph, up the `extends` chain, bounded and memoized — lives in resolve.js
+// (the shared interprocedural engine), as does diMapWithMod.
 
 // --- small AST + path helpers ----------------------------------------------
 
@@ -353,13 +470,6 @@ const idName = (node) =>
     : node?.type === 'CallExpression'
       ? idName(node.callee)
       : null;
-
-function typeRefName(t) {
-  if (!t) return null;
-  if (t.type === 'TSTypeReference' && t.typeName?.type === 'Identifier')
-    return t.typeName.name;
-  return null;
-}
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 

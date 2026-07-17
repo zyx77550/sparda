@@ -51,10 +51,11 @@ describe('blindspot ledger', () => {
     expect(opaque[0].label).toContain('http');
   });
 
-  it('flags the mutating route with an unreadable handler as blind-mutation (high)', () => {
+  it('flags the UNGUARDED mutating route with an unreadable handler as blind-mutation (critical)', () => {
     const blind = spotsOf('blind-mutation');
     expect(blind).toHaveLength(1);
-    expect(blind[0].risk).toBe('high');
+    // PUT /legacy/:id has no guard on its path — unseen AND unprotected = worst case
+    expect(blind[0].risk).toBe('critical');
     expect(blind[0].label).toBe('PUT /legacy/:id');
   });
 

@@ -76,6 +76,17 @@ const MODEL_OPS = {
   exists: 'select',
   paginate: 'select',
 };
+// A capitalized `.create()`/`.save()` receiver is usually an active-record MODEL — but in
+// CQRS/DDD codebases it is just as often a COMMAND/QUERY factory (`GetWorkflowRunCommand
+// .create(...)`), a DTO, or a handler, which construct an object and touch no database.
+// These suffixes NEVER name a real ORM model, so excluding them removes phantom db_writes
+// without any risk of hiding a real one (SOUNDNESS Direction 1 — a real write is never
+// dropped, only over-approximation noise is). Measured: novu 612/636 db_writes were these.
+// Deliberately excludes ambiguous nouns that CAN name a real model (`Event`, `Entity`,
+// `Schema`, `Payload`) — dropping a real write is the one unforgivable error (SOUNDNESS
+// Direction 1). Only DI/CQRS infra suffixes that never name an ORM model are listed.
+const NON_MODEL_RECEIVER =
+  /(command|query|usecase|handler|dto|response|request|mapper|factory|builder|module|controller|service|repository|guard|interceptor|pipe|filter|middleware|resolver|gateway|strategy|validator|serializer|exception|config)$/i;
 // Drizzle: `db.insert(users).values(...)` / `db.update(users).set(...)` / `db.delete(users)`
 // — the table is an IDENTIFIER (the schema object), not a string. Distinct from Kysely
 // (which names the table in the method: insertInto) and supabase (.from('t')).
@@ -83,11 +94,15 @@ const DRIZZLE_OPS = { insert: 'insert', update: 'update', delete: 'delete' };
 const PRISMA_OPS = {
   findmany: 'select',
   findunique: 'select',
+  finduniqueorthrow: 'select', // the ...OrThrow reads are the ownership-scoping fetch
   findfirst: 'select',
+  findfirstorthrow: 'select',
   count: 'select',
   aggregate: 'select',
+  groupby: 'select',
   create: 'insert',
   createmany: 'insert',
+  createmanyandreturn: 'insert',
   update: 'update',
   updatemany: 'update',
   upsert: 'upsert',
@@ -135,6 +150,7 @@ export function parseModule(absFile) {
     functions: new Map(),
     imports: new Map(),
     reexports: new Map(), // barrel: `module.exports.x = require('./x')` → x -> file
+    starReexports: [], // ESM barrel: `export * from './x'` → [file] (searched by name)
     error: null,
     _file: absFile, // the module's own path — DI resolution reports source locations
   };
@@ -166,9 +182,50 @@ export function parseModule(absFile) {
   return facts;
 }
 
+// Resolve an exported function by name, FOLLOWING barrel re-exports — a route's
+// `import { withWorkspace } from '@/lib/auth'` lands on `index.ts`, but the function
+// lives in `./workspace` via `export * from './workspace'`. Returns `{ fn, mod }` (the
+// defining module, so a later deep-scan follows ITS imports) or null. Bounded by `seen`.
+export function resolveExportedFunction(mod, name, seen = new Set()) {
+  if (!mod || mod.error) return null;
+  const direct = mod.functions.get(name);
+  if (direct) return { fn: direct, mod };
+  const named = mod.reexports.get(name); // export { name } from './x'
+  if (named && !seen.has(named)) {
+    seen.add(named);
+    const hit = resolveExportedFunction(parseModule(named), name, seen);
+    if (hit) return hit;
+  }
+  for (const file of mod.starReexports ?? []) {
+    // export * from './x'
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const hit = resolveExportedFunction(parseModule(file), name, seen);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function collectTopLevel(node, facts, absFile, exported) {
   if (node.type === 'ExportNamedDeclaration' && node.declaration) {
     collectTopLevel(node.declaration, facts, absFile, true);
+    return;
+  }
+  // ESM barrel re-exports — `export { withWorkspace } from './workspace'` (named) and
+  // `export * from './workspace'` (wildcard). The near-universal `lib/auth/index.ts`
+  // pattern: a route imports from the barrel, but the function lives in a sub-module.
+  // Named re-exports resolve by name; wildcards are searched by name on demand.
+  if (node.type === 'ExportNamedDeclaration' && node.source && node.specifiers) {
+    const resolved = resolveRelImport(absFile, node.source.value);
+    if (resolved)
+      for (const spec of node.specifiers)
+        if (spec.type === 'ExportSpecifier' && spec.exported.type === 'Identifier')
+          facts.reexports.set(spec.exported.name, resolved);
+    return;
+  }
+  if (node.type === 'ExportAllDeclaration' && node.source) {
+    const resolved = resolveRelImport(absFile, node.source.value);
+    if (resolved) facts.starReexports.push(resolved);
     return;
   }
   if (node.type === 'ExportDefaultDeclaration' && node.declaration) {
@@ -356,11 +413,8 @@ function projectConfig(fromFile) {
 
 function readTsconfig(file, dir) {
   try {
-    const raw = fs
-      .readFileSync(file, 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
-      .replace(/(^|[^:"])\/\/.*$/gm, '$1'); // line comments (not URLs/keys)
-    const co = JSON.parse(raw).compilerOptions ?? {};
+    const co =
+      JSON.parse(stripJsonc(fs.readFileSync(file, 'utf8'))).compilerOptions ?? {};
     return {
       baseDir: co.baseUrl ? path.resolve(dir, co.baseUrl) : dir,
       paths: co.paths ?? {},
@@ -368,6 +422,44 @@ function readTsconfig(file, dir) {
   } catch {
     return { baseDir: dir, paths: {} };
   }
+}
+
+// Strip JSONC comments + trailing commas the ONLY safe way: a string-aware scan.
+// A regex cannot do this — a tsconfig path glob like `["pages/*"]` contains `/*`, and a
+// later `["**/*.ts"]` contains `*/`, so a naive block-comment regex deletes the whole
+// span between them (silently wiping `paths`, killing every alias hop). We track string
+// state and only treat `//` and `/* */` as comments outside strings.
+function stripJsonc(src) {
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (inStr) {
+      out += c;
+      if (c === '\\') {
+        out += src[++i] ?? ''; // escaped char passes through verbatim
+      } else if (c === '"') {
+        inStr = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+    } else if (c === '/' && n === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && n === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      i++; // land on '/', loop's i++ steps past it
+    } else {
+      out += c;
+    }
+  }
+  // trailing commas: `,}` / `,]` (whitespace between) — invalid JSON, valid JSONC
+  return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
 function resolveAliasedImport(fromFile, spec) {
@@ -459,6 +551,115 @@ export function methodInClassChain(cls, mod, methodName, depth = 0) {
   return base ? methodInClassChain(base.cls, base.mod, methodName, depth + 1) : null;
 }
 
+// Cross-class symbolic dataflow: at a `new X(arg0, …)` site, bind X's `this.<field>`
+// to the symbolic value of the constructor argument that feeds it — so a service
+// instantiated as `new ItemsService(req.params.collection, …)` carries
+// `{ collection: ':collection' }` into every method, letting `this.knex(this.collection)`
+// resolve. Handles `this.field = param`, TS parameter properties, and `super(...)`
+// (a literal super-arg like `super('directus_activity')` correctly yields a fixed
+// table, NOT a symbol). Returns Map<field, ':name'>; empty when nothing is request-derived.
+export function computeThisSymbols(
+  cls,
+  clsMod,
+  argNodes,
+  callerFnNode,
+  callerThisSymbols,
+) {
+  // the caller's request-derived vars (`const c = req.params.collection`) so an arg
+  // like `new X(c)` resolves — computed from the caller body, not passed in as a map.
+  const callerReqDerived = callerFnNode ? collectReqDerived(callerFnNode) : null;
+  const argValues = argNodes.map((a) => argValue(a, callerReqDerived, callerThisSymbols));
+  // Never bail on "no symbolic arg": a constructor can bind `this.<field>` from an
+  // INTERNAL literal too (`super('directus_activity')`, `this.collection = 'users'`),
+  // which is a concrete table independent of what the caller passed.
+  return bindConstructor(cls, clsMod, argValues, 0);
+}
+
+// A constructor argument's table value: a string LITERAL is a concrete table
+// (`super('directus_activity')`); anything request- or this-derived is a symbolic
+// `:name`. The `:` prefix is what marks a value symbolic downstream.
+function argValue(node, reqDerived, thisSymbols) {
+  if (node?.type === 'StringLiteral') return node.value.toLowerCase();
+  return reqParamName(node, reqDerived, thisSymbols);
+}
+
+function bindConstructor(cls, clsMod, argValues, depth) {
+  const out = new Map();
+  if (!cls || depth > MAX_CLASS_DEPTH) return out;
+  const ctor = cls.body.body.find(
+    (m) => m.type === 'ClassMethod' && m.kind === 'constructor',
+  );
+  if (!ctor) {
+    // implicit constructor → arguments pass straight to the base (implicit super)
+    const base = baseClassOf(cls, clsMod);
+    return base ? bindConstructor(base.cls, base.mod, argValues, depth + 1) : out;
+  }
+  // constructor param name → the table value of the argument in that position
+  const paramVal = new Map();
+  ctor.params.forEach((p, i) => {
+    const id = p.type === 'TSParameterProperty' ? p.parameter : p;
+    if (id?.type !== 'Identifier' || argValues[i] == null) return;
+    paramVal.set(id.name, argValues[i]);
+    // TS parameter property `constructor(public collection: C)` auto-assigns this.collection
+    if (p.type === 'TSParameterProperty') out.set(id.name, argValues[i]);
+  });
+  walkNodes(ctor.body, (n) => {
+    // this.<field> = <param>  OR  this.<field> = '<literal table>'
+    if (
+      n.type === 'AssignmentExpression' &&
+      n.left.type === 'MemberExpression' &&
+      n.left.object.type === 'ThisExpression' &&
+      n.left.property.type === 'Identifier'
+    ) {
+      if (n.right.type === 'Identifier' && paramVal.has(n.right.name))
+        out.set(n.left.property.name, paramVal.get(n.right.name));
+      else if (n.right.type === 'StringLiteral')
+        out.set(n.left.property.name, n.right.value.toLowerCase());
+    }
+    // super(a, b, …) → map the base constructor with the values of these args (a
+    // string literal there — `super('directus_activity')` — is a concrete table)
+    if (
+      n.type === 'CallExpression' &&
+      n.callee.type === 'Super' &&
+      cls.superClass?.type === 'Identifier'
+    ) {
+      const superVals = n.arguments.map((a) =>
+        a.type === 'StringLiteral'
+          ? a.value.toLowerCase()
+          : a.type === 'Identifier'
+            ? (paramVal.get(a.name) ?? null)
+            : null,
+      );
+      const base = baseClassOf(cls, clsMod);
+      if (base)
+        for (const [k, v] of bindConstructor(base.cls, base.mod, superVals, depth + 1))
+          if (!out.has(k)) out.set(k, v); // subclass binding wins
+    }
+  });
+  return out;
+}
+
+// minimal recursive AST walker (constructor bodies are small; bounded by construction)
+function walkNodes(node, fn) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const n of node) walkNodes(n, fn);
+    return;
+  }
+  if (typeof node.type === 'string') fn(node);
+  for (const k of Object.keys(node)) {
+    if (
+      k === 'loc' ||
+      k === 'range' ||
+      k === 'leadingComments' ||
+      k === 'trailingComments'
+    )
+      continue;
+    const v = node[k];
+    if (v && typeof v === 'object') walkNodes(v, fn);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // scanFunction — what does this function DO?
 // Plain recursive walk (no scope analysis: deterministic, dependency-free),
@@ -469,7 +670,7 @@ export function methodInClassChain(cls, mod, methodName, depth = 0) {
 // silent blindness, and passes can refine later).
 // ---------------------------------------------------------------------------
 
-export function scanFunction(fnNode) {
+export function scanFunction(fnNode, env = {}) {
   const result = {
     effects: [],
     returnShapes: [],
@@ -485,6 +686,10 @@ export function scanFunction(fnNode) {
     tryId: null,
     catchOf: null,
     reqDerived: collectReqDerived(fnNode),
+    // symbolic `this.<field>` bindings, supplied by the caller when this body is a
+    // CLASS METHOD reached through `new X(req.params.collection)` — lets a
+    // `this.knex(this.collection)` inside a service resolve to `:collection`.
+    thisSymbols: env.thisSymbols ?? null,
   });
   return result;
 }
@@ -494,15 +699,128 @@ export function scanFunction(fnNode) {
 // value the caller supplies here" — a SYMBOLIC target, expressed as a rule.
 const REQ_ROOTS = new Set(['req', 'request', 'ctx', 'context', 'event', 'request_']);
 
-// `req.params.collection` / `req.query.table` / `req.body.type` / `req.collection`
-// → the leaf name, prefixed ':' to mark it symbolic. Null if not request-derived.
-function reqParamName(node, reqDerived) {
+// strip TS wrappers that sit between a value and its expression: `x!`, `x as T`,
+// `x satisfies T` — real code writes `req.params['collection']!`, and the `!` node
+// would otherwise hide the member access underneath.
+function unwrapTS(node) {
+  while (
+    node &&
+    (node.type === 'TSNonNullExpression' ||
+      node.type === 'TSAsExpression' ||
+      node.type === 'TSSatisfiesExpression')
+  )
+    node = node.expression;
+  return node;
+}
+
+// `req.params.collection` / `req.params['collection']` / `req.query.table` /
+// `req.body.type` / `req.collection` → the leaf name, prefixed ':' to mark it symbolic.
+// Also `this.<field>` when the caller supplied a symbolic binding for that field (a
+// service instantiated with a request-derived arg). Null if neither req- nor this-derived.
+// Is this value node PROVABLY request-derived — a taint source flowing into a write?
+// Reuses the request-derivation the table resolver already trusts (`reqParamName`): a req
+// member (`req.body`), a local aliased from one (`const b = req.body`), or an object
+// literal that spreads/embeds either (`{ ...req.body }`, `{ name: body.name }`). It
+// UNDER-approximates on purpose — a missed tag is a false negative on an ADVISORY tag
+// (SOUNDNESS.md), never a hidden mutation: the write still flags on its own merits. The
+// tag only ever DECORATES an already-emitted finding, so it can never add a false alarm.
+function valueTainted(node, ctx) {
+  node = unwrapTS(node);
+  if (!node) return false;
+  if (node.type === 'ObjectExpression')
+    return node.properties.some((p) =>
+      p.type === 'SpreadElement'
+        ? valueTainted(p.argument, ctx)
+        : p.type === 'ObjectProperty'
+          ? valueTainted(p.value, ctx)
+          : false,
+    );
+  if (node.type === 'ArrayExpression')
+    return node.elements.some((e) => valueTainted(e, ctx));
+  return reqParamName(node, ctx.reqDerived, ctx.thisSymbols) != null;
+}
+
+// keys that scope a query row to its owner — the ownership predicate that makes an
+// id-scoped access safe (`where: { id, userId }`). Presence ⇒ NOT a BOLA.
+const OWNERSHIP_KEY =
+  /^(user|owner|account|workspace|team|tenant|organization|org|member|author|creator|project|customer|store|shop|company|group)s?_?id$/i;
+// values that reference the CALLER's identity — the other shape of an ownership scope.
+const OWNERSHIP_ROOT = /^(session|auth|me|currentuser|actor|viewer|loggedin)/i;
+
+// Does this `where` object scope the row to the caller — an ownership key (`userId`), or a
+// value read off the session/auth (`where: { id, teamId: session.teamId }`)? MUST-analysis
+// (SOUNDNESS): we set it only when a scope is PROVEN, so "not scoped" is the honest default.
+function whereOwnerScoped(whereNode) {
+  if (whereNode?.type !== 'ObjectExpression') return false;
+  let scoped = false;
+  walkNodes(whereNode, (n) => {
+    if (
+      n.type === 'ObjectProperty' &&
+      n.key?.type === 'Identifier' &&
+      OWNERSHIP_KEY.test(n.key.name)
+    )
+      scoped = true;
+    if (n.type === 'Identifier' && OWNERSHIP_ROOT.test(n.name)) scoped = true;
+    if (n.type === 'MemberExpression') {
+      const r = rootIdentifier(n);
+      if (r && OWNERSHIP_ROOT.test(r)) scoped = true;
+      // req.user.* / ctx.user.* — the caller's identity off the request object
+      if (r && /^(req|request|ctx|context)$/i.test(r) && /user|auth/i.test(src2(n)))
+        scoped = true;
+    }
+  });
+  return scoped;
+}
+
+// does this `where` target a specific object by a bare `id` key (the BOLA shape)?
+function whereHasIdKey(whereNode) {
+  if (whereNode?.type !== 'ObjectExpression') return false;
+  let has = false;
+  walkNodes(whereNode, (n) => {
+    if (
+      n.type === 'ObjectProperty' &&
+      n.key?.type === 'Identifier' &&
+      n.key.name === 'id'
+    )
+      has = true;
+  });
+  return has;
+}
+const src2 = (n) => (n.property?.type === 'Identifier' ? n.property.name : '');
+
+// the raw value node of a named option in an options object — the `data` in
+// `create({ data: <node> })`. Unlike prismaLiteralsOf (string literals only) this returns
+// the payload node itself, so taint can be tested on it.
+function optionValueOf(arg, name) {
+  if (arg?.type !== 'ObjectExpression') return null;
+  for (const p of arg.properties)
+    if (
+      p.type === 'ObjectProperty' &&
+      p.key?.type === 'Identifier' &&
+      p.key.name === name
+    )
+      return p.value;
+  return null;
+}
+
+function reqParamName(node, reqDerived, thisSymbols) {
+  node = unwrapTS(node);
   if (node?.type === 'Identifier') return reqDerived?.get(node.name) ?? null;
-  if (node?.type !== 'MemberExpression' || node.computed) return null;
-  if (node.property.type !== 'Identifier') return null;
+  if (node?.type !== 'MemberExpression') return null;
+  // leaf name: dot access (.collection) OR bracket access with a string key (['collection'])
+  const leaf = node.computed
+    ? node.property.type === 'StringLiteral'
+      ? node.property.value
+      : null
+    : node.property.type === 'Identifier'
+      ? node.property.name
+      : null;
+  if (!leaf) return null;
+  // this.<field> resolved through the symbolic environment (cross-class dataflow)
+  if (node.object.type === 'ThisExpression') return thisSymbols?.get(leaf) ?? null;
   const root = rootIdentifier(node);
   if (!root || !REQ_ROOTS.has(root.toLowerCase())) return null;
-  return `:${node.property.name}`;
+  return `:${leaf}`;
 }
 
 // map local vars assigned straight from a request member: `const c = req.params.collection`
@@ -556,6 +874,24 @@ function visit(node, out, ctx) {
     if (node.handler) visit(node.handler, out, { ...ctx, tryId: null, catchOf: tryLine });
     if (node.finalizer) visit(node.finalizer, out, ctx);
     return;
+  }
+
+  // Auth denial by exception — `throw new UnauthorizedException()` /
+  // `ForbiddenException()` (Nest, and Nest-shaped frameworks), or `new HttpException(_,
+  // 401|403)`. A body that CONSTRUCTS one of these can deny, exactly like res.status(401)
+  // — so a resolved guard's canActivate reads as VERIFIED, not merely asserted by name.
+  if (node.type === 'NewExpression' && node.callee?.type === 'Identifier') {
+    const n = node.callee.name;
+    if (/^(Unauthorized|Forbidden)(Exception|Error)$/.test(n))
+      out.guardSignals.deniesWithStatus = true;
+    else if (n === 'HttpException' || n === 'HttpError')
+      for (const a of node.arguments)
+        if (a.type === 'NumericLiteral' && (a.value === 401 || a.value === 403))
+          out.guardSignals.deniesWithStatus = true;
+    // any error/response CONSTRUCTED with an unauthorized/forbidden code or a 401/403
+    // status — `new DubApiError({ code: "unauthorized" })`, `new Response(_, { status:
+    // 403 })`. A general REST/Next idiom, so a resolved auth wrapper reads as a denial.
+    if (node.arguments.some(isDenyOptions)) out.guardSignals.deniesWithStatus = true;
   }
 
   // `new Date()` — wall-clock read: an entropy effect the flight recorder
@@ -713,15 +1049,14 @@ function inspectCall(node, out, ctx) {
   if (KYSELY_OPS[methodLower] !== undefined && callee.type === 'MemberExpression') {
     const arg0 = node.arguments[0];
     const literal = arg0?.type === 'StringLiteral' ? arg0.value.toLowerCase() : null;
-    const symbolic = literal ? null : reqParamName(arg0, ctx.reqDerived);
-    const table = literal ?? symbolic;
-    if (table) {
+    const resolved = literal ?? reqParamName(arg0, ctx.reqDerived, ctx.thisSymbols);
+    if (resolved) {
       const op = KYSELY_OPS[methodLower];
       pushEffect(out, ctx, {
         effectType: op === 'select' ? 'db_read' : 'db_write',
         op,
-        table,
-        ...(symbolic ? { symbolic: true } : {}),
+        table: resolved,
+        ...(resolved.startsWith(':') ? { symbolic: true } : {}),
         line,
       });
       return;
@@ -730,13 +1065,39 @@ function inspectCall(node, out, ctx) {
 
   // ---- supabase/knex builder: X.from('t').insert(...) or knex('t').update(...)
   if (SUPABASE_OPS.has(methodLower)) {
-    const resolved = builderTableOf(callee.object, ctx.reqDerived);
+    const resolved = builderTableOf(callee.object, ctx.reqDerived, ctx.thisSymbols);
     if (resolved) {
       pushEffect(out, ctx, {
         effectType: methodLower === 'select' ? 'db_read' : 'db_write',
         op: methodLower,
         table: resolved.symbolic ? resolved.table : resolved.table.toLowerCase(),
         ...(resolved.symbolic ? { symbolic: true } : {}),
+        ...(methodLower !== 'select' && valueTainted(node.arguments[0], ctx)
+          ? { tainted: true }
+          : {}),
+        line,
+      });
+      return;
+    }
+  }
+
+  // ---- knex verb-first order: `knex.select(...).from('t')` / `knex.insert(d).into('t')`.
+  // Here the table is named AFTER the verb (in .from()/.into()), so builderTableOf — which
+  // walks BACKWARD from the verb — can't see it. Handle it at the .from()/.into() call: the
+  // verb sits in THIS call's receiver chain, which cleanly distinguishes it from supabase's
+  // `.from('t').select()` (verb in the PARENT, resolved above) — so no double-count. A
+  // db-ish root is required, so `Array.from(x)` and friends never fire.
+  if (methodLower === 'from' || methodLower === 'into') {
+    const arg0 = node.arguments[0];
+    const literal = arg0?.type === 'StringLiteral' ? arg0.value.toLowerCase() : null;
+    const resolved = literal ?? reqParamName(arg0, ctx.reqDerived, ctx.thisSymbols);
+    const op = resolved ? chainVerbOp(callee.object) : null;
+    if (op) {
+      pushEffect(out, ctx, {
+        effectType: op === 'select' ? 'db_read' : 'db_write',
+        op,
+        table: resolved,
+        ...(resolved.startsWith(':') ? { symbolic: true } : {}),
         line,
       });
       return;
@@ -762,6 +1123,7 @@ function inspectCall(node, out, ctx) {
       const op = PRISMA_OPS[methodLower];
       const data = prismaLiteralsOf(node.arguments[0], 'data');
       const where = prismaLiteralsOf(node.arguments[0], 'where');
+      const whereNode = optionValueOf(node.arguments[0], 'where');
       pushEffect(out, ctx, {
         effectType: op === 'select' ? 'db_read' : 'db_write',
         op,
@@ -769,6 +1131,13 @@ function inspectCall(node, out, ctx) {
         ...(data && op === 'insert' ? { inserts: data } : {}),
         ...(data && op !== 'insert' && op !== 'select' ? { sets: data } : {}),
         ...(where ? { where } : {}),
+        ...(op !== 'select' && valueTainted(optionValueOf(node.arguments[0], 'data'), ctx)
+          ? { tainted: true }
+          : {}),
+        // ADR-058 B: object-scope provenance — a query targeting a bare `id`, and whether
+        // it is scoped to the caller (an ownership key / a session value). Feeds BOLA.
+        ...(whereNode && whereHasIdKey(whereNode) ? { idScoped: true } : {}),
+        ...(whereNode && whereOwnerScoped(whereNode) ? { ownerScoped: true } : {}),
         line,
       });
       return;
@@ -808,13 +1177,17 @@ function inspectCall(node, out, ctx) {
   if (
     MODEL_OPS[methodLower] !== undefined &&
     callee.object.type === 'Identifier' &&
-    /^[A-Z]/.test(callee.object.name)
+    /^[A-Z]/.test(callee.object.name) &&
+    !NON_MODEL_RECEIVER.test(callee.object.name)
   ) {
     const op = MODEL_OPS[methodLower];
     pushEffect(out, ctx, {
       effectType: op === 'select' ? 'db_read' : 'db_write',
       op,
       table: callee.object.name.toLowerCase(),
+      ...(op !== 'select' && valueTainted(node.arguments[0], ctx)
+        ? { tainted: true }
+        : {}),
       line,
     });
     return;
@@ -932,8 +1305,42 @@ function responseJsonShape(node) {
 }
 
 // res.status(401|403) anywhere in the chain → guard denial signal
+// An options/error-shape object that itself carries a denial: `{ status: 401 }`,
+// `{ statusCode: 403 }`, or a semantic `{ code: "unauthorized" | "forbidden" }`. The
+// last is how framework error classes (dub's DubApiError, many REST kits) encode auth
+// denial — the numeric status is applied downstream, but the *intent* is provable here.
+function isDenyOptions(arg) {
+  if (arg?.type !== 'ObjectExpression') return false;
+  for (const p of arg.properties) {
+    if (p.type !== 'ObjectProperty' || p.key?.type !== 'Identifier') continue;
+    if (p.key.name === 'status' || p.key.name === 'statusCode') {
+      if (
+        p.value?.type === 'NumericLiteral' &&
+        (p.value.value === 401 || p.value.value === 403)
+      )
+        return true;
+    } else if (p.key.name === 'code') {
+      if (
+        p.value?.type === 'StringLiteral' &&
+        /^(unauthorized|forbidden)$/i.test(p.value.value)
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
 function deniedStatusOf(node) {
   const isDeny = (v) => v === 401 || v === 403;
+  // NextResponse.json(_, { status: 401 }) / res.json(_, { status: 403 }) — the deny is
+  // in the init object, not a .status() chain. A first-class Next/Web-Response idiom.
+  if (
+    node.type === 'CallExpression' &&
+    node.callee?.type === 'MemberExpression' &&
+    node.callee.property?.name === 'json' &&
+    node.arguments.some(isDenyOptions)
+  )
+    return true;
   // res.sendStatus(401) / res.status(401)... — a direct deny status
   if (
     node.type === 'CallExpression' &&
@@ -1071,6 +1478,61 @@ function clientBaseName(node) {
   return null;
 }
 
+// The db op named in a verb-first builder chain whose table is in a trailing
+// .from()/.into(): walk the receiver BACKWARD for a known verb, requiring a db-ish
+// root so `Array.from`/`Object.from` never register. → 'select'|'insert'|… or null.
+const READ_VERBS = new Set([
+  'select',
+  'find',
+  'max',
+  'min',
+  'count',
+  'avg',
+  'sum',
+  'first',
+  'pluck',
+  'distinct',
+  'column',
+  'columns',
+]);
+const WRITE_VERBS = {
+  insert: 'insert',
+  update: 'update',
+  delete: 'delete',
+  del: 'delete',
+  upsert: 'upsert',
+};
+const DB_ROOT = /^(knex|db|database|trx|tx|conn|connection|client|qb|query|builder)$/i;
+
+function chainVerbOp(node) {
+  let cur = node;
+  let op = null;
+  let root = null;
+  for (let hops = 0; hops < 10 && cur; hops++) {
+    if (cur.type === 'CallExpression') {
+      const c = cur.callee;
+      if (c.type === 'MemberExpression' && c.property.type === 'Identifier') {
+        const m = c.property.name.toLowerCase();
+        if (!op) op = READ_VERBS.has(m) ? 'select' : (WRITE_VERBS[m] ?? null);
+        cur = c.object.type === 'ThisExpression' ? null : c.object;
+        if (c.object.type === 'ThisExpression') root = c.property.name;
+      } else if (c.type === 'Identifier') {
+        root = c.name;
+        cur = null;
+      } else cur = null;
+    } else if (cur.type === 'MemberExpression') {
+      if (cur.object.type === 'ThisExpression') {
+        root = cur.property.name;
+        cur = null;
+      } else cur = cur.object;
+    } else if (cur.type === 'Identifier') {
+      root = cur.name;
+      cur = null;
+    } else cur = null;
+  }
+  return op && root && DB_ROOT.test(root) ? op : null;
+}
+
 // knex('users') → users ; supabase.from('users') → users ;
 // supabase.from('users').select() chains: walk member/call chain to a
 // .from('t') or a base call with a string literal argument.
@@ -1078,24 +1540,25 @@ function clientBaseName(node) {
 // `.from(collection)` where `const collection = req.params.collection`) resolves to a
 // SYMBOLIC table (`:table`) — a precise rule, not an unknown — so generic CRUD
 // endpoints stop reading as blind.
-function builderTableOf(node, reqDerived) {
+function builderTableOf(node, reqDerived, thisSymbols) {
   let cur = node;
   const lit = (t) => ({ table: t, symbolic: false });
   for (let hops = 0; hops < 8 && cur; hops++) {
     if (cur.type === 'CallExpression') {
       const c = cur.callee;
       const arg0 = cur.arguments[0];
-      const isFrom =
+      // .from('t') / .into('t') — knex read source and insert target both name the table
+      const isTableMethod =
         c.type === 'MemberExpression' &&
         c.property.type === 'Identifier' &&
-        c.property.name === 'from';
-      const isBaseCall = c.type === 'Identifier'; // knex('users')
+        (c.property.name === 'from' || c.property.name === 'into');
+      const isBaseCall = c.type === 'Identifier'; // knex('users') / trx('users')
       const isThisCall =
         c.type === 'MemberExpression' && c.object.type === 'ThisExpression';
-      if (isFrom || isBaseCall || isThisCall) {
+      if (isTableMethod || isBaseCall || isThisCall) {
         if (arg0?.type === 'StringLiteral') return lit(arg0.value);
-        const sym = reqParamName(arg0, reqDerived);
-        if (sym) return { table: sym, symbolic: true };
+        const v = reqParamName(arg0, reqDerived, thisSymbols);
+        if (v) return { table: v, symbolic: v.startsWith(':') };
       }
       cur = c.type === 'MemberExpression' ? c.object : null;
     } else if (cur.type === 'MemberExpression') {

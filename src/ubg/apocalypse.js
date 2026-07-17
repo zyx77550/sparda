@@ -91,12 +91,43 @@ export function checkGraph(graph) {
     obligations++;
     if (writes.length) vec.auth = guards.length ? 1 : -1;
     if (writes.length && guards.length === 0) {
+      // taint enrichment (ADR-P1): does request data provably flow into one of these
+      // writes? A tag on an ALREADY-emitted finding — never a finding of its own — so it
+      // sharpens the worst routes (open AND fed by user input) without adding false
+      // alarms. Under-approximated (SOUNDNESS Direction 1): a missed tag hides nothing.
+      const tainted = writes.filter((w) => w.effect.meta.tainted);
       findings.push({
         rule: 'UNGUARDED_MUTATION',
         severity: 'critical',
         entrypoint: ep.id,
-        message: `${ep.label} mutates ${fmtStates(writes)} with no guard anywhere on the path`,
+        message: `${ep.label} mutates ${fmtStates(writes)} with no guard anywhere on the path${
+          tainted.length ? ' — and request data flows straight into the write' : ''
+        }`,
         evidence: writes.map((w) => `${w.effect.id} (${locOf(w.effect)})`),
+        ...(tainted.length ? { tainted: true } : {}),
+      });
+    }
+
+    // O6 — a write whose TABLE is chosen by the request (symbolic, e.g. the URL
+    // names the collection) with NO guard on the path: "anyone can write to any
+    // table they name" — a mass-assignment-of-target escalation, materially more
+    // severe than a generic unguarded write and worth its own, sharper finding.
+    // Bounded HARD (E-029): symbolic target AND no guard. A GUARDED symbolic write
+    // (directus's per-collection permission layer, invisible to the static eye) is
+    // NOT flagged — the corpus confirms every real symbolic write is guarded, so
+    // this rule fires zero false positives there. Rides the same vec.auth = -1 O1
+    // already set (no new polarity axis — the 5-axis matrix stays pinned).
+    obligations++;
+    const unboundedWrites = writes.filter(
+      (w) => w.effect.meta.symbolic && w.effect.meta.effectType === 'db_write',
+    );
+    if (unboundedWrites.length && guards.length === 0) {
+      findings.push({
+        rule: 'UNBOUNDED_WRITE_TARGET',
+        severity: 'critical',
+        entrypoint: ep.id,
+        message: `${ep.label} writes to a request-named table (${[...new Set(unboundedWrites.map((w) => g.nodes.get(w.stateId)?.meta.table ?? '?'))].sort().join(', ')}) with no guard — the caller chooses which table to mutate`,
+        evidence: unboundedWrites.map((w) => `${w.effect.id} (${locOf(w.effect)})`),
       });
     }
 
@@ -185,6 +216,36 @@ export function checkGraph(graph) {
           evidence: [w.stateId],
         });
       }
+    }
+
+    // O7 — object-level authorization not proven (BOLA / IDOR, OWASP API #1). ADVISORY.
+    // The route accesses an object by a request-supplied id (`idScoped`) but NO query on
+    // its RESOLVED path is scoped to the caller (`ownerScoped` — an ownership key or a
+    // session value). Under a guard (authenticated) and not an admin/system route. This is
+    // the one bug class that survives on authenticated apps, and it is ADVISORY by design
+    // (ADR-058): absence of a visible scope is FP-prone — a scoped client, RLS, or a
+    // helper's where clause is invisible — so it NEVER flips the verdict, it points a human
+    // at the exact routes to review. MUST-analysis: `ownerScoped` is set only when proven.
+    obligations++;
+    const idScoped = reached.filter((n) => n?.kind === 'effect' && n.meta.idScoped);
+    const ownerScopedSeen = reached.some(
+      (n) => n?.kind === 'effect' && n.meta.ownerScoped,
+    );
+    const adminish =
+      /(^|[:/])(admin|internal|system|cron|webhooks?|callback)([/:]|$)/i.test(ep.label) ||
+      guards.some((gd) => /admin|internal|system|cron|super/i.test(gd?.label ?? ''));
+    if (idScoped.length && !ownerScopedSeen && guards.length && !adminish) {
+      const tables = [
+        ...new Set(idScoped.map((n) => n.meta.table).filter(Boolean)),
+      ].sort();
+      findings.push({
+        rule: 'OBJECT_SCOPE_UNPROVEN',
+        severity: 'info',
+        advisory: true,
+        entrypoint: ep.id,
+        message: `${ep.label} accesses ${tables.join(', ')} by a request-supplied id with no ownership scope proven on the path — verify object-level authorization (BOLA/IDOR)`,
+        evidence: idScoped.map((n) => `${n.id} (${locOf(n)})`),
+      });
     }
 
     polarity.push({ entrypoint: ep.id, vector: vec });
@@ -287,9 +348,48 @@ export function countObserved(graph) {
   return n;
 }
 
-export function verdictOf(findings, graph) {
+// State-CHANGING behavior — the only thing a positive safety proof can be ABOUT. Every
+// obligation SPARDA discharges (guard, atomicity, reversibility, unbounded-target) is about
+// a MUTATION; a route that only reads, or a table that is only read, discharges nothing. So
+// an app SPARDA resolved down to zero mutations proves nothing positive — it is SURFACE,
+// never PROVEN. Counts db_write / http_call / fs_write effects ONLY: read-only state nodes
+// (a table declared but never written) are deliberately excluded — they carry no obligation.
+// This closes the reads-only hollow PROVEN a real stress test found: vendure compiled to 312
+// routes / 0 writes / 26 reads and read "PROVEN" at 0% coverage.
+const PROVABLE_EFFECT = new Set(['db_write', 'http_call', 'fs_write']);
+export function countProvable(graph) {
+  let n = 0;
+  for (const node of graph.nodes.values ? graph.nodes.values() : graph.nodes) {
+    if (node.kind === 'effect' && PROVABLE_EFFECT.has(node.meta?.effectType)) n++;
+  }
+  return n;
+}
+
+// Below this resolved/surface coverage ratio, a CLEAN app cannot claim PROVEN — it
+// resolved too little of its own behavior for "no violation" to mean anything (the
+// PROVEN-COMPLETE vs PROVEN-PARTIAL line). Measured floor: real PROVEN apps sit at 60%+
+// (fixtures) / 71%+ (corpus); the hollow cases (cal-api-v2, 175 routes / 1 effect) are
+// ~0%. 5% cleanly separates them with headroom. Coverage-gating only downgrades a CLEAN
+// app (findings.length === 0) → it can never hide a real finding behind SURFACE.
+const COVERAGE_FLOOR = 0.05;
+
+// The PROVEN-COMPLETE line. A clean app whose coverage sits between the floor and this bar
+// resolved a real slice of its behavior — enough to say "no violation in what I saw" — but
+// left a meaningful fraction of its surface invisible to the static eye. That is a PARTIAL
+// proof, not a complete one: honest packaging demands the word carry the difference, so a
+// skeptic never reads a bare "PROVEN" over 23% of the routes and calls it a bluff. Measured:
+// real complete proofs sit at 60%+ (fixtures) / 71%+ (corpus); the partial cases (cal.com,
+// 175 routes / 23% coverage) fall below. Purely a LABEL refinement — it never masks a
+// finding, never changes the CI gate; a PARTIAL app is still clean, just qualified.
+const COVERAGE_COMPLETE = 0.6;
+
+export function verdictOf(findings, graph, { coverage } = {}) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
+  // Advisory findings (BOLA/IDOR, ADR-058) are absence-based and FP-prone: they point a
+  // human at routes to review, they never GATE the verdict. So the PROVEN/SURFACE gates
+  // count only HARD findings — an advisory can't flip a genuinely-clean app off PROVEN.
+  const hardCount = findings.filter((f) => !f.advisory).length;
   // Provability guard: a compile that reached ZERO entrypoints proved nothing —
   // an empty graph must never read as PROVEN/RISKY. A parser-coverage miss (a
   // route surface the static eye could not see) has to be loud, not a silent
@@ -304,13 +404,28 @@ export function verdictOf(findings, graph) {
   const observed = graph ? countObserved(graph) : null;
   // only assert surface-only for a WHOLE-app proof (graph given with entrypoints);
   // a partial graph (heal's delta, entrypoints===null) keeps the old semantics.
-  const surfaceOnly = provable && entrypoints > 0 && observed === 0;
+  // Basis is mutation-capable behavior (countProvable), not raw observed: reads-only
+  // is surface (nothing to prove safety about), which stops the reads-only hollow PROVEN.
+  const provableBehavior = graph ? countProvable(graph) : null;
+  // A CLEAN app that resolved almost none of its behavior (coverage below the floor) is
+  // SURFACE, not PROVEN — the coverage-graded verdict. Guarded by findings.length === 0
+  // so it only ever downgrades a would-be-PROVEN app, never masks a NOT_PROVEN one
+  // (surfaceOnly outranks NOT_PROVEN in the verdict word, so this MUST stay clean-only).
+  const lowCoverage = coverage != null && coverage < COVERAGE_FLOOR && hardCount === 0;
+  const surfaceOnly =
+    provable && entrypoints > 0 && (provableBehavior === 0 || lowCoverage);
   // guard provenance: how many guards did SPARDA actually VERIFY (see a deny path in
   // the body) vs only assert by name (opaque middleware/decorators it couldn't read).
   // Honest signal — it does not change the verdict, but it tells you how much of the
   // auth posture rests on trust vs proof.
   const guards = graph ? graph.nodes.filter((n) => n.kind === 'guard') : [];
   const guardsVerified = guards.filter((g) => g.meta?.verified).length;
+  // A clean whole-app proof below the completeness bar is PARTIAL — proved, but not over
+  // the whole surface. Only meaningful when coverage was measured (whole-app run); a partial
+  // graph (heal delta, coverage undefined) is never labelled partial.
+  const clean = provable && !surfaceOnly && hardCount === 0;
+  const partial =
+    clean && coverage != null && entrypoints > 0 && coverage < COVERAGE_COMPLETE;
   // `safe` is the CI gate (block a risky deploy): a surface-only app has no
   // critical/high findings and is NOT risky, so it does not fail the gate — it just
   // isn't a positive proof. `clean` is the strong claim (PROVEN) and DOES require
@@ -324,8 +439,59 @@ export function verdictOf(findings, graph) {
     guards: guards.length,
     guardsVerified,
     safe: provable && counts.critical === 0 && counts.high === 0,
-    clean: provable && !surfaceOnly && findings.length === 0,
+    clean,
+    partial,
+    complete: clean && !partial,
   };
+}
+
+// The one verdict word, from a verdictOf() result. The single source of truth every surface
+// (prove, badge, CI) shares, so the public artifact can never disagree with the CLI — and the
+// PARTIAL rung is baked in, so a badge can never read "PROVEN" over a 23%-resolved app.
+export function verdictState(verdict) {
+  return !verdict.provable
+    ? 'NO_PROOF'
+    : verdict.surfaceOnly
+      ? 'SURFACE'
+      : verdict.clean
+        ? verdict.partial
+          ? 'PARTIAL'
+          : 'PROVEN'
+        : verdict.safe
+          ? 'RISKY'
+          : 'NOT_PROVEN';
+}
+
+// shields.io "flat" palette — the colour IS a claim, so it tracks the verdict exactly.
+const BADGE_COLOR = {
+  PROVEN: '#4c1', // brightgreen — a complete proof
+  PARTIAL: '#dfb317', // yellow — proved, but not over the whole surface
+  RISKY: '#fe7d37', // orange — no critical/high, but findings to review
+  NOT_PROVEN: '#e05d44', // red — a real critical/high finding
+  SURFACE: '#9f9f9f', // grey — not enough behaviour resolved to prove
+  NO_PROOF: '#9f9f9f', // grey — 0 routes
+};
+
+// The badge label/colour for a verdict — the single source `badge` and `prove --markdown`
+// both consume, so the SVG file and the PR comment can never show different words. Inherits
+// verdictState, so the PARTIAL anti-overclaim rung is automatic everywhere a badge appears.
+export function badgeFor(verdict, { coverage } = {}) {
+  const state = verdictState(verdict);
+  const cov = coverage != null ? Math.round(coverage * 100) : null;
+  const c = verdict.counts ?? { critical: 0, high: 0, medium: 0, info: 0 };
+  const message =
+    state === 'PROVEN'
+      ? `proven · ${cov}%`
+      : state === 'PARTIAL'
+        ? `partial · ${cov}%`
+        : state === 'SURFACE'
+          ? `surface · ${cov}%`
+          : state === 'NO_PROOF'
+            ? 'no routes'
+            : state === 'RISKY'
+              ? `review · ${c.medium + c.info}`
+              : `${c.critical + c.high} findings`;
+  return { state, message, color: BADGE_COLOR[state] };
 }
 
 function sortFindings(findings) {

@@ -82,13 +82,19 @@ export function surveyBlindspots(graph, report = {}) {
     // was nothing) is not blindness, it's a no-op, and must not be flagged.
     const hasOpaqueBody = reached.some((n) => n?.meta?.opaque);
     if (!hasOpaqueBody) continue;
+    // Risk reflects what it could hide: an unreadable mutation with NO guard anywhere on
+    // its path is the worst case (an unguarded write, unseen) → critical; behind a guard
+    // it is high (the guard limits, but SPARDA still can't see the write).
+    const guarded = reached.some((n) => n?.kind === 'guard');
     spots.push({
       kind: 'blind-mutation',
-      risk: 'high',
+      risk: guarded ? 'high' : 'critical',
       entrypoint: ep.id,
       location: ep.loc ? `${ep.loc.file}:${ep.loc.line}` : null,
       label: ep.label,
-      why: 'a state-changing route whose behavior did not resolve — an unguarded write could hide here unseen',
+      why: guarded
+        ? 'a guarded state-changing route whose write did not resolve — SPARDA cannot see what it mutates'
+        : 'an UNGUARDED state-changing route whose behavior did not resolve — an unguarded write could hide here entirely unseen',
     });
   }
 

@@ -1,0 +1,5 @@
+{
+  "name": "ubg-nest-global-guard",
+  "private": true,
+  "dependencies": { "@nestjs/common": "^10", "@nestjs/core": "^10", "reflect-metadata": "^0.2" }
+}

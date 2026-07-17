@@ -30,6 +30,18 @@ describe('medusa detection', () => {
     expect(stack.framework).toBe('medusa');
     expect(stack.entryFile).toBe('src/api');
   });
+
+  // E-043 regression: the framework's own packages (and the corpus `packages/medusa` clone)
+  // list @medusajs/framework in devDeps and `express` as a runtime dep — NO @medusajs runtime
+  // dep. Detection must key off the structural signature (src/api tree of verb-exporting
+  // route.ts files), not a dep, or the express dep misroutes it to a 1-route express app and
+  // the corpus route count stops being reproducible out-of-the-box.
+  it('detects medusa STRUCTURALLY with no @medusajs dep and express present', () => {
+    const dir = path.join(here, 'fixtures', 'ubg-medusa-nodep');
+    const stack = detectStack(dir);
+    expect(stack.framework).toBe('medusa');
+    expect(stack.entryFile).toBe('src/api');
+  });
 });
 
 describe('medusa file-based routes', () => {

@@ -51,6 +51,11 @@ export async function runImmunize(opts) {
       : '✗ NOT PROVEN';
   console.log(`  verdict: ${verdictText}` + (exposed ? ` — exposed: ${exposed}` : ''));
   console.log(
+    `  coverage: ${(capsule.coverage * 100).toFixed(0)}% of observed behavior resolved` +
+      (capsule.blindHigh ? ` · ${capsule.blindHigh} high-risk blind spot(s)` : '') +
+      ` — the proof's confidence, frozen with it`,
+  );
+  console.log(
     `  written: .sparda/immunity.json (${wire} bytes on the wire) — portable, offline, lookup by behaviorHash`,
   );
   // surface-only is not a risk (nothing to fault) → don't fail CI; only a real

@@ -3,7 +3,15 @@
 ```bash
 npm test                         # full suite (vitest run)
 npx vitest run -t "quarantine"   # filter by test name
+SPARDA_CORPUS=/path/to/clones npm run corpus   # regression check vs real giants
 ```
+
+The **corpus oracle** (`scripts/corpus-oracle.mjs`) diffs SPARDA's verdict/finding
+metrics on 7 real giants against a committed baseline (`corpus.snapshot.json`) — it
+catches the class of silent regression `npm test` can't (the tsconfig bug that took
+dub's guards 514 → 1). The giants aren't committed; point `SPARDA_CORPUS` at your
+clones. Apps not present are skipped, never failed; with no `SPARDA_CORPUS` it is a
+no-op. Re-baseline with `npm run corpus:update` ONLY when a metric change is intended.
 
 Requirements: Node ≥ 18, Python ≥ 3.9 on PATH (`python3`/`python`/`py -3`
 auto-detected — see E-004). CI: `.github/workflows/` runs the suite with

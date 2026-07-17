@@ -14,6 +14,12 @@ import sys
 MAX_EFFECTS = 40
 MAX_RETURN_SHAPES = 10
 MAX_CALLS = 30
+# ADR-054: the resolve.js contract — one bound for every interprocedural hop kind.
+# fastapi_extract.py cannot import the JS engine (separate process, stdlib only),
+# so it implements the engine's CONTRACT: depth <= MAX_RESOLVE_DEPTH, memoization
+# per (file, qualname), cycle guard by stack set, mergeScan merge semantics,
+# deterministic ordering. Divergence from resolve.js is a bug, not a judgment call.
+MAX_RESOLVE_DEPTH = 6
 HTTP_VERBS = ("get", "post", "put", "patch", "delete")
 HTTP_CLIENTS = ("requests", "httpx", "aiohttp")
 SUPABASE_OPS = ("select", "insert", "update", "upsert", "delete")
@@ -42,6 +48,51 @@ def root_name(node):
     if isinstance(cur, ast.Name):
         return cur.id
     return None
+
+
+def dotted_name(node):
+    """self.db.session → 'self.db.session' (Names/Attributes only, else None)."""
+    parts = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def merge_scan(into, add):
+    """resolve.js#mergeScan, same contract — bounded by the same caps as
+    scan_function itself so a deep bundle can never blow the scan shape up."""
+    for e in add["effects"]:
+        if len(into["effects"]) >= MAX_EFFECTS:
+            break
+        into["effects"].append(e)
+    for r in add["returnShapes"]:
+        if len(into["returnShapes"]) >= MAX_RETURN_SHAPES:
+            break
+        into["returnShapes"].append(r)
+    for c in add["calls"]:
+        if len(into["calls"]) >= MAX_CALLS:
+            break
+        into["calls"].append(c)
+    into["validatesInput"] = into["validatesInput"] or add["validatesInput"]
+    into["async"] = into["async"] or add["async"]
+    if add["guardSignals"]["deniesWithStatus"]:
+        into["guardSignals"]["deniesWithStatus"] = True
+
+
+def clone_scan(base):
+    return {
+        "effects": list(base["effects"]),
+        "returnShapes": list(base["returnShapes"]),
+        "calls": list(base["calls"]),
+        "guardSignals": dict(base["guardSignals"]),
+        "validatesInput": base["validatesInput"],
+        "async": base["async"],
+    }
 
 
 def literal_pairs_of(clause):
@@ -113,6 +164,33 @@ def sql_literal_of(arg):
         v = lit(arg.args[0])
         if isinstance(v, str):
             return v
+    return None
+
+
+SA_BUILDERS = {
+    "select": ("db_read", "select"),
+    "insert": ("db_write", "insert"),
+    "update": ("db_write", "update"),
+    "delete": ("db_write", "delete"),
+}
+
+
+def sa_builder_effect(arg):
+    """SQLAlchemy 2.0 statement builders: select(User) / insert(User).values(…) /
+    update(User).where(…) / delete(User) — the model Name is the table, however
+    deep the method chaining goes (the open-webui shape)."""
+    cur = arg
+    for _ in range(8):
+        if (isinstance(cur, ast.Call) and isinstance(cur.func, ast.Name)
+                and cur.func.id in SA_BUILDERS and cur.args
+                and isinstance(cur.args[0], ast.Name)):
+            effect_type, op = SA_BUILDERS[cur.func.id]
+            return {"effectType": effect_type, "op": op,
+                    "table": cur.args[0].id.lower()}
+        if isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute):
+            cur = cur.func.value  # unwrap .values(…)/.where(…)/.join(…) chains
+        else:
+            return None
     return None
 
 
@@ -327,8 +405,11 @@ def inspect_call(node, out, ctx):
         out["validatesInput"] = True
         return
 
-    # raw SQL: X.execute('INSERT …') / cursor.execute(text('SELECT …'))
-    if method in ("execute", "executemany") and node.args:
+    # raw SQL: X.execute('INSERT …') / cursor.execute(text('SELECT …')) — and the
+    # SQLAlchemy 2.0 result methods (scalars/scalar/stream) that take the same
+    # statement builders execute does
+    if method in ("execute", "executemany", "scalars", "scalar",
+                  "stream", "stream_scalars") and node.args:
         sql = sql_literal_of(node.args[0])
         if sql:
             parsed = parse_sql(sql)
@@ -337,13 +418,22 @@ def inspect_call(node, out, ctx):
                 parsed["driver"] = root or "unknown"
                 push_effect(out, ctx, parsed)
                 return
+        built = sa_builder_effect(node.args[0])
+        if built:
+            built["line"] = line
+            built["driver"] = root or "unknown"
+            push_effect(out, ctx, built)
+            return
         push_effect(out, ctx, {
             "effectType": "db_read", "op": "unknown", "table": None,
             "line": line, "driver": root or "unknown",
         })
         return
 
-    # SQLAlchemy ORM: session.query(User) → read; session.add/delete → write
+    # SQLAlchemy ORM: session.query(User) → read; session.add/delete → write.
+    # The receiver is matched on the full dotted chain, so `self.db.add(…)`
+    # inside a service class reads like `db.add(…)` at module level.
+    recv = dotted_name(func.value)
     if method == "query" and node.args and isinstance(node.args[0], ast.Name):
         push_effect(out, ctx, {
             "effectType": "db_read", "op": "select",
@@ -351,11 +441,32 @@ def inspect_call(node, out, ctx):
             "driver": root or "unknown",
         })
         return
-    if (method in ("add", "add_all", "merge") and root
-            and re.search(r"session|db", root, re.I)):
+    if (method in ("add", "add_all", "merge") and recv
+            and re.search(r"session|db", recv, re.I)):
         push_effect(out, ctx, {
             "effectType": "db_write", "op": "insert", "table": None,
             "line": line, "driver": root,
+        })
+        return
+    # session.get(User, id) — the 2.0 primary-key read; the capitalized model
+    # Name is the table (bounded: session/db receivers only, Model arg only)
+    if (method == "get" and recv and re.search(r"session|db", recv, re.I)
+            and node.args and isinstance(node.args[0], ast.Name)
+            and node.args[0].id[:1].isupper()):
+        push_effect(out, ctx, {
+            "effectType": "db_read", "op": "select",
+            "table": node.args[0].id.lower(), "line": line,
+            "driver": root or "unknown",
+        })
+        return
+    # session.delete(instance) — the ORM unit-of-work delete
+    if (method == "delete" and recv and re.search(r"session|db", recv, re.I)):
+        table = (node.args[0].id.lower()
+                 if node.args and isinstance(node.args[0], ast.Name)
+                 and node.args[0].id[:1].isupper() else None)
+        push_effect(out, ctx, {
+            "effectType": "db_write", "op": "delete", "table": table,
+            "line": line, "driver": root or "unknown",
         })
         return
 
@@ -447,6 +558,8 @@ class UbgExtractor:
         self.scanned_files = []
         self.visited = set()
         self.mounts = []
+        self.mod_cache = {}  # abs_file -> parsed module facts (or {'error': …})
+        self.bundle_cache = {}  # (file, qualname) -> fully-resolved scan bundle
 
     def rel(self, abs_path):
         return os.path.relpath(abs_path, self.root).replace(os.path.sep, "/")
@@ -471,6 +584,225 @@ class UbgExtractor:
             if os.path.isfile(p):
                 return os.path.abspath(p)
         return None
+
+    # ---- the interprocedural engine (resolve.js contract) --------------------
+
+    def parse_module(self, abs_file):
+        """Module facts for call-following: imports, module-level functions,
+        classes, and instance singletons (`Users = UsersTable()` — THE FastAPI
+        repository idiom). Memoized; a parse error caches as {'error': …}."""
+        cached = self.mod_cache.get(abs_file)
+        if cached is not None:
+            return cached
+        mod = {"file": abs_file, "functions": {}, "classes": {},
+               "instances": {}, "imports": {}}
+        try:
+            with open(abs_file, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=abs_file)
+        except Exception as e:  # noqa: BLE001 — cached, surfaced by parse_file
+            mod = {"error": str(e)[:80]}
+            self.mod_cache[abs_file] = mod
+            return mod
+        mod["tree"] = tree
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                dots = "." * node.level if node.level > 0 else ""
+                m = dots + (node.module or "")
+                for n in node.names:
+                    local = n.asname or n.name
+                    resolved = (self.resolve_import(abs_file, m + "." + n.name)
+                                or self.resolve_import(abs_file, m))
+                    if resolved:
+                        mod["imports"][local] = resolved
+            elif isinstance(node, ast.Import):
+                for n in node.names:
+                    resolved = self.resolve_import(abs_file, n.name)
+                    if resolved:
+                        mod["imports"][n.asname or n.name] = resolved
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                mod["functions"][node.name] = node
+            elif isinstance(node, ast.ClassDef):
+                mod["classes"][node.name] = node
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], ast.Name) \
+                    and isinstance(node.value, ast.Call) \
+                    and isinstance(node.value.func, ast.Name):
+                mod["instances"][node.targets[0].id] = node.value.func.id
+        self.mod_cache[abs_file] = mod
+        return mod
+
+    def resolve_class(self, mod, name, depth=0):
+        """class name → (ClassDef, owning mod), through imports, bounded."""
+        if not mod or "error" in mod or depth > MAX_RESOLVE_DEPTH:
+            return None
+        cls = mod["classes"].get(name)
+        if cls is not None:
+            return cls, mod
+        imported = mod["imports"].get(name)
+        if imported:
+            return self.resolve_class(self.parse_module(imported), name, depth + 1)
+        return None
+
+    def method_in_class_chain(self, cls, mod, name, depth=0):
+        """find `name` on cls or up its bases → (fn, declaring mod). The Python
+        analogue of extract.js#methodInClassChain."""
+        if depth > MAX_RESOLVE_DEPTH:
+            return None
+        for stmt in cls.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and stmt.name == name:
+                return stmt, mod
+        for base in cls.bases:
+            if isinstance(base, ast.Name):
+                hit = self.resolve_class(mod, base.id, depth + 1)
+                if hit:
+                    found = self.method_in_class_chain(
+                        hit[0], hit[1], name, depth + 1)
+                    if found:
+                        return found
+        return None
+
+    def resolve_receiver(self, mod, name):
+        """what `name.method()` dispatches on: a class (directly, via a
+        module-level singleton, or imported), or a module alias."""
+        if name in mod["classes"]:
+            return ("class", mod["classes"][name], mod)
+        if name in mod["instances"]:
+            hit = self.resolve_class(mod, mod["instances"][name])
+            return ("class", hit[0], hit[1]) if hit else None
+        imported = mod["imports"].get(name)
+        if not imported:
+            return None
+        tmod = self.parse_module(imported)
+        if not tmod or "error" in tmod:
+            return None
+        if name in tmod["classes"]:
+            return ("class", tmod["classes"][name], tmod)
+        if name in tmod["instances"]:
+            hit = self.resolve_class(tmod, tmod["instances"][name])
+            return ("class", hit[0], hit[1]) if hit else None
+        return ("module", tmod)  # `from pkg import mod` / `import pkg.mod as m`
+
+    def class_method_bundle(self, cls, cmod, method, depth, stack):
+        """the fully-resolved scan of Cls.method — its body plus everything the
+        walk reaches below it — memoized per (file, Cls.method). A bundle in
+        flight contributes nothing (cycle guard) and is never cached partial."""
+        if depth >= MAX_RESOLVE_DEPTH:
+            return None
+        hit = self.method_in_class_chain(cls, cmod, method)
+        if not hit:
+            return None
+        fn, decl_mod = hit
+        key = (cmod["file"], (cls.name or "anonymous") + "." + method)
+        cached = self.bundle_cache.get(key)
+        if cached is not None:
+            return cached
+        if key in stack:
+            return None
+        stack.add(key)
+        base = scan_function(fn)
+        bundle = clone_scan(base)
+        bundle["key"] = key[0] + "#" + key[1]
+        decl_rel = self.rel(decl_mod["file"])
+        if decl_rel not in self.scanned_files:
+            self.scanned_files.append(decl_rel)
+        self.helpers.append({"name": key[1], "sourceFile": decl_rel,
+                             "sourceLine": fn.lineno, "scan": base})
+        self.follow_calls(fn, decl_mod, bundle, set(), depth + 1,
+                          {"top_cls": cls, "top_mod": cmod}, stack)
+        stack.discard(key)
+        self.bundle_cache[key] = bundle
+        return bundle
+
+    def function_bundle(self, tmod, name, depth, stack):
+        """same contract for a module-level function reached across an import."""
+        if depth >= MAX_RESOLVE_DEPTH or not tmod or "error" in tmod:
+            return None
+        fn = tmod["functions"].get(name)
+        if fn is None:
+            return None
+        key = (tmod["file"], name)
+        cached = self.bundle_cache.get(key)
+        if cached is not None:
+            return cached
+        if key in stack:
+            return None
+        stack.add(key)
+        base = scan_function(fn)
+        bundle = clone_scan(base)
+        bundle["key"] = key[0] + "#" + name
+        fn_rel = self.rel(tmod["file"])
+        if fn_rel not in self.scanned_files:
+            self.scanned_files.append(fn_rel)
+        self.helpers.append({"name": name, "sourceFile": fn_rel,
+                             "sourceLine": fn.lineno, "scan": base})
+        self.follow_calls(fn, tmod, bundle, set(), depth + 1, None, stack)
+        stack.discard(key)
+        self.bundle_cache[key] = bundle
+        return bundle
+
+    def follow_calls(self, fn, mod, merged, seen, depth, cls_ctx, stack,
+                     bindings=None):
+        """ONE walk over the calls of a scanned body, following every receiver
+        kind out of it: `self.<m>()` sibling dispatch, DI-bound params,
+        local instances (`svc = Service()`), imported singletons/classes,
+        module aliases, and bare imported functions. Bounded, memoized,
+        cycle-guarded — the resolve.js walk, in Python."""
+        if depth >= MAX_RESOLVE_DEPTH or not mod or "error" in mod:
+            return
+        local_instances = {}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], ast.Name) \
+                    and isinstance(node.value, ast.Call) \
+                    and isinstance(node.value.func, ast.Name):
+                local_instances[node.targets[0].id] = node.value.func.id
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            bundle = None
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                obj, meth = func.value.id, func.attr
+                if obj == "self" and cls_ctx is not None:
+                    bundle = self.class_method_bundle(
+                        cls_ctx["top_cls"], cls_ctx["top_mod"], meth,
+                        depth, stack)
+                elif bindings and obj in bindings:
+                    b_cls, b_mod = bindings[obj]
+                    bundle = self.class_method_bundle(
+                        b_cls, b_mod, meth, depth, stack)
+                elif obj in local_instances:
+                    hit = self.resolve_class(mod, local_instances[obj])
+                    if hit:
+                        bundle = self.class_method_bundle(
+                            hit[0], hit[1], meth, depth, stack)
+                else:
+                    target = self.resolve_receiver(mod, obj)
+                    if target and target[0] == "class":
+                        bundle = self.class_method_bundle(
+                            target[1], target[2], meth, depth, stack)
+                    elif target and target[0] == "module":
+                        bundle = self.function_bundle(
+                            target[1], meth, depth, stack)
+            elif isinstance(func, ast.Name):
+                imported = mod["imports"].get(func.id)
+                if imported:
+                    bundle = self.function_bundle(
+                        self.parse_module(imported), func.id, depth, stack)
+            if bundle is not None and bundle["key"] not in seen:
+                seen.add(bundle["key"])
+                merge_scan(merged, bundle)
+
+    def deep_scan(self, fn, mod, bindings=None):
+        """a body's real scan = its own effects + everything follow_calls
+        resolves below it. The Python analogue of resolve.js#deepScan."""
+        base = scan_function(fn)
+        merged = clone_scan(base)
+        self.follow_calls(fn, mod, merged, set(), 0, None, set(), bindings)
+        return merged
+
+    # --------------------------------------------------------------------------
 
     def run(self):
         self.parse_file(self.entry_file, "", 0)
@@ -507,6 +839,7 @@ class UbgExtractor:
             return
         rel_file = self.rel(abs_file)
         self.scanned_files.append(rel_file)
+        modctx = self.parse_module(abs_file)  # the walk's view of this file
 
         app_vars, router_vars, router_prefixes, router_deps, import_map = (
             set(), set(), {}, {}, {})
@@ -641,7 +974,25 @@ class UbgExtractor:
                                   % (dep_name, method.upper(), full_path),
                         "file": rel_file, "line": node.lineno,
                     })
-            handler_scan = scan_function(node)
+            # DI bindings: `svc: UserService = Depends(get_user_service)` /
+            # `Depends(UserService)` bind the param name to a resolvable class,
+            # so `svc.method()` inside the handler dispatches through it
+            bindings = {}
+            for arg, default in self.args_with_defaults(node):
+                dep_cls = None
+                if isinstance(default, ast.Call):
+                    f = default.func
+                    dname = f.id if isinstance(f, ast.Name) else (
+                        f.attr if isinstance(f, ast.Attribute) else None)
+                    if dname == "Depends" and default.args \
+                            and isinstance(default.args[0], ast.Name):
+                        dep_cls = self.resolve_class(modctx,
+                                                     default.args[0].id)
+                if dep_cls is None and isinstance(arg.annotation, ast.Name):
+                    dep_cls = self.resolve_class(modctx, arg.annotation.id)
+                if dep_cls:
+                    bindings[arg.arg] = dep_cls
+            handler_scan = self.deep_scan(node, modctx, bindings)
             params = self.params_of(node, full_path)
             # a Pydantic body model means FastAPI validates before the handler
             # runs — same signal as an explicit zod .safeParse (SBIR §2.1)
@@ -711,26 +1062,26 @@ class UbgExtractor:
         return targets
 
     def resolve_dep(self, name, functions, import_map, rel_file, abs_file):
+        # dependencies are deep-scanned like handlers: an auth dep that reads
+        # the user table is real, provable behavior on every route it guards
         fn = functions.get(name)
         if fn is not None:
             return {"name": name, "sourceFile": rel_file,
-                    "sourceLine": fn.lineno, "scan": scan_function(fn)}
+                    "sourceLine": fn.lineno,
+                    "scan": self.deep_scan(fn, self.parse_module(abs_file))}
         imported = import_map.get(name)
         if imported:
-            try:
-                with open(imported, "r", encoding="utf-8") as f:
-                    tree = ast.parse(f.read(), filename=imported)
-            except Exception:
+            tmod = self.parse_module(imported)
+            if not tmod or "error" in tmod:
                 return None
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
-                        and node.name == name:
-                    dep_rel = self.rel(imported)
-                    if dep_rel not in self.scanned_files:
-                        self.scanned_files.append(dep_rel)
-                    return {"name": name, "sourceFile": dep_rel,
-                            "sourceLine": node.lineno,
-                            "scan": scan_function(node)}
+            node = tmod["functions"].get(name)
+            if node is not None:
+                dep_rel = self.rel(imported)
+                if dep_rel not in self.scanned_files:
+                    self.scanned_files.append(dep_rel)
+                return {"name": name, "sourceFile": dep_rel,
+                        "sourceLine": node.lineno,
+                        "scan": self.deep_scan(node, tmod)}
         return None
 
     def args_with_defaults(self, fn):

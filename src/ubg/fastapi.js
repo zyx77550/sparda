@@ -14,7 +14,15 @@ export function extractFastAPI(cwd, entryFile, pythonCmd = 'python') {
   const script = path.resolve(__dirname, 'fastapi_extract.py');
   const args =
     pythonCmd === 'py' ? ['-3', script, entryFile, cwd] : [script, entryFile, cwd];
-  const res = spawnSync(pythonCmd, args, { cwd, encoding: 'utf8', timeout: 30_000 });
+  // 64 MiB: deep-scanned route facts on a real monster (open-webui: 456 routes,
+  // every chain step carrying a merged scan) overflow the 1 MiB spawnSync default,
+  // which kills the child mid-write and reads as a phantom extraction failure
+  const res = spawnSync(pythonCmd, args, {
+    cwd,
+    encoding: 'utf8',
+    timeout: 30_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
 
   if (res.status !== 0) {
     const detail = (res.stderr || res.stdout || '').trim().slice(0, 300);

@@ -6,77 +6,10 @@
 // Depth stays bounded like the v0 parser: entry file + mounted routers.
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  parseModule,
-  resolveRelImport,
-  scanFunction,
-  classInModule,
-  baseClassOf,
-  methodInClassChain,
-} from './extract.js';
+import { parseModule, resolveRelImport } from './extract.js';
+import { createResolver, relOf } from './resolve.js';
 
 const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
-const MAX_HANDLER_DEPTH = 6;
-
-// merge one scan's findings into another (same contract as the Nest extractor's).
-function mergeScan(into, add) {
-  into.effects.push(...add.effects);
-  into.returnShapes = [...(into.returnShapes ?? []), ...(add.returnShapes ?? [])];
-  into.calls = [...(into.calls ?? []), ...(add.calls ?? [])];
-  into.validatesInput = into.validatesInput || add.validatesInput;
-  into.async = into.async || add.async;
-  if (add.guardSignals?.deniesWithStatus) into.guardSignals.deniesWithStatus = true;
-}
-
-// depth-first walk over an AST subtree, invoking fn on every node.
-function walkAst(node, fn) {
-  if (!node || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    for (const n of node) walkAst(n, fn);
-    return;
-  }
-  if (typeof node.type === 'string') fn(node);
-  for (const k of Object.keys(node)) {
-    if (
-      k === 'loc' ||
-      k === 'range' ||
-      k === 'leadingComments' ||
-      k === 'trailingComments'
-    )
-      continue;
-    const v = node[k];
-    if (v && typeof v === 'object') walkAst(v, fn);
-  }
-}
-
-function walkCalls(node, fn) {
-  walkAst(node, (n) => {
-    if (n.type === 'CallExpression') fn(n);
-  });
-}
-
-// varName → class name for every `const svc = new X(…)` (or `svc = new X(…)`)
-// in the subtree — the raw material of instantiated-service resolution.
-function collectInstances(fnNode) {
-  const map = new Map();
-  walkAst(fnNode, (node) => {
-    if (
-      node.type === 'VariableDeclarator' &&
-      node.id?.type === 'Identifier' &&
-      node.init?.type === 'NewExpression' &&
-      node.init.callee.type === 'Identifier'
-    )
-      map.set(node.id.name, node.init.callee.name);
-    else if (
-      node.type === 'AssignmentExpression' &&
-      node.left.type === 'Identifier' &&
-      node.right?.type === 'NewExpression' &&
-      node.right.callee.type === 'Identifier'
-    )
-      map.set(node.left.name, node.right.callee.name);
-  });
-  return map;
-}
 
 // → { routes, globalMiddlewares, helpers, skipped, scannedFiles }
 export function extractExpress(cwd, entryFile) {
@@ -87,7 +20,10 @@ export function extractExpress(cwd, entryFile) {
   const scannedFiles = [];
   const visited = new Set();
   const mounts = [];
-  const classBundles = new Map(); // memo of resolved class methods — per extract
+  // the interprocedural engine (ADR-054): follows service/model calls below each
+  // handler — module members, instantiated classes, this./super. hops — bounded,
+  // memoized per extract, appending discoveries into scannedFiles/helpers.
+  const resolver = createResolver({ cwd, scannedFiles, helpers });
 
   scanFile(path.resolve(cwd, entryFile), '', 0);
   // growing queue, NOT a snapshot: a mounted router file can itself mount
@@ -308,7 +244,7 @@ export function extractExpress(cwd, entryFile) {
           sourceFile: relFile,
           sourceLine: fnArg.loc?.start.line ?? 0,
           fn: fnArg,
-          scan: deepScan(fnArg, mod),
+          scan: resolver.deepScan(fnArg, mod),
         };
       }
       // factory middleware: validate(schema), rateLimit({…}) — the factory
@@ -344,7 +280,7 @@ export function extractExpress(cwd, entryFile) {
             sourceFile: fromRel,
             sourceLine: fn.line,
             fn: fn.node,
-            scan: deepScan(fn.node, target), // follow service/model calls below it
+            scan: resolver.deepScan(fn.node, target), // follow service/model calls below it
           };
         }
       }
@@ -365,7 +301,7 @@ export function extractExpress(cwd, entryFile) {
         sourceFile: relFile,
         sourceLine: local.line,
         fn: local.node,
-        scan: deepScan(local.node, mod),
+        scan: resolver.deepScan(local.node, mod),
       };
     }
     const importedFrom = mod.imports.get(arg.name);
@@ -389,7 +325,7 @@ export function extractExpress(cwd, entryFile) {
           sourceFile: fromRel,
           sourceLine: fn.line,
           fn: fn.node,
-          scan: deepScan(fn.node, target),
+          scan: resolver.deepScan(fn.node, target),
         };
       }
     }
@@ -403,166 +339,7 @@ export function extractExpress(cwd, entryFile) {
   }
 
   function rel(abs) {
-    return path.relative(cwd, abs).split(path.sep).join('/');
-  }
-
-  // A handler's real effects = its own body PLUS every module-member call it makes,
-  // followed recursively: `authController.register` → `userService.createUser` →
-  // `User.create()`. This is the CommonJS analogue of the Nest DI hop — the effect is
-  // usually two or three modules below the route, behind `service.method()` calls the
-  // flat scanner can't see. Precomputed so translate uses it as-is (like the Nest scan).
-  //
-  // The same walk also resolves INSTANTIATED services — `const svc = new XService(…);
-  // svc.readMany(…)` (directus and every class-service Express app) — through the
-  // class's `extends` chain, including `this.<m>()` / `super.<m>()` hops inside the
-  // resolved methods. `this.<m>()` dispatches from the INSTANTIATED class, so an
-  // override (ActivityService.readByQuery) wins over the base method it shadows.
-  function deepScan(fnNode, owningMod) {
-    const base = scanFunction(fnNode);
-    const merged = {
-      ...base,
-      effects: [...base.effects],
-      returnShapes: [...(base.returnShapes ?? [])],
-      calls: [...(base.calls ?? [])],
-    };
-    followCalls(fnNode, owningMod, merged, new Set(), 0, null, new Set());
-    return merged;
-  }
-
-  // `seen` dedups sub-scans merged into THIS target; `stack` is the class-method
-  // cycle guard and spans the whole recursion; `clsCtx` (top + declaring class) is
-  // set while walking a class-method body so `this.` / `super.` calls resolve.
-  function followCalls(fnNode, mod, merged, seen, depth, clsCtx, stack) {
-    if (depth >= MAX_HANDLER_DEPTH) return;
-    const instances = collectInstances(fnNode);
-    walkCalls(fnNode, (node) => {
-      const callee = node.callee;
-      if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier')
-        return;
-      const method = callee.property.name;
-      const obj = callee.object;
-
-      // instantiated service: `svc.method()` where `const svc = new X(…)`,
-      // or the direct `new X(…).method()` chain
-      const className =
-        obj.type === 'Identifier' && instances.has(obj.name)
-          ? instances.get(obj.name)
-          : obj.type === 'NewExpression' && obj.callee.type === 'Identifier'
-            ? obj.callee.name
-            : null;
-      if (className) {
-        const bundle = classBundle(className, method, mod, depth, stack);
-        if (bundle && !seen.has(bundle.key)) {
-          seen.add(bundle.key);
-          mergeScan(merged, bundle);
-        }
-        return;
-      }
-
-      // inside a resolved class method: this.<m>() re-dispatches from the top
-      // (instantiated) class; super.<m>() from the declaring class's base
-      if (clsCtx && obj.type === 'ThisExpression') {
-        const bundle = classMethodBundle(
-          clsCtx.topCls,
-          clsCtx.topMod,
-          method,
-          depth,
-          stack,
-        );
-        if (bundle && !seen.has(bundle.key)) {
-          seen.add(bundle.key);
-          mergeScan(merged, bundle);
-        }
-        return;
-      }
-      if (clsCtx && obj.type === 'Super') {
-        const base = baseClassOf(clsCtx.declCls, clsCtx.declMod);
-        const bundle = base
-          ? classMethodBundle(base.cls, base.mod, method, depth, stack)
-          : null;
-        if (bundle && !seen.has(bundle.key)) {
-          seen.add(bundle.key);
-          mergeScan(merged, bundle);
-        }
-        return;
-      }
-
-      if (obj.type !== 'Identifier') return;
-      const targetFile = mod.imports.get(obj.name);
-      if (!targetFile) return;
-      const targetMod = parseModule(targetFile);
-      if (targetMod.error) return;
-      const fn = targetMod.functions.get(method);
-      if (!fn) return;
-      const key = `${targetFile}#${method}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const fromRel = rel(targetFile);
-      if (!scannedFiles.includes(fromRel)) scannedFiles.push(fromRel);
-      helpers.push({
-        name: `${obj.name}.${method}`,
-        sourceFile: fromRel,
-        sourceLine: fn.line,
-        fn: fn.node,
-      });
-      mergeScan(merged, scanFunction(fn.node));
-      followCalls(fn.node, targetMod, merged, seen, depth + 1, null, stack);
-    });
-  }
-
-  // `new X(…)` → class X (imported, or declared in the same module) → the
-  // memoized bundle of X.<methodName>.
-  function classBundle(className, methodName, mod, depth, stack) {
-    const file = mod.imports.get(className);
-    const clsMod = file ? parseModule(file) : mod;
-    if (clsMod.error) return null;
-    const cls = classInModule(clsMod, className);
-    if (!cls) return null;
-    return classMethodBundle(cls, clsMod, methodName, depth, stack);
-  }
-
-  // The fully-resolved scan of `<topCls>.<methodName>` — its body plus everything
-  // reachable below it — memoized per (instantiated class, method) across the whole
-  // extract, so a service method reached by N routes is resolved once (same
-  // rationale as the Nest bundleCache; twenty took 34s without it). A bundle is
-  // computed with its OWN dedup set, so the memo never stores a partial.
-  function classMethodBundle(topCls, topMod, methodName, depth, stack) {
-    if (depth >= MAX_HANDLER_DEPTH) return null;
-    const hit = methodInClassChain(topCls, topMod, methodName);
-    if (!hit) return null;
-    const key = `${topMod._file ?? ''}#${topCls.id?.name ?? 'anonymous'}.${methodName}`;
-    const cached = classBundles.get(key);
-    if (cached) return cached;
-    if (stack.has(key)) return null; // reference cycle — contribute nothing, don't cache
-    stack.add(key);
-    const base = scanFunction(hit.fn);
-    const bundle = {
-      ...base,
-      key,
-      effects: [...base.effects],
-      returnShapes: [...(base.returnShapes ?? [])],
-      calls: [...(base.calls ?? [])],
-    };
-    const declRel = rel(hit.mod._file ?? '');
-    if (!scannedFiles.includes(declRel)) scannedFiles.push(declRel);
-    helpers.push({
-      name: `${topCls.id?.name ?? 'anonymous'}.${methodName}`,
-      sourceFile: declRel,
-      sourceLine: hit.fn.loc?.start.line ?? 0,
-      fn: hit.fn,
-    });
-    followCalls(
-      hit.fn,
-      hit.mod,
-      bundle,
-      new Set(),
-      depth + 1,
-      { topCls, topMod, declCls: hit.cls, declMod: hit.mod },
-      stack,
-    );
-    stack.delete(key);
-    classBundles.set(key, bundle);
-    return bundle;
+    return relOf(cwd, abs);
   }
 }
 

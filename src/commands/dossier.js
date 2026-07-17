@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
-import { checkGraph, verdictOf } from '../ubg/apocalypse.js';
+import { checkGraph, verdictOf, verdictState } from '../ubg/apocalypse.js';
 import { surveyBlindspots } from '../ubg/blindspots.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { AXES, POLARITY_SYMBOL, exposedAxes } from '../ubg/polarity.js';
@@ -19,9 +19,9 @@ export async function runDossier(opts) {
   const compiled = compileUBG(opts.cwd, { write: false, openapi: opts.openapi });
   const canonical = canonicalizeGraph(compiled.graph);
   const { findings, polarity } = checkGraph(canonical);
-  const verdict = verdictOf(findings, canonical);
   const capsule = buildCapsule(canonical);
   const blindspots = surveyBlindspots(canonical, compiled.report);
+  const verdict = verdictOf(findings, canonical, { coverage: blindspots.coverage.ratio });
 
   const data = {
     app: path.basename(path.resolve(opts.cwd)) || 'app',
@@ -32,6 +32,8 @@ export async function runDossier(opts) {
     edges: canonical.edges.length,
     provable: verdict.provable,
     proven: verdict.provable && verdict.clean,
+    state: verdictState(verdict),
+    coverage: Math.round(blindspots.coverage.ratio * 100),
     surfaceOnly: verdict.surfaceOnly,
     guards: verdict.guards,
     guardsVerified: verdict.guardsVerified,
@@ -54,11 +56,22 @@ export async function runDossier(opts) {
   const outPath = path.join(opts.cwd, '.sparda', 'dossier.html');
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   atomicWrite(outPath, html);
+  const WORD = {
+    PROVEN: '✓ PROVEN',
+    PARTIAL: '◑ PROVEN (PARTIAL)',
+    RISKY: '⚠ RISKY',
+    NOT_PROVEN: '✗ NOT PROVEN',
+    SURFACE: '◐ SURFACE ONLY',
+    NO_PROOF: '✗ NO PROOF',
+  };
   console.log(
-    `DOSSIER — ${data.routes} route(s), verdict ${data.proven ? '✓ PROVEN' : data.provable ? '✗ NOT PROVEN' : '✗ NO PROOF'}`,
+    `DOSSIER — ${data.routes} route(s) · coverage ${data.coverage}% · verdict ${WORD[data.state] ?? data.state}`,
   );
   console.log(
     `  written: .sparda/dossier.html (${html.length} bytes, self-contained) — open it in any browser.`,
+  );
+  console.log(
+    `  📸 one screenshotable page — the verdict, the risks, and SPARDA's own blind spots. Share it.`,
   );
   console.log(
     `  ephemeral: .sparda/ is gitignored, so it vanishes on \`sparda remove\` — save it to keep it.`,
@@ -83,21 +96,43 @@ const SEV_COLOR = {
 };
 
 export function renderDossierHTML(d) {
-  const verdictClass = d.proven ? 'ok' : d.surfaceOnly ? 'warn' : 'bad';
-  const verdictText = d.proven
-    ? 'PROVEN'
-    : d.surfaceOnly
-      ? 'SURFACE ONLY — routes seen, no behavior resolved'
-      : d.provable
-        ? 'NOT PROVEN'
-        : 'NO PROOF — the app’s routes could not be read';
-  const verdictLede = d.proven
-    ? 'No declared guard, invariant, transaction or aggregate boundary can be broken by this code.'
-    : d.surfaceOnly
-      ? 'SPARDA saw the route surface but no state or side-effects behind it — there was nothing to prove. This is NOT a clean bill of health (a spec, or an effect-resolution gap).'
-      : d.provable
-        ? `SPARDA found ${d.counts.critical} critical and ${d.counts.high} high risk(s) that must be fixed before this ships.`
-        : 'SPARDA could not see this app’s route surface — this is not a clean bill of health.';
+  // The verdict word comes from the shared state (single source of truth). Back-compat: derive
+  // it from the older booleans when a caller passes no `state` (e.g. legacy tests). PARTIAL is
+  // honest — a clean proof over only part of the surface never reads as a bare PROVEN.
+  const state =
+    d.state ??
+    (!d.provable
+      ? 'NO_PROOF'
+      : d.surfaceOnly
+        ? 'SURFACE'
+        : d.proven
+          ? 'PROVEN'
+          : 'NOT_PROVEN');
+  const verdictClass =
+    state === 'PROVEN'
+      ? 'ok'
+      : state === 'PARTIAL' || state === 'SURFACE' || state === 'RISKY'
+        ? 'warn'
+        : 'bad';
+  const verdictText = {
+    PROVEN: 'PROVEN',
+    PARTIAL: 'PROVEN (PARTIAL)',
+    RISKY: 'RISKY',
+    SURFACE: 'SURFACE ONLY — routes seen, no behavior resolved',
+    NOT_PROVEN: 'NOT PROVEN',
+    NO_PROOF: 'NO PROOF — the app’s routes could not be read',
+  }[state];
+  const verdictLede = {
+    PROVEN:
+      'No declared guard, invariant, transaction or aggregate boundary can be broken by this code.',
+    PARTIAL: `SPARDA proved the resolved surface (${d.coverage ?? Math.round((d.blindspots?.coverage?.ratio ?? 1) * 100)}%) with 0 violations — but the rest of the app was invisible to static analysis and is UNPROVEN, not safe.`,
+    RISKY: `SPARDA found no critical/high risk, but ${d.counts.medium + d.counts.info} finding(s) to review before this is a clean proof.`,
+    SURFACE:
+      'SPARDA saw the route surface but no state or side-effects behind it — there was nothing to prove. This is NOT a clean bill of health (a spec, or an effect-resolution gap).',
+    NOT_PROVEN: `SPARDA found ${d.counts.critical} critical and ${d.counts.high} high risk(s) that must be fixed before this ships.`,
+    NO_PROOF:
+      'SPARDA could not see this app’s route surface — this is not a clean bill of health.',
+  }[state];
 
   const cell = (v) => {
     const cls = v === -1 ? 'neg' : v === 1 ? 'pos' : 'na';
@@ -164,6 +199,9 @@ export function renderDossierHTML(d) {
   .top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:16px;font-family:var(--mono);font-size:13px;color:var(--faint)}
   .top b{color:var(--ink);letter-spacing:.12em}
   .hero{padding:48px 0 32px}
+  .verdict-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .cov{font-family:var(--mono);font-size:14px;color:var(--faint);padding:10px 18px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .cov b{color:var(--ink);font-size:18px}
   .stamp{display:inline-flex;align-items:center;gap:12px;font-family:var(--mono);font-weight:700;font-size:16px;padding:12px 24px;border-radius:12px;border:1.5px solid;letter-spacing:.03em;box-shadow:0 4px 12px -4px color-mix(in oklch,currentColor 30%,transparent)}
   .stamp .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in oklch,currentColor 22%,transparent)}
   .ok{color:var(--green);border-color:var(--green);background:color-mix(in oklch,var(--green) 10%,transparent)}
@@ -198,13 +236,16 @@ export function renderDossierHTML(d) {
   <div class="top"><b>SPARDA</b><span>AI writes. SPARDA proves.</span></div>
 
   <section class="hero">
-    <span class="stamp ${verdictClass}"><span class="dot"></span>${esc(verdictText)}</span>
+    <div class="verdict-row">
+      <span class="stamp ${verdictClass}"><span class="dot"></span>${esc(verdictText)}</span>
+      <span class="cov" title="share of the app's behavior SPARDA resolved and reasoned about">coverage&nbsp;<b>${b.coverage ? (b.coverage.ratio * 100).toFixed(0) : (d.coverage ?? 0)}%</b></span>
+    </div>
     <p>${esc(verdictLede)}</p>
     <div class="stats">
       ${statCard(d.routes, 'routes')}
+      ${statCard((b.coverage.ratio * 100).toFixed(0) + '%', 'behavior resolved')}
       ${statCard(d.nodes, 'graph nodes')}
       ${statCard(d.tables, 'data tables')}
-      ${statCard(d.capsuleBytes + ' B', 'safety capsule')}
       ${statCard(esc(d.framework), 'framework')}
     </div>
     ${

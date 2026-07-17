@@ -1,0 +1,1 @@
+{ "name": "mono-suggest", "private": true, "workspaces": ["apps/*","packages/*"] }

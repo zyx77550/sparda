@@ -12,6 +12,7 @@
 // contribution; capsules compose (posture column-sums stack app → fleet → world).
 import { fingerprintGraph } from './fingerprint.js';
 import { checkGraph, countObserved } from './apocalypse.js';
+import { surveyBlindspots } from './blindspots.js';
 import { cmp } from './schema.js';
 import { AXES, posture, provenByPolarity, packVector, exposedAxes } from './polarity.js';
 
@@ -33,10 +34,16 @@ export function buildCapsule(graph) {
   // surface-only apps (routes but zero observed behavior) are NOT proven — the same
   // honesty guard the apocalypse verdict applies, so capsule and verdict never disagree.
   const surfaceOnly = routes.length > 0 && countObserved(graph) === 0;
+  // coverage travels WITH the proof: a capsule that proves 8% of what it saw is honest
+  // only if it says so. The genome inherits this, so the world memory carries not just
+  // "proven" but "proven over how much" — a verdict's confidence, made portable.
+  const survey = surveyBlindspots(graph);
   return {
     v: CAPSULE_VERSION,
     proven: !surfaceOnly && provenByPolarity(polarity),
     surfaceOnly,
+    coverage: survey.coverage.ratio,
+    blindHigh: survey.byRisk.critical + survey.byRisk.high,
     routes,
     posture: posture(polarity),
     bytes: routes.length, // the whole app's safety, one byte per route

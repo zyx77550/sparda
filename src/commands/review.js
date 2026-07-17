@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph, cmp } from '../ubg/schema.js';
 import { checkGraph, diffGraphs, verdictOf } from '../ubg/apocalypse.js';
+import { surveyBlindspots } from '../ubg/blindspots.js';
 
 const ICONS = { critical: '✗', high: '✗', medium: '⚠', info: '·' };
 const err = (message, hint) => Object.assign(new Error(message), { code: 'USER', hint });
@@ -58,11 +59,22 @@ export function reviewGraphs(baseGraph, candidateGraph) {
   const added = [...candEps].filter((e) => !baseEps.has(e)).sort(cmp);
   const removedEps = [...baseEps].filter((e) => !candEps.has(e)).sort(cmp);
 
+  // how much of the changed app SPARDA could actually see — and whether this PR moved
+  // that boundary. A green review over a graph the PR made 20% blinder is not the same
+  // as a green review at full sight; the reviewer must be able to tell them apart.
+  const candCov = surveyBlindspots(candidateGraph).coverage.ratio;
+  const baseCov = surveyBlindspots(baseGraph).coverage.ratio;
+
   return {
-    verdict: verdictOf(findings, candidateGraph),
+    verdict: verdictOf(findings, candidateGraph, { coverage: candCov }),
     obligations,
     findings,
     endpoints: { added, removed: removedEps },
+    coverage: {
+      now: candCov,
+      base: baseCov,
+      delta: Math.round((candCov - baseCov) * 1000) / 1000,
+    },
   };
 }
 
@@ -160,6 +172,18 @@ function renderHuman(r) {
     console.log(`  - removed endpoints: ${endpoints.removed.map(shortEp).join(', ')}`);
   if (!endpoints.added.length && !endpoints.removed.length)
     console.log('  · no endpoints added or removed');
+  if (r.coverage) {
+    const d = r.coverage.delta;
+    const move =
+      d > 0.005
+        ? ` (▲ +${(d * 100).toFixed(0)}%)`
+        : d < -0.005
+          ? ` (▼ ${(d * 100).toFixed(0)}% — harder to see)`
+          : '';
+    console.log(
+      `  · coverage: ${(r.coverage.now * 100).toFixed(0)}% of observed behavior resolved${move}`,
+    );
+  }
 
   if (findings.length) {
     console.log('\n  Behavior risks changed by this diff:');
@@ -191,6 +215,17 @@ function renderMarkdown(r) {
       ? '✓ **PROVEN** — no protection removed, no new risk introduced.'
       : `${v.safe ? '⚠ **RISKY**' : '✗ **NOT PROVEN**'} — ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.info} info.`;
   const lines = [`## 🔍 SPARDA semantic review (vs \`${r.base}\`)`, '', head, ''];
+  if (r.coverage) {
+    const pct = (r.coverage.now * 100).toFixed(0);
+    const d = r.coverage.delta;
+    const move =
+      d > 0.005
+        ? ` (▲ +${(d * 100).toFixed(0)}% vs base)`
+        : d < -0.005
+          ? ` (▼ ${(d * 100).toFixed(0)}% vs base — this PR made the app harder to see)`
+          : '';
+    lines.push(`**Coverage:** ${pct}% of observed behavior resolved${move}`, '');
+  }
   if (endpoints.added.length || endpoints.removed.length) {
     lines.push('### Endpoint surface');
     for (const e of endpoints.added) lines.push(`- 🆕 \`${shortEp(e)}\``);

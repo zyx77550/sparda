@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // SPARDA — Turn any codebase into an MCP server. Residual Labs.
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -33,7 +34,10 @@ const opts = {
   openapi: getOpt('openapi', null),
   expect: getOpt('expect', null),
   agent: getOpt('agent', null),
-  cwd: process.cwd(),
+  // Point SPARDA at a sub-directory without `cd` — essential in a monorepo (the app lives in
+  // apps/web, packages/api, …) and for reproducing a result in place. `--dir` and `--cwd` are
+  // aliases; resolved against the real working directory. Every command reads opts.cwd.
+  cwd: path.resolve(process.cwd(), getOpt('dir', null) ?? getOpt('cwd', null) ?? '.'),
 };
 
 try {
@@ -102,9 +106,19 @@ try {
       await runEvolve(opts);
       break;
     }
+    case 'prove': {
+      const { runProve } = await import('./commands/prove.js');
+      await runProve(opts);
+      break;
+    }
     case 'ubg': {
       const { runUbg } = await import('./commands/ubg.js');
       await runUbg(opts);
+      break;
+    }
+    case 'badge': {
+      const { runBadge } = await import('./commands/badge.js');
+      await runBadge(opts);
       break;
     }
     case 'apocalypse': {
@@ -177,45 +191,56 @@ try {
       await runHeal(opts, rest);
       break;
     }
-    default:
-      console.log(`SPARDA v${VERSION} — Turn any codebase into an MCP server.
+    default: {
+      const labs = process.argv.includes('--labs');
+      console.log(`SPARDA v${VERSION} — AI writes. SPARDA proves.
 
-Usage:
-  npx sparda-mcp demo      Guided tour on a bundled app — no setup, nothing touched
-  npx sparda-mcp init      Scan project, generate & inject the MCP router
-  npx sparda-mcp dev       Run the MCP stdio bridge (connect Claude Desktop)
-  npx sparda-mcp sync      Re-sync the router after route changes (no prompts)
-  npx sparda-mcp hook      Install the git sentinel (auto-sync after commits)
-  npx sparda-mcp remove    Remove SPARDA from this project (clean git diff)
-  npx sparda-mcp doctor    Diagnose your setup (--app: negentropy scan — drift, dead routes, rot)
-  npx sparda-mcp report    The black box: what AI agents did to this app
-  npx sparda-mcp seed      Export/import the learned genome (export [--out f] | import <f> [--germinate])
-  npx sparda-mcp twin      The living mock (--learn from the live app, then serve the ghost)
-  npx sparda-mcp grammar   Which call sequences mean something (observed + hypotheses)
-  npx sparda-mcp evolve    Trial hypothesis chains against the twin; survivors become suggestions
-  npx sparda-mcp ubg       Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
-  npx sparda-mcp apocalypse  Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
-  npx sparda-mcp review    Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
-  npx sparda-mcp fingerprint  Portable behavior hash per route — the address for shared diagnoses (--json)
-  npx sparda-mcp polarity  Ternary safety matrix per route — proof as arithmetic (--json)
-  npx sparda-mcp immunize  Freeze proven safety into a tiny capsule (1 byte/route) — .sparda/immunity.json
-  npx sparda-mcp speculate  Re-verify vs the frozen capsule by lookup — full proof only on novel shapes (--json)
-  npx sparda-mcp dossier   Render the whole proof as one self-contained HTML page anyone can read (.sparda/dossier.html)
-  npx sparda-mcp blindspots  Map SPARDA's own blindness: every unseen route/effect/guard, ranked by what it could hide (--json)
-  npx sparda-mcp genome    Sign this app's proofs into the shared world memory — self-verifying antibodies, zero infra (--json)
-  npx sparda-mcp timeless  Replay production requests (list | replay <id> | export <id> → vitest)
-  npx sparda-mcp mirror    Serve the compiled graph over HTTP — no framework, no source (--port)
-  npx sparda-mcp openapi   Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
-  npx sparda-mcp verify    Prove the compiler's own laws (determinism, soundness, round-trip) on this app
-  npx sparda-mcp heal      Close the loop: <flightId> writes the fix brief; --check gates the fix
-                           (--expect '{"status":200}' states correctness; --agent "cmd" lets an AI try)
+PROVE — the point
+  prove        The whole trust verdict in one gesture: proof + coverage + seal (--json / --markdown / --openapi)
+  apocalypse   Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
+  review       Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
+  blindspots   Map SPARDA's own blindness — every unseen route/effect/guard, ranked (--json)
+  badge        Emit a shareable SVG badge + README snippet (verdict · coverage · routes)
+  dossier      Render the whole proof as one self-contained HTML page anyone can read
+  verify       Prove the compiler's own laws (determinism, soundness, round-trip)
+  heal         Turn a production bug into a fix brief + a gate (--check / --expect / --agent)
 
-Flags: --yes (skip prompts)  --port <n>  --quiet  --verbose
-       --probe (init: also run the app to discover dynamic routes the AST missed)
-       --html / --json (report: write .sparda/report.html / print raw JSON)
+IMMUNITY — the portable proof
+  fingerprint  Portable behavior hash per route — the address for shared diagnoses (--json)
+  immunize     Freeze proven safety into a tiny capsule (1 byte/route)
+  speculate    Re-verify vs the frozen capsule — full proof only on novel shapes (--json)
+  polarity     Ternary safety matrix per route — proof as arithmetic (--json)
+  genome       Sign proofs into the shared world memory — self-verifying antibodies, zero infra
+
+INGEST & RUNTIME
+  ubg          Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json)
+  openapi      Emit an OpenAPI 3.1 spec FROM the graph (--out / --json)
+  mirror       Serve the compiled graph over HTTP — no framework, no source (--port)
+  timeless     Replay production requests (list | replay <id> | export <id> → vitest)
+
+SETUP — the MCP lifecycle
+  demo         Guided tour on a bundled app — no setup, nothing touched
+  init         Scan project, generate & inject the MCP router
+  dev          Run the MCP stdio bridge (connect Claude Desktop)
+  sync         Re-sync the router after route changes · hook  Install the git sentinel
+  doctor       Diagnose your setup (--app: rot scan) · report  What AI agents did to this app
+  remove       Remove SPARDA from this project (clean git diff)
+${
+  labs
+    ? `
+LABS — experimental, not load-bearing (--labs)
+  seed         Export/import the learned genome (export [--out f] | import <f>)
+  twin         The living mock (--learn from the live app, then serve the ghost)
+  grammar      Which call sequences mean something (observed + hypotheses)
+  evolve       Trial hypothesis chains against the twin; survivors become suggestions
+`
+    : `\nRun \`sparda --labs\` to see experimental commands.`
+}
+Flags: --dir <path>  --yes  --json  --markdown  --openapi <spec>  --port <n>  --base <ref>  --quiet  --verbose
 
 By Residual Labs — residual-labs.fr`);
       process.exit(cmd ? 1 : 0);
+    }
   }
 } catch (err) {
   console.error(`\n✗ ${err?.message ?? err}`);

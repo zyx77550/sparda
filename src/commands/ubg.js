@@ -5,6 +5,7 @@
 // committed. `--json` prints the raw graph, `--out <file>` redirects it.
 import { compileUBG } from '../ubg/compile.js';
 import { cmp } from '../ubg/schema.js';
+import { suggestAppDirs } from '../detect.js';
 
 export async function runUbg(opts) {
   const { report, json, outPath } = compileUBG(opts.cwd, {
@@ -25,6 +26,24 @@ export async function runUbg(opts) {
   console.log(
     `  ${report.framework} · ${report.routes} routes · ${report.tables} SQL tables`,
   );
+  // Never a silent "0 routes" — the #1 time-to-wow killer. Point the user at the app.
+  if (report.routes === 0) {
+    const dirs = suggestAppDirs(opts.cwd);
+    if (dirs.length) {
+      console.log(
+        `  ◐ 0 routes here — this looks like a monorepo. The app is likely in:`,
+      );
+      for (const d of dirs.slice(0, 4))
+        console.log(`      cd ${d.dir} && sparda ubg   # looks like ${d.framework}`);
+    } else {
+      console.log(
+        `  ◐ 0 routes — SPARDA saw the framework but no route handlers. Run with --verbose,`,
+      );
+      console.log(
+        `    or open an issue with your layout: github.com/zyx77550/sparda/issues`,
+      );
+    }
+  }
   console.log(`  Nodes: ${fmtCounts(counts.nodes)}`);
   console.log(`  Edges: ${fmtCounts(counts.edges)}`);
 
