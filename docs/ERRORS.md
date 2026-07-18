@@ -773,7 +773,7 @@ app.use('/x', xRouter); return app; }`.
 ## E-041 — prisma `...OrThrow` / `createManyAndReturn` unrecognized: missed reads AND writes
 
 - **Symptom:** while measuring the BOLA surface, dub's `findUniqueOrThrow({ where: { id,
-  projectId: workspace.id } })` — the ownership-scoping fetch that precedes a delete — was
+projectId: workspace.id } })` — the ownership-scoping fetch that precedes a delete — was
   invisible, so a properly-scoped route (`DELETE /api/webhooks/:webhookId`) read as an
   unscoped BOLA candidate. dub gained **+104 db_reads** once fixed.
 - **Root cause:** `PRISMA_OPS` listed `findUnique`/`findFirst`/`create` but not their
@@ -828,7 +828,7 @@ app.use('/x', xRouter); return app; }`.
   out-of-the-box on the framework repo itself. A skeptic cloning Medusa and running SPARDA on
   `packages/medusa` got 1 route (mis-detected as express), 0 from the monorepo root — enough
   to conclude "bullshit" in two minutes. The heroic figure only appeared on a `create-medusa-
-  app` scaffold (which carries the runtime dep).
+app` scaffold (which carries the runtime dep).
 - **Root cause:** two-fold. (1) Medusa detection keyed off a runtime dep
   (`@medusajs/medusa`/`@medusajs/framework`), but the framework's OWN packages list
   `@medusajs/framework` in **devDeps** and never depend on themselves — so a dep check misses
@@ -922,3 +922,61 @@ app.use('/x', xRouter); return app; }`.
   and names the missing scope in the message ("commission should be direct-owner (userid)"). Still
   advisory — the schema reveals the model, never the runtime intent (the semantic gap OWASP/BolaRay
   name as why no static tool can PROVE access control). dub: 50/60 advisories now carry a model.
+
+## E-047 — a bare "PROVEN" over many high-risk blind spots overclaims (the blind-spot rung)
+
+- **Symptom (the cal.com giant test):** `cal.com/apps/api/v2` (NestJS, 175 routes) read `✓ PROVEN`
+  at 71% coverage — above E-044's 60% completeness bar — while carrying **46 high-risk blind
+  spots**: guarded, state-changing routes whose _write_ never resolved (controller → injected
+  service → repo). Not a cardinal false-PROVEN (the guards WERE seen; SPARDA fabricated nothing and
+  disclosed the blind spots), but the headline word over-impressed: 46 guarded mutations were never
+  actually proven safe, yet the verdict read a bare PROVEN.
+- **Root cause:** coverage is a RATIO. E-044's PARTIAL rung tripped only on `coverage <
+COVERAGE_COMPLETE`. On a huge app the ratio can clear 60% while the ABSOLUTE count of high-risk
+  blind spots is large — the ratio hides the scale. The verdict never looked at `blindHigh`.
+- **Fix (shipped):** `verdictOf(..., { coverage, blindHigh })` — a clean app is now PARTIAL when
+  `coverage < 0.6` **OR** `blindHigh > 0`. Every whole-app surface (prove, apocalypse, badge,
+  dossier, review, the `sparda_prove` MCP tool, the bench) passes `blindHigh = byRisk.critical +
+byRisk.high` from the same `surveyBlindspots` it already computes — single source of truth, so the
+  badge/CLI/live-tool words can never disagree. cal.com/api/v2 → `◑ PROVEN (PARTIAL)`, badge
+  `partial · 71%`. `blindHigh` defaults to 0, so a partial-graph caller (heal delta) is unaffected.
+- **Soundness:** the rung only ever SOFTENS PROVEN→PARTIAL — it never masks a finding (a hard
+  finding still drops `clean`), never changes the CI gate (`safe` is untouched), and PARTIAL still
+  means "clean, just qualified." Analogy: metrology's error bars — a measurement with an unmeasured
+  high-risk population is reported with its uncertainty, not as a point fact.
+- **Rule:** the strong word is reserved for the strong claim. "No violation in the 71% I resolved,
+  but 46 high-risk mutations I could not read" is PARTIAL — the verdict must carry the uncertainty
+  in the word, not only in a line beneath it.
+
+## E-048 — a monorepo app's writes live in sibling workspace packages, imported by name (blind)
+
+- **Symptom (the cal.com giant test, root of P1):** `cal.com/apps/api/v2`'s controllers call
+  `this.eventTypesService.updateEventType(...)`, which delegates to an `updateEventType` imported
+  from `@calcom/platform-libraries`, which re-exports `updateHandler` from `@calcom/trpc/.../update.handler`,
+  where the real `prisma.eventType.update()` lives — **three workspace packages away, entirely
+  outside the analyzed app dir.** SPARDA resolved the `@/` tsconfig alias _within_ the package but
+  not `@calcom/*` _across_ workspace packages, so every such write was a `blind-mutation` (46 high).
+- **Root cause:** `resolveRelImport` handled relative paths + tsconfig `paths`/`baseUrl`, but a
+  workspace-package specifier (`@scope/pkg`) is resolved by the workspace (pnpm/yarn/npm), not by
+  `paths` — SPARDA had no model of the monorepo, so those imports dead-ended.
+- **Fix (shipped):** the workspace resolver (the "mycorrhizal network"). `resolveRelImport` now
+  falls back to `resolveWorkspaceImport`: walk up to the monorepo root (a `package.json` with
+  `workspaces`, or a `pnpm-workspace.yaml`), build a name→dir map from the workspace globs (cached
+  once per root), and map `@scope/pkg[/subpath]` to the real source file under it (longest-name
+  match wins; a bare npm package like `@nestjs/common` stays unresolved, as before). The effect
+  then crosses the package boundary through the existing DI/barrel followers.
+- **Measured (A/B on cal.com/apps/api/v2, 175 routes):** coverage **71% → 87%**, high blind spots
+  **46 → 38**, and it surfaces **real** previously-invisible unguarded mutations —
+  `POST /verification/email/send-code` has no `@UseGuards` while its authenticated siblings do, so
+  the verdict moves from a hopeful `PARTIAL` to an accurate `NOT_PROVEN`. No crash, ~1.9s, no
+  corpus drift (the committed fixtures aren't workspaces).
+- **State layer too (P4, shipped):** the same name→dir map feeds `parsePrismaSchemas`. When an app
+  declares no schema of its own but depends on a shared `@scope/prisma`-style workspace package,
+  SPARDA now parses that package's schema as the app's state layer. Measured on `cal.com/apps/web`:
+  **0 → 100 tables**, coverage **87% → 95%**, and the schema-dependent rules that were dormant
+  (`NON_ATOMIC_AGGREGATE_WRITE`, `UNVALIDATED_CONSTRAINED_WRITE`, `AGGREGATE_MEMBER_BYPASS`) become
+  measurable — 1 → 12 findings, all newly-visible real posture (the E-046 pattern), verdict
+  correctly still NOT_PROVEN. One resolver, both blind spots (effect code + schema).
+- **Rule:** the analyzed unit is the app, but its behavior is drawn from the whole workspace. A
+  shared package imported by name is part of the app's real surface — resolve into it, don't treat
+  the directory boundary as the behavior boundary.

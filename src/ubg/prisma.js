@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmp } from './schema.js';
+import { workspacePackages } from './extract.js';
 
 const SCHEMA_CANDIDATES = ['prisma/schema.prisma', 'schema.prisma', 'db/schema.prisma'];
 // Prisma's `prismaSchemaFolder` layout (stable since 6.x): the schema is SPLIT across many
@@ -55,6 +56,35 @@ function collectSchemaFiles(cwd, fileCandidates, dirCandidates) {
   return [];
 }
 
+// P4 (E-048, the mycorrhizal network for STATE): a monorepo app usually declares NO schema of
+// its own — it depends on a shared `@scope/prisma`-style workspace package that owns the whole
+// schema (cal.com: apps/web has 0 tables locally; `@calcom/prisma` has 100 models). Without
+// this the app's entire state layer is invisible and every mutation reasons against nothing.
+// When the app dir yields no schema, look through its workspace DEPENDENCIES for the package
+// that owns one — the same name→dir map the module resolver already builds. Schema-ish deps are
+// tried first (a `prisma`/`db` package is the DB package), then any remaining workspace dep.
+function workspaceSchemaFiles(cwd, fileCandidates, dirCandidates) {
+  let deps;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
+    deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  } catch {
+    return [];
+  }
+  const map = workspacePackages(path.join(cwd, 'package.json'));
+  if (!map) return [];
+  const inWorkspace = Object.keys(deps).filter((n) => map.has(n));
+  const ordered = [
+    ...inWorkspace.filter((n) => /prisma|schema|(^|[-/])db($|[-/])|database/i.test(n)),
+    ...inWorkspace.filter((n) => !/prisma|schema|(^|[-/])db($|[-/])|database/i.test(n)),
+  ];
+  for (const name of ordered) {
+    const files = collectSchemaFiles(map.get(name), fileCandidates, dirCandidates);
+    if (files.length) return files;
+  }
+  return [];
+}
+
 const TYPE_MAP = {
   string: 'string',
   int: 'number',
@@ -78,7 +108,11 @@ export function parsePrismaSchemas(cwd) {
   } catch {
     // no package.json / unparsable — the default candidates stand
   }
-  const files = collectSchemaFiles(cwd, candidates, SCHEMA_DIR_CANDIDATES);
+  // local first; then the workspace dependency that owns the shared schema (P4)
+  const local = collectSchemaFiles(cwd, candidates, SCHEMA_DIR_CANDIDATES);
+  const files = local.length
+    ? local
+    : workspaceSchemaFiles(cwd, candidates, SCHEMA_DIR_CANDIDATES);
   if (!files.length) return { tables: [], skipped, sourceFile: null };
 
   // Read + strip comments once per file; keep the relative path for correct per-table locs.

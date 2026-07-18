@@ -1,0 +1,16 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+enum OrderStatus { pending paid shipped }
+
+model User {
+  id    Int    @id @default(autoincrement())
+  email String @unique
+}
+
+model Order {
+  id      Int         @id @default(autoincrement())
+  status  OrderStatus @default(pending)
+  userId  Int
+  user    User        @relation(fields: [userId], references: [id])
+}

@@ -16,7 +16,10 @@ export async function runBadge(opts) {
   const canonical = canonicalizeGraph(graph);
   const { findings } = checkGraph(canonical);
   const blind = surveyBlindspots(canonical, report);
-  const verdict = verdictOf(findings, canonical, { coverage: blind.coverage.ratio });
+  const verdict = verdictOf(findings, canonical, {
+    coverage: blind.coverage.ratio,
+    blindHigh: blind.byRisk.critical + blind.byRisk.high,
+  });
   const cov = Math.round(blind.coverage.ratio * 100);
   const { state, message, color } = badgeFor(verdict, { coverage: blind.coverage.ratio });
 

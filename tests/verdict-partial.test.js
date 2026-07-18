@@ -60,3 +60,35 @@ describe('verdict — PROVEN-COMPLETE vs PARTIAL', () => {
     expect(v.partial).toBe(false);
   });
 });
+
+// E-047 — the blind-spot rung (from the cal.com giant test). Coverage is a RATIO; on a huge
+// app it can clear the completeness bar while the ABSOLUTE count of high-risk blind spots is
+// large (cal.com/api/v2: 71% coverage, yet 46 guarded mutations whose writes never resolved).
+// A bare PROVEN over those over-claims — so any high blind spot pulls a clean app to PARTIAL,
+// independent of the ratio. Sound: only ever softens PROVEN→PARTIAL, never masks a finding,
+// never touches the CI gate.
+describe('verdict — E-047 blind-spot rung', () => {
+  it('high coverage but high-risk blind spots present → PARTIAL, not a bare PROVEN', () => {
+    const v = verdictOf([], cleanGraph, { coverage: 0.71, blindHigh: 46 });
+    expect(v.clean).toBe(true);
+    expect(v.partial).toBe(true); // the cal.com/api/v2 case: no longer a bare PROVEN
+    expect(v.complete).toBe(false);
+    expect(v.safe).toBe(true); // CI gate unchanged — still a clean, shippable app
+  });
+
+  it('high coverage AND zero high-risk blind spots → complete PROVEN', () => {
+    const v = verdictOf([], cleanGraph, { coverage: 0.9, blindHigh: 0 });
+    expect(v.partial).toBe(false);
+    expect(v.complete).toBe(true);
+  });
+
+  it('blindHigh defaults to 0 — a caller that did not survey blind spots is unaffected', () => {
+    const v = verdictOf([], cleanGraph, { coverage: 0.9 });
+    expect(v.complete).toBe(true);
+  });
+
+  it('a single high blind spot is enough to qualify the claim', () => {
+    const v = verdictOf([], cleanGraph, { coverage: 0.95, blindHigh: 1 });
+    expect(v.partial).toBe(true);
+  });
+});

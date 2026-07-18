@@ -19,7 +19,10 @@ export async function runProve(opts) {
 
   const { findings, obligations } = checkGraph(canonical);
   const blind = surveyBlindspots(canonical, report);
-  const verdict = verdictOf(findings, canonical, { coverage: blind.coverage.ratio });
+  const verdict = verdictOf(findings, canonical, {
+    coverage: blind.coverage.ratio,
+    blindHigh: blind.byRisk.critical + blind.byRisk.high,
+  });
   const capsule = buildCapsule(canonical);
   const prints = fingerprintGraph(canonical);
   // one app-level seal: a content address over every route's behavior hash — the same

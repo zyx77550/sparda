@@ -52,6 +52,27 @@ const MUTANTS = [
     repl: 'if (false) continue; // never stitch a service to itself',
     test: 'tests/stitch.test.js',
   },
+  {
+    desc: 'apocalypse: drop the E-047 blind-spot rung (bare PROVEN over high blind spots)',
+    file: 'src/ubg/apocalypse.js',
+    find: '((coverage != null && coverage < COVERAGE_COMPLETE) || blindHigh > 0)',
+    repl: '(coverage != null && coverage < COVERAGE_COMPLETE)',
+    test: 'tests/verdict-partial.test.js',
+  },
+  {
+    desc: 'extract: disable workspace-package resolution (E-048 cross-package writes blind)',
+    file: 'src/ubg/extract.js',
+    find: 'const map = workspacePackages(fromFile);',
+    repl: 'const map = null;',
+    test: 'tests/workspace-resolve.test.js',
+  },
+  {
+    desc: 'prisma: stop resolving a shared workspace schema (P4 state layer blind)',
+    file: 'src/ubg/prisma.js',
+    find: ': workspaceSchemaFiles(cwd, candidates, SCHEMA_DIR_CANDIDATES);',
+    repl: ': [];',
+    test: 'tests/workspace-resolve.test.js',
+  },
 ];
 
 const survived = [];

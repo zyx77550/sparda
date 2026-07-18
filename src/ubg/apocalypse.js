@@ -488,7 +488,7 @@ const COVERAGE_FLOOR = 0.05;
 // finding, never changes the CI gate; a PARTIAL app is still clean, just qualified.
 const COVERAGE_COMPLETE = 0.6;
 
-export function verdictOf(findings, graph, { coverage } = {}) {
+export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
   // Advisory findings (BOLA/IDOR, ADR-058) are absence-based and FP-prone: they point a
@@ -528,9 +528,20 @@ export function verdictOf(findings, graph, { coverage } = {}) {
   // A clean whole-app proof below the completeness bar is PARTIAL — proved, but not over
   // the whole surface. Only meaningful when coverage was measured (whole-app run); a partial
   // graph (heal delta, coverage undefined) is never labelled partial.
+  //
+  // E-047 (the blind-spot rung, from the cal.com giant test): coverage is a RATIO, so on a
+  // huge app it can clear the bar (cal.com/api/v2: 71%) while the ABSOLUTE count of high-risk
+  // blind spots is large (46 guarded mutations whose writes never resolved). A bare "PROVEN"
+  // over 46 unproven high-risk mutations over-claims. So a clean app is also PARTIAL when any
+  // high-severity blind spot remains — the label carries the uncertainty (metrology's error
+  // bars), independent of the ratio. Sound: only ever SOFTENS PROVEN→PARTIAL, never masks a
+  // finding, never touches the CI gate (`safe`). blindHigh defaults to 0, so a caller that
+  // did not survey blind spots (heal delta) is unaffected.
   const clean = provable && !surfaceOnly && hardCount === 0;
   const partial =
-    clean && coverage != null && entrypoints > 0 && coverage < COVERAGE_COMPLETE;
+    clean &&
+    entrypoints > 0 &&
+    ((coverage != null && coverage < COVERAGE_COMPLETE) || blindHigh > 0);
   // `safe` is the CI gate (block a risky deploy): a surface-only app has no
   // critical/high findings and is NOT risky, so it does not fail the gate — it just
   // isn't a positive proof. `clean` is the strong claim (PROVEN) and DOES require

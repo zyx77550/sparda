@@ -21,7 +21,10 @@ export async function runDossier(opts) {
   const { findings, polarity } = checkGraph(canonical);
   const capsule = buildCapsule(canonical);
   const blindspots = surveyBlindspots(canonical, compiled.report);
-  const verdict = verdictOf(findings, canonical, { coverage: blindspots.coverage.ratio });
+  const verdict = verdictOf(findings, canonical, {
+    coverage: blindspots.coverage.ratio,
+    blindHigh: blindspots.byRisk.critical + blindspots.byRisk.high,
+  });
 
   const data = {
     app: path.basename(path.resolve(opts.cwd)) || 'app',

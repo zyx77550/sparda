@@ -1186,7 +1186,10 @@ export function proveApp(cwd, { route } = {}) {
   const blind = surveyBlindspots(canonical, report);
   // The verdict word always reflects the WHOLE app (a route filter narrows the finding list,
   // never the safety claim — an AI must never read "PROVEN" because it hid the rest).
-  const verdict = verdictOf(all, canonical, { coverage: blind.coverage.ratio });
+  const verdict = verdictOf(all, canonical, {
+    coverage: blind.coverage.ratio,
+    blindHigh: blind.byRisk.critical + blind.byRisk.high,
+  });
   return {
     verdict: verdictState(verdict),
     provable: verdict.provable,

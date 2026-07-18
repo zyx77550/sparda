@@ -62,11 +62,15 @@ export function reviewGraphs(baseGraph, candidateGraph) {
   // how much of the changed app SPARDA could actually see — and whether this PR moved
   // that boundary. A green review over a graph the PR made 20% blinder is not the same
   // as a green review at full sight; the reviewer must be able to tell them apart.
-  const candCov = surveyBlindspots(candidateGraph).coverage.ratio;
+  const candBlind = surveyBlindspots(candidateGraph);
+  const candCov = candBlind.coverage.ratio;
   const baseCov = surveyBlindspots(baseGraph).coverage.ratio;
 
   return {
-    verdict: verdictOf(findings, candidateGraph, { coverage: candCov }),
+    verdict: verdictOf(findings, candidateGraph, {
+      coverage: candCov,
+      blindHigh: candBlind.byRisk.critical + candBlind.byRisk.high,
+    }),
     obligations,
     findings,
     endpoints: { added, removed: removedEps },

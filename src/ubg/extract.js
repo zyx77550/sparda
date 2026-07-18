@@ -140,6 +140,8 @@ const moduleCache = new Map(); // absFile -> module facts (parse once per compil
 export function clearModuleCache() {
   moduleCache.clear();
   tsconfigCache.clear();
+  workspaceCache.clear();
+  workspaceRootOf.clear();
 }
 
 // absFile → { ast, functions: Map<name,{node,line,exported}>, imports: Map<local,abs>, error }
@@ -357,7 +359,159 @@ export function resolveRelImport(fromFile, spec) {
   // cross-module hop (controller → service → repository) dead-ends and effects behind
   // DI are invisible. A bare npm package (`kysely`, `@nestjs/common`) simply resolves
   // to nothing here (no matching file under the project), which is correct.
-  return resolveAliasedImport(fromFile, clean(spec));
+  //
+  // The WORKSPACE fallback (the mycorrhizal network): a monorepo app's real mutation
+  // logic lives in shared workspace packages it imports by NAME, not by path — cal.com's
+  // `this.svc.updateEventType()` delegates to `@calcom/platform-libraries` → `@calcom/trpc`
+  // → `prisma.update()`, three packages away and entirely outside the analyzed app dir. A
+  // tsconfig alias can't reach them (they're resolved via the workspace, not `paths`). So
+  // when the alias miss, map the `@scope/pkg[/subpath]` specifier to the package's real
+  // directory under the workspace and resolve into it. Trees share nutrients across the
+  // fungal network, not just their own root ball — the schema/effect code is a shared
+  // nutrient drawn from the workspace, not the app's own folder.
+  return (
+    resolveAliasedImport(fromFile, clean(spec)) ??
+    resolveWorkspaceImport(fromFile, clean(spec))
+  );
+}
+
+// name -> absolute package dir, for every package in the workspace that owns `fromFile`.
+// Cached per workspace root (built once, ~100 package.json reads on a giant monorepo).
+const workspaceCache = new Map(); // rootDir -> Map(name -> dir)
+const workspaceRootOf = new Map(); // dir -> rootDir | null
+
+// walk up to the monorepo root: the nearest ancestor whose package.json declares
+// `workspaces`, or that carries a pnpm-workspace.yaml. `null` = not a workspace.
+function findWorkspaceRoot(fromFile) {
+  let dir = path.dirname(fromFile);
+  const chain = [];
+  for (let i = 0; i < 40; i++) {
+    if (workspaceRootOf.has(dir)) {
+      const v = workspaceRootOf.get(dir);
+      for (const d of chain) workspaceRootOf.set(d, v);
+      return v;
+    }
+    chain.push(dir);
+    let root = null;
+    try {
+      const pj = path.join(dir, 'package.json');
+      if (fs.existsSync(pj)) {
+        const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'));
+        if (pkg.workspaces) root = dir;
+      }
+      if (!root && fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) root = dir;
+    } catch {
+      // unreadable manifest — keep walking up
+    }
+    if (root) {
+      for (const d of chain) workspaceRootOf.set(d, root);
+      return root;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  for (const d of chain) workspaceRootOf.set(d, null);
+  return null;
+}
+
+// the workspace's package globs, from package.json `workspaces` (array or {packages})
+// or a minimal pnpm-workspace.yaml parse (the `- '...'` list under `packages:`).
+function workspaceGlobs(root) {
+  const globs = [];
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const ws = pkg.workspaces;
+    if (Array.isArray(ws)) globs.push(...ws);
+    else if (ws && Array.isArray(ws.packages)) globs.push(...ws.packages);
+  } catch {
+    // no/invalid root package.json — fall through to pnpm
+  }
+  try {
+    const yml = fs.readFileSync(path.join(root, 'pnpm-workspace.yaml'), 'utf8');
+    for (const m of yml.matchAll(/^\s*-\s*['"]?([^'"\n]+?)['"]?\s*$/gm)) globs.push(m[1]);
+  } catch {
+    // no pnpm-workspace.yaml
+  }
+  return globs;
+}
+
+// expand one workspace glob to concrete package dirs. Supports the two forms real
+// workspaces use: an exact path (`packages/app-store`) and a trailing `/*` (one level of
+// subdirs, e.g. `packages/*`, `packages/platform/*`). `**` is treated as a single level —
+// good enough for every workspace layout in the wild, and never unbounded.
+function expandGlob(root, glob) {
+  const g = glob.replace(/\/\*\*$/, '/*');
+  const star = g.indexOf('*');
+  if (star === -1) return [path.resolve(root, g)];
+  const baseRel = g.slice(0, star).replace(/\/$/, '');
+  const baseDir = path.resolve(root, baseRel);
+  try {
+    return fs
+      .readdirSync(baseDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(baseDir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+export function workspacePackages(fromFile) {
+  const root = findWorkspaceRoot(fromFile);
+  if (!root) return null;
+  if (workspaceCache.has(root)) return workspaceCache.get(root);
+  const map = new Map();
+  for (const glob of workspaceGlobs(root)) {
+    for (const dir of expandGlob(root, glob)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+        if (typeof pkg.name === 'string' && !map.has(pkg.name)) map.set(pkg.name, dir);
+      } catch {
+        // not a package (no/invalid package.json) — skip
+      }
+    }
+  }
+  workspaceCache.set(root, map);
+  return map;
+}
+
+// the entry file of a package with no subpath import (`@calcom/trpc`): its declared
+// source/main/module, else the conventional src/index or index.
+function packageEntry(dir) {
+  const fields = [];
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    for (const f of [pkg.source, pkg.module, pkg.main])
+      if (typeof f === 'string') fields.push(f);
+  } catch {
+    // no package.json fields — conventions below still apply
+  }
+  for (const f of [...fields, 'src/index', 'index']) {
+    const hit = firstModuleFile(path.resolve(dir, f.replace(/\.(m?[jt]s|cjs)$/, '')));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// resolve `@scope/pkg/subpath` (or `pkg/subpath`) to a real source file under the
+// workspace. Longest package-name match wins (`@calcom/platform-libraries` beats a
+// hypothetical `@calcom/platform`), then the subpath resolves against the package dir.
+function resolveWorkspaceImport(fromFile, spec) {
+  if (spec.startsWith('.') || spec.startsWith('/')) return null;
+  const map = workspacePackages(fromFile);
+  if (!map) return null;
+  let best = null;
+  for (const name of map.keys()) {
+    if (
+      (spec === name || spec.startsWith(name + '/')) &&
+      name.length > (best?.length ?? -1)
+    )
+      best = name;
+  }
+  if (!best) return null;
+  const dir = map.get(best);
+  const sub = spec.length > best.length ? spec.slice(best.length + 1) : '';
+  return sub ? firstModuleFile(path.resolve(dir, sub)) : packageEntry(dir);
 }
 
 // probe the standard TS/JS extensions + index files for a resolved base path.
