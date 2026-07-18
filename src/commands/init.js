@@ -49,13 +49,15 @@ export async function runInit(opts) {
       `Stack detected: ${c.cyan('Next.js (App Router)')} — app dir: ${stack.entryFile}/, port: ${stack.port}`,
     );
   } else {
-    s.stop(`Stack detected: ${c.cyan(stack.framework)} — but AST parsing is not supported yet.`);
+    s.stop(
+      `Stack detected: ${c.cyan(stack.framework)} — but AST parsing is not supported yet.`,
+    );
     throw Object.assign(
       new Error(`AST extraction for ${stack.framework} is not yet supported.`),
       {
         code: 'USER',
         hint: `SPARDA detected ${stack.framework}, but currently only supports Express, FastAPI, and Next.js for AST parsing. NestJS and others are on the roadmap!`,
-      }
+      },
     );
   }
 
