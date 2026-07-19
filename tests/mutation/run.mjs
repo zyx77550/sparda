@@ -104,7 +104,7 @@ const MUTANTS = [
   {
     desc: 'state-min: drop the advisory body signals when a delegator is merged (false critical returns)',
     file: 'src/ubg/passes/state-minimization.js',
-    find: "    if (b.meta[k]) a.meta[k] = true;",
+    find: '    if (b.meta[k]) a.meta[k] = true;',
     repl: '    if (false) a.meta[k] = true;',
     test: 'tests/g2-credential-gate.test.js',
   },
