@@ -980,3 +980,83 @@ byRisk.high` from the same `surveyBlindspots` it already computes — single sou
 - **Rule:** the analyzed unit is the app, but its behavior is drawn from the whole workspace. A
   shared package imported by name is part of the app's real surface — resolve into it, don't treat
   the directory boundary as the behavior boundary.
+
+## E-049 — a credential refusal one call away from the entrypoint is dropped (G2 phase 2)
+
+- **Symptom (first-run + API-key false criticals):** immich `POST /auth/admin-sign-up` and
+  `POST /admin/database-backups/start-restore`, and formbricks `GET /api/v1/management/me`, all read
+  as **critical unguarded mutations** even though each is genuinely gated — the admin routes throw
+  `'the server already has an admin'`, the formbricks route validates an API key and refuses. G2
+  phase 1 (which only downgrades a critical to advisory when a credential refusal is present) could
+  not see the refusal, so the downgrade never fired.
+- **Root cause (three separate signal drops, all on the same path — the refusal lives ONE CALL AWAY
+  from the entrypoint, in a delegated body):**
+  1. `resolve.js mergeScan` — the single contract every DI/call-graph follower shares — merged
+     `effects`, `returnShapes`, `calls`, and `guardSignals.deniesWithStatus`, but **silently dropped
+     `credentialSignals`** (throw/4xx/verify/redirect) and G1 `ownerAsserted`. So a NestJS
+     `this.service.adminSignUp()` whose body throws lost its refusal at the merge — the effects
+     (read/insert user) survived, the refusal did not. One line of omission, whole Nest call graph
+     blind to refusals.
+  2. `translate.js attachBody` — an expanded helper body's refusal was never recorded on its own
+     graph node, so a route reaching it through the call graph (not its direct chain) couldn't see it.
+  3. `passes/state-minimization.js mergeNodes` — a thin delegator (`handler → createFirstAdmin()`)
+     is coalesced into one node; it carried `returnShapes` but dropped the advisory body signals.
+  - Compounding: the dominant Next.js/App-Router refusal is a **named helper**
+    (`responses.notAuthenticatedResponse()`), which `statusIn4xx` and the bare-`throw` check both miss.
+- **Fix (shipped, all advisory-only — can only DOWNGRADE critical→advisory, never prove/silence):**
+  merge `credentialSignals`+`ownerAsserted` up in `mergeScan`; tag reached bodies in `attachBody`;
+  carry the advisory signals through `mergeNodes`; recognize the named-refusal idiom in `extract.js`;
+  in `apocalypse.js` read signals from the reached set, broaden the stored-credential family to API
+  keys/PATs, and add a first-run family **bounded to bootstrap-shaped paths** that still requires a
+  real refusal. Field test (13 apps): immich 5→1, formbricks 1→0, total 9→4; every downgrade
+  manually verified genuinely gated. Soundness negatives hold (bootstrap-path-no-refusal,
+  token-read-no-refusal, naked mutation all stay critical); mutation guard "any family gated without
+  a refusal shape" bites.
+- **Rule:** effects and refusals travel the SAME reachability — if you follow a call for its writes,
+  you must follow it for its refusal too, or a gated route reads as a false critical. (Distinct from
+  the reverted "option A": that ATTRIBUTED effects across reachability and over-fired; this only
+  READS an advisory refusal signal, which can never fabricate a guard or a false PROVEN.)
+- **Residuals — the surviving criticals after this fix, and why (measured across the 13-giant corpus;
+  the honest "is login the only one?" answer):** 5 criticals survive, in three buckets —
+  1. ~~**One more unclosed FP _family_ — password-login.**~~ **NOW CLOSED via Class 1 (E-050).**
+     immich `POST /auth/login` — the master map (`docs/_MASTER-MAP-*`) and the FP-classes spec frame
+     it not as a credential family to detect but as a **public-by-design route** to re-label. Closed
+     by the E-050 `expectedPublic` re-label (it was the ONLY route in the 13-app corpus that needed
+     it — the evidence-based G2 families already caught the callbacks/oauth/reset flows).
+  2. **Genuinely public-by-design writes — correct to flag, not traps.** dub
+     `POST /api/track/application` (public partner-application form), rallly `GET /api/updates`
+     (self-hosted instance telemetry registration). A public route that mutates: a human should
+     confirm intent. Not a credential family; leaving them critical is defensible.
+  3. **`(codebase-wide)` pervasive collapse — a different, coverage-bound problem.** cal (13/45) and
+     papermark (22/63) collapse many UNGUARDED_MUTATIONs into one meta-finding. Inside cal's list are
+     routes G2 _should_ downgrade (`reset-password`, `verify-booking-token`) but doesn't — because at
+     23% coverage in a deep `@calcom/*` workspace the credential bodies don't resolve. That is a
+     RESOLUTION-DEPTH gap (E-048 territory), not a missing family.
+
+## E-050 — public-by-design routes read as false criticals (Class 1 re-label)
+
+- **Symptom:** immich `POST /auth/login` (and, in the wild, `/register`, `/logout`, `/health`,
+  `/metrics`, `/oauth/*`, `/webhooks/*`) reads as a **critical unguarded mutation** — but these are
+  *conventionally* meant to run without a session guard. A tester who sees CRITICAL on `/login`
+  classes SPARDA "amateur" in 30 seconds (the FP-classes doc's Class 1; the master map's item #1).
+- **Why G2 doesn't catch it:** login carries no *modeled* credential mechanism SPARDA can point to
+  as evidence (its `compareBcrypt` is not a stored-token lookup, not a `verify`/`hmac` name, not a
+  callback). There is no gate to *prove* — the route is simply public by convention.
+- **Fix (shipped, distinct from G2 — triage, not proof):** a **curated public-by-design path
+  classifier** in `apocalypse.js` O1. When an UNGUARDED_MUTATION would fire critical, is NOT already
+  credential-gated, and the path matches a precise public signature (login/register/logout,
+  forgot/reset-password, verify-email, oauth/sso/saml, callback/webhook, health/metrics/.well-known),
+  it is **re-labeled `expectedPublic` (info)** with "confirm this endpoint is meant to be
+  unauthenticated". Marked distinctly from `credentialFamily` so it reads as a CONVENTION, not an
+  evidenced gate. Never hidden, never marked safe, never touches PROVEN.
+- **Deliberately PRECISE, not `**/auth/**` blanket:** `change-password` / `2fa` / session management
+  live under `/auth/*` but require a session — re-labeling those would HIDE a real hole. The list
+  matches specific public verbs only. Regression test + the soundness contre-test
+  (`/account/change-password` stays critical) both ship; the mutation guard "re-label a non-public
+  route as public" bites.
+- **Measured (13-app corpus):** exactly **one** route re-labeled — immich `/auth/login`. The
+  evidence-based G2 families already softened every callback/oauth/reset flow with proof, so Class 1
+  had a minimal blast radius (mops up the single genuinely-public route with no detectable gate).
+- **Rule:** two honest ways to soften a false critical — *evidence* (G2: a refusal shape is present,
+  name the mechanism) and *convention* (Class 1: the path is public by design, say "confirm intent").
+  Keep them separately labeled; never let convention masquerade as proof.

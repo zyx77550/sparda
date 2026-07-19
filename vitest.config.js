@@ -5,7 +5,14 @@ import { defineConfig, configDefaults } from 'vitest/config';
 // instrumentation activates only under `--coverage` (`npm run coverage`).
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, 'tools/corpus/**', '_public_sync/**'],
+    // docs/csop-handoff is a self-contained research prototype (its own package.json/tsconfig);
+    // its *.test.ts run under its own toolchain, never the product suite.
+    exclude: [
+      ...configDefaults.exclude,
+      'tools/corpus/**',
+      '_public_sync/**',
+      'docs/csop-handoff/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'lcov', 'html'],

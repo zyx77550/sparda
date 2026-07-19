@@ -25,6 +25,7 @@ export default [
       'tests/e2e/**',
       '**/*.bak',
       'bench/results.json',
+      'docs/csop-handoff/**',
     ],
   },
   js.configs.recommended,

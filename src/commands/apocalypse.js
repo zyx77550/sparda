@@ -8,11 +8,37 @@
 //   sparda apocalypse --json            raw findings for tooling
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
-import { checkGraph, diffGraphs, verdictOf } from '../ubg/apocalypse.js';
+import {
+  checkGraph,
+  diffGraphs,
+  verdictOf,
+  verdictState,
+  buildProofObjects,
+} from '../ubg/apocalypse.js';
 import { surveyBlindspots } from '../ubg/blindspots.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
+
+// version travels with the proof so an audit knows which prover produced it
+const SPARDA_VERSION = (() => {
+  try {
+    return JSON.parse(
+      fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ).version;
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+// a deterministic fingerprint of the canonical graph: same source → same graph → same hash.
+// The proof object binds to it, so a third party proves it audited the SAME artifact.
+function graphHash(canonical) {
+  const h = crypto.createHash('sha256');
+  h.update(JSON.stringify({ nodes: canonical.nodes, edges: canonical.edges }));
+  return 'bh1_' + h.digest('hex').slice(0, 16);
+}
 
 const ICONS = { critical: '✗', high: '✗', medium: '⚠', info: '·' };
 
@@ -58,6 +84,21 @@ export async function runApocalypse(opts) {
     atomicWrite(sarifPath, JSON.stringify(toSarif(findings, canonical), null, 2) + '\n');
     console.log(
       `✓ SARIF written: .sparda/apocalypse.sarif (${findings.length} result(s))`,
+    );
+  }
+
+  if (opts.proof) {
+    const proofPath = path.join(opts.cwd, '.sparda', 'apocalypse.proof.json');
+    fs.mkdirSync(path.dirname(proofPath), { recursive: true });
+    const proof = {
+      sparda_version: SPARDA_VERSION,
+      graph_hash: graphHash(canonical),
+      verdict: verdictState(verdict),
+      discharged: buildProofObjects(canonical),
+    };
+    atomicWrite(proofPath, JSON.stringify(proof, null, 2) + '\n');
+    console.log(
+      `✓ Proof written: .sparda/apocalypse.proof.json (${proof.discharged.length} discharged obligation(s), re-verifiable against ${proof.graph_hash})`,
     );
   }
 

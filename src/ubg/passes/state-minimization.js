@@ -73,6 +73,12 @@ function mergeNodes(graph, aId, bId) {
   if (b.meta.returnShapes) {
     a.meta.returnShapes = [...(a.meta.returnShapes ?? []), ...b.meta.returnShapes];
   }
+  // Carry G1/G2 advisory body signals (a credential refusal or an ownership assertion) from the
+  // absorbed node onto the survivor. A thin delegator whose only job is to call a helper that
+  // throws/refuses would otherwise lose that signal at the merge and read as a false critical.
+  // These flags only ever DOWNGRADE a critical to advisory — never prove.
+  for (const k of ['bodyDenies', 'bodyVerifies', 'bodyRedirects', 'ownerAsserted'])
+    if (b.meta[k]) a.meta[k] = true;
 
   const nextEdges = [];
   for (const e of graph.edges) {

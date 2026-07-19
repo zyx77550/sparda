@@ -831,6 +831,14 @@ export function scanFunction(fnNode, env = {}) {
     calls: [],
     guardSignals: { deniesWithStatus: false },
     validatesInput: false,
+    // O7/BOLA only (G1): the body asserts caller-ownership at a call site
+    // (`getXOrThrow({ workspaceId: workspace.id })`) — an advisory-only signal.
+    ownerAsserted: false,
+    // G2 (guard-taxonomy families B–F): credential-check signals, SEPARATE from
+    // guardSignals on purpose — they may only DOWNGRADE an UNGUARDED_MUTATION critical to
+    // an advisory (never prove a guard, never silence a finding), so widening them can
+    // never fabricate a gate (E-042) or a false PROVEN.
+    credentialSignals: { verifyCall: false, denies4xxOrThrows: false, redirects: false },
     async: Boolean(fnNode?.async),
   };
   if (!fnNode) return result;
@@ -924,6 +932,64 @@ function whereOwnerScoped(whereNode) {
     }
   });
   return scoped;
+}
+
+// Values that reference the caller's VERIFIED identity — the principal a guard puts on the
+// path: dub's `withWorkspace` → `workspace`, a session → `session.user`, `req.user`. Broader
+// than OWNERSHIP_ROOT because it must catch the framework's identity object by its conventional
+// name (the thing a scoped mutation is measured against).
+const IDENTITY_ROOT =
+  /^(workspace|session|auth|user|me|currentuser|actor|viewer|principal|org|organization|team|project|tenant|account|membership)s?$/i;
+// an identity token anywhere in an access path (`req.session.user`, `workspace.id`)
+const IDENTITY_TOKEN =
+  /^(workspace|session|auth|user|me|currentuser|actor|viewer|principal|org|organization|team|project|tenant|account|member|membership)s?$/i;
+// request INPUT the caller controls — never the verified identity, even if named `workspaceId`
+// (`req.body.workspaceId` is an attacker value; matching it would silence a REAL BOLA).
+const REQ_INPUT = /^(body|query|params|input|payload|args|data)$/i;
+function valueIsIdentity(node) {
+  if (!node) return false;
+  if (node.type === 'Identifier') return IDENTITY_ROOT.test(node.name);
+  if (node.type !== 'MemberExpression') return false;
+  // collect every identifier segment of the access path
+  const parts = [];
+  let cur = node;
+  while (cur?.type === 'MemberExpression') {
+    if (cur.property?.type === 'Identifier') parts.push(cur.property.name);
+    cur = cur.object;
+  }
+  if (cur?.type === 'Identifier') parts.push(cur.name);
+  if (parts.some((p) => REQ_INPUT.test(p))) return false; // caller-controlled → not identity
+  return parts.some((p) => IDENTITY_TOKEN.test(p));
+}
+
+// Does this call assert caller-ownership at the site — an argument object binding an ownership
+// KEY to a VERIFIED-IDENTITY value, `getCustomerOrThrow({ workspaceId: workspace.id, id })`?
+// This is the caller stating, before it mutates, that the object it is about to touch is scoped
+// to its own identity — visible WITHOUT resolving the (imported) helper. It feeds ONLY the O7
+// BOLA advisory, never a hard rule, so it can never create a false PROVEN: at worst it silences
+// an advisory the field test wants silenced (dub's ~60 false BOLA are exactly this pattern).
+// the identity object passed to the helper BY NAME — `getDomainOrThrow({ workspace, domain })`
+// hands the whole verified principal, not a `workspaceId:` key.
+const IDENTITY_KEY =
+  /^(workspace|session|user|team|project|tenant|account|org|organization|member|membership|owner|actor|principal)$/i;
+function callAssertsOwnership(node) {
+  for (const arg of node.arguments ?? []) {
+    if (arg?.type !== 'ObjectExpression') continue;
+    for (const p of arg.properties) {
+      if (p.type !== 'ObjectProperty' || p.key?.type !== 'Identifier') continue;
+      // (1) the verified identity handed in by name: `{ workspace, … }` / `{ session }`
+      if (IDENTITY_KEY.test(p.key.name)) return true;
+      // (2) an ownership key bound to the identity OR to a scope-named local (shorthand):
+      // `{ workspaceId: workspace.id }` / `{ workspaceId }`. Same generosity whereOwnerScoped
+      // already grants a `where` key — and O7 is advisory, so it can only silence an advisory.
+      if (
+        OWNERSHIP_KEY.test(p.key.name) &&
+        (valueIsIdentity(p.value) || p.value?.type === 'Identifier')
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 // does this `where` target a specific object by a bare `id` key (the BOLA shape)?
@@ -1020,6 +1086,11 @@ function visit(node, out, ctx) {
     for (const n of node) visit(n, out, ctx);
     return;
   }
+
+  // G2 credential signal (advisory-only): the body can refuse — any throw, or any 4xx
+  // response. Deliberately BROADER than guardSignals.deniesWithStatus (401/403) because it
+  // can only ever downgrade a critical to an advisory, never verify a guard.
+  if (node.type === 'ThrowStatement') out.credentialSignals.denies4xxOrThrows = true;
 
   // try/catch — try-effects are compensable by catch-effects (SBIR §2.2)
   if (node.type === 'TryStatement') {
@@ -1123,9 +1194,42 @@ function inspectCall(node, out, ctx) {
     if (out.returnShapes.length < MAX_RETURN_SHAPES && jsonShape !== null)
       out.returnShapes.push({ line, shape: jsonShape });
     if (deniedStatusOf(node)) out.guardSignals.deniesWithStatus = true;
+    if (statusIn4xx(node)) out.credentialSignals.denies4xxOrThrows = true;
     return;
   }
   if (deniedStatusOf(node)) out.guardSignals.deniesWithStatus = true;
+  if (statusIn4xx(node)) out.credentialSignals.denies4xxOrThrows = true;
+
+  // G1 (O7/BOLA only): a call that asserts caller-ownership at the site scopes the path —
+  // `getCustomerOrThrow({ workspaceId: workspace.id, id })`. Advisory-only, so it can never
+  // create a false PROVEN; it silences the false BOLA the imported ownership helper would raise.
+  if (callAssertsOwnership(node)) out.ownerAsserted = true;
+
+  // G2 (advisory-only): a call whose NAME says it verifies a credential — `verifyUnsubscribeToken`,
+  // `jwt.verify`, an HMAC/signature check. Family B/D of the guard taxonomy. Never a guard by
+  // itself (E-042: a name fabricates nothing) — it only feeds the UNGUARDED downgrade.
+  const verifyName =
+    callee.type === 'Identifier'
+      ? callee.name
+      : callee.type === 'MemberExpression' && callee.property?.type === 'Identifier'
+        ? callee.property.name
+        : '';
+  if (/verify|signature|hmac/i.test(verifyName)) out.credentialSignals.verifyCall = true;
+  // OAuth/browser callbacks refuse by REDIRECTING away (family F) — no throw, no 4xx.
+  // Only ever consulted for callback-shaped routes, and only to downgrade to advisory.
+  if (verifyName === 'redirect') out.credentialSignals.redirects = true;
+  // A named REFUSAL helper is the dominant Next.js / App-Router idiom — the deny is a call like
+  // `responses.notAuthenticatedResponse()` / `unauthorized()` / `throwForbidden()`, never a literal
+  // `res.status(401)` or a bare `throw`, so statusIn4xx and the ThrowStatement check both miss it.
+  // The refusal is real; only its spelling is a helper. Advisory-only (feeds the UNGUARDED
+  // downgrade, never a guard): a route still needs a matching credential FAMILY to downgrade, so a
+  // plain 404 helper on an ordinary route changes nothing.
+  if (
+    /(not_?authenticated|un_?authenticated|not_?authori[sz]ed|un_?authori[sz]ed|forbidden|access_?denied|bad_?request|too_?many_?requests|rate_?limit(ed|_?exceeded)?|missing_?fields|unprocessable|invalid_?(api_?key|token|credential|secret|request|permission))/i.test(
+      verifyName,
+    )
+  )
+    out.credentialSignals.denies4xxOrThrows = true;
 
   // ---- local calls: bare identifier calls → call-graph edges later
   if (callee.type === 'Identifier') {
@@ -1480,6 +1584,45 @@ function isDenyOptions(arg) {
       )
         return true;
     }
+  }
+  return false;
+}
+
+// G2 (advisory-only): ANY 4xx refusal — broader than deniedStatusOf's 401/403 on purpose.
+// A stored-token flow refuses with 400/404/410 as often as 401; since this signal can only
+// downgrade a critical to an advisory (never verify a guard), the width is safe.
+function statusIn4xx(node) {
+  const is4xx = (v) => typeof v === 'number' && v >= 400 && v < 500;
+  const inArgs = (args) =>
+    (args ?? []).some(
+      (a) =>
+        a?.type === 'ObjectExpression' &&
+        a.properties.some(
+          (p) =>
+            p.type === 'ObjectProperty' &&
+            p.key?.name === 'status' &&
+            p.value?.type === 'NumericLiteral' &&
+            is4xx(p.value.value),
+        ),
+    );
+  let cur = node;
+  while (cur) {
+    if (cur.type === 'CallExpression') {
+      const m =
+        cur.callee?.type === 'MemberExpression' ? cur.callee.property?.name : null;
+      if (
+        (m === 'status' || m === 'sendStatus') &&
+        cur.arguments[0]?.type === 'NumericLiteral' &&
+        is4xx(cur.arguments[0].value)
+      )
+        return true;
+      if (m === 'json' && inArgs(cur.arguments)) return true;
+    }
+    cur =
+      cur.callee?.type === 'MemberExpression' &&
+      cur.callee.object?.type === 'CallExpression'
+        ? cur.callee.object
+        : null;
   }
   return false;
 }

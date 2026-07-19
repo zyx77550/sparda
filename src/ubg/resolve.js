@@ -39,6 +39,23 @@ export function mergeScan(into, add) {
   into.validatesInput = into.validatesInput || add.validatesInput;
   into.async = into.async || add.async;
   if (add.guardSignals?.deniesWithStatus) into.guardSignals.deniesWithStatus = true;
+  // G1/G2 (advisory-only): a delegated service method that asserts caller-ownership, or refuses on
+  // a credential check (throw/4xx/verify/redirect), carries that signal UP to the handler it is
+  // reached from. Without this a Nest/DI refusal that lives one class away (`this.service.x()`) is
+  // dropped at the merge and its route reads as a false critical — the first-run / admin-setup and
+  // API-key families. These signals can only DOWNGRADE a critical to advisory, never prove.
+  if (add.ownerAsserted) into.ownerAsserted = true;
+  if (add.credentialSignals) {
+    into.credentialSignals ??= {
+      verifyCall: false,
+      denies4xxOrThrows: false,
+      redirects: false,
+    };
+    if (add.credentialSignals.verifyCall) into.credentialSignals.verifyCall = true;
+    if (add.credentialSignals.denies4xxOrThrows)
+      into.credentialSignals.denies4xxOrThrows = true;
+    if (add.credentialSignals.redirects) into.credentialSignals.redirects = true;
+  }
 }
 
 export const relOf = (cwd, abs) => path.relative(cwd, abs).split(path.sep).join('/');

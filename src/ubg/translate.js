@@ -204,6 +204,22 @@ function translateRoute(
   for (const cn of chainNodes) {
     if (cn.scan) attachBody(graph, cn.id, cn.scan, helperByName, scanCache, expanded);
   }
+
+  // G1 (O7/BOLA only): if any step on this route asserts caller-ownership at a call site
+  // (`getXOrThrow({ workspaceId: workspace.id })`), the route scopes its objects to the
+  // caller — even when the assertion lives in an imported helper SPARDA doesn't expand.
+  // Advisory-only signal: it silences the false BOLA, never touches a hard rule.
+  if (chainNodes.some((cn) => cn.scan?.ownerAsserted))
+    graph.nodes.get(epId).meta.ownerAsserted = true;
+
+  // G2 (guard taxonomy): credential-check signals from the route's own bodies. Advisory-only —
+  // they can downgrade an UNGUARDED critical to an advisory, never verify a guard.
+  if (chainNodes.some((cn) => cn.scan?.credentialSignals?.verifyCall))
+    graph.nodes.get(epId).meta.credentialVerify = true;
+  if (chainNodes.some((cn) => cn.scan?.credentialSignals?.denies4xxOrThrows))
+    graph.nodes.get(epId).meta.credentialGates = true;
+  if (chainNodes.some((cn) => cn.scan?.credentialSignals?.redirects))
+    graph.nodes.get(epId).meta.credentialRedirects = true;
 }
 
 // A chain step (middleware or handler) becomes a guard or logic node.
@@ -257,6 +273,19 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
   if (expanded.has(ownerId)) return; // one body, one expansion
   expanded.add(ownerId);
   const owner = graph.nodes.get(ownerId);
+
+  // G2 propagation (advisory-only): a body that itself refuses on a credential check — throw/4xx,
+  // a verify call, or an OAuth redirect — carries that refusal AT ITS OWN node. This is why the
+  // first-run and API-key gates read as false criticals: their refusal lives in an imported/DI
+  // service method that has no effect of its own, so the signal never rode the entrypoint's direct
+  // middleware chain. Tagging the reached body lets the prover see the mechanism through the call
+  // graph. Reading this tag can only DOWNGRADE a critical to advisory — never prove, never silence,
+  // never fabricate a guard. Tagged once, on first expansion; the node is route-independent.
+  if (owner) {
+    if (scan.credentialSignals?.denies4xxOrThrows) owner.meta.bodyDenies = true;
+    if (scan.credentialSignals?.verifyCall) owner.meta.bodyVerifies = true;
+    if (scan.credentialSignals?.redirects) owner.meta.bodyRedirects = true;
+  }
 
   let order = 0;
   let ordinal = 0;

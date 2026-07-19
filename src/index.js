@@ -18,6 +18,7 @@ const opts = {
   yes: flags.has('--yes') || flags.has('-y'),
   saveBaseline: flags.has('--save-baseline'),
   sarif: flags.has('--sarif'),
+  proof: flags.has('--proof'),
   verbose: flags.has('--verbose'),
   quiet: flags.has('--quiet'),
   probe: flags.has('--probe'),
@@ -45,7 +46,7 @@ const opts = {
 // reads opts.cwd, so `--dir <path>` works on all of them; only per-command extras are listed.
 const HELP = {
   prove: `sparda prove [--dir <path>] [--json | --markdown]\n  The whole trust verdict: proof + coverage + a shareable seal.\n  --markdown  emit a sticky-PR-comment body (used by the GitHub Action).`,
-  apocalypse: `sparda apocalypse [--dir <path>] [--sarif] [--save-baseline]\n  Prove the deploy — exit 1 on any critical/high finding.\n  --sarif         also write .sparda/apocalypse.sarif for the Security tab.\n  --save-baseline freeze this graph; later runs diff against it.`,
+  apocalypse: `sparda apocalypse [--dir <path>] [--sarif] [--proof] [--save-baseline]\n  Prove the deploy — exit 1 on any critical/high finding.\n  --sarif         also write .sparda/apocalypse.sarif for the Security tab.\n  --proof         also write .sparda/apocalypse.proof.json — a re-verifiable\n                  discharge trace (deny_path per guarded mutation) a third party\n                  can audit against the graph hash without re-compiling.\n  --save-baseline freeze this graph; later runs diff against it.`,
   ubg: `sparda ubg [--dir <path>] [--json] [--out <file>] [--openapi <spec>]\n  Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json).`,
   stitch: `sparda stitch <dir1> <dir2> [...] [--json]\n  Cross-service proof: join one service's outbound HTTP calls to another's routes,\n  surface cross-service trust boundaries + BOLA no mono-repo tool can see.`,
   badge: `sparda badge [--dir <path>] [--out <file>] [--json]\n  Emit a shareable SVG badge + README snippet (verdict · coverage · routes).`,

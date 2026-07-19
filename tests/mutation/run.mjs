@@ -73,6 +73,48 @@ const MUTANTS = [
     repl: ': [];',
     test: 'tests/workspace-resolve.test.js',
   },
+  {
+    desc: 'extract: stop recognizing a call-site ownership assertion (G1 false BOLA returns)',
+    file: 'src/ubg/extract.js',
+    find: 'if (callAssertsOwnership(node)) out.ownerAsserted = true;',
+    repl: 'if (false) out.ownerAsserted = true;',
+    test: 'tests/g1-ownership-assert.test.js',
+  },
+  {
+    desc: 'apocalypse: treat any credential family as gated even with no refusal shape (G2)',
+    file: 'src/ubg/apocalypse.js',
+    find: 'family !== null && (credGates || (callbackish && credRedirects));',
+    repl: 'family !== null && true;',
+    test: 'tests/g2-credential-gate.test.js',
+  },
+  {
+    desc: 'apocalypse: proof object claims a guardless mutation as discharged (fake proof)',
+    file: 'src/ubg/apocalypse.js',
+    find: 'if (!writes.length || !guards.length) continue;',
+    repl: 'if (!writes.length) continue;',
+    test: 'tests/proof-objects.test.js',
+  },
+  {
+    desc: 'extract: stop seeing a named-refusal helper (API-key/first-run refusal goes blind)',
+    file: 'src/ubg/extract.js',
+    find: '    out.credentialSignals.denies4xxOrThrows = true;\n\n  // ---- local calls',
+    repl: '    void 0;\n\n  // ---- local calls',
+    test: 'tests/g2-credential-gate.test.js',
+  },
+  {
+    desc: 'state-min: drop the advisory body signals when a delegator is merged (false critical returns)',
+    file: 'src/ubg/passes/state-minimization.js',
+    find: "    if (b.meta[k]) a.meta[k] = true;",
+    repl: '    if (false) a.meta[k] = true;',
+    test: 'tests/g2-credential-gate.test.js',
+  },
+  {
+    desc: 'apocalypse: re-label a NON-public route as public-by-design (Class 1 blanket, hides holes)',
+    file: 'src/ubg/apocalypse.js',
+    find: 'const softened = credentialGated || expectedPublic;',
+    repl: 'const softened = credentialGated || true;',
+    test: 'tests/g2-credential-gate.test.js',
+  },
 ];
 
 const survived = [];

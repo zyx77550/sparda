@@ -42,6 +42,66 @@ export function indexGraph(graph) {
   return { nodes, cfOut, mutOut, gateTargets, compensators, entrypoints };
 }
 
+// Proof objects (the re-verifiable discharge trace, ADR-corroboration). `apocalypse` emits a
+// VERDICT; a skeptic must re-run SPARDA to believe it. A proof object makes each discharged
+// obligation auditable WITHOUT re-compiling: for every mutating route that passes its guard
+// obligation, the exact `deny_path` — a real chain of node ids in the committed ubg.json — that
+// a third party can trace to confirm the guard gates the write. Deterministic (same graph → same
+// object, testable like a `verify` law), and honest: it reports provenance (verified vs asserted)
+// and corroboration (which independent paths agree), never a bare "trust me, it's PROVEN".
+export function buildProofObjects(graph) {
+  const g = indexGraph(graph);
+  const proofs = [];
+  for (const ep of g.entrypoints) {
+    const reached = [...reachOf(ep.id, g.cfOut)]
+      .sort()
+      .map((id) => g.nodes.get(id))
+      .filter(Boolean);
+    const guards = reached.filter((n) => n.kind === 'guard');
+    const writes = [];
+    for (const n of reached)
+      if (n.kind === 'effect')
+        for (const e of g.mutOut.get(n.id) ?? [])
+          writes.push({ effect: n, stateId: e.to });
+    // a proof object is emitted ONLY for a genuinely DISCHARGED obligation: a mutating route
+    // (O1 applies) that actually reaches a guard. A guardless mutation is a FINDING, not a proof.
+    if (!writes.length || !guards.length) continue;
+    const guardInfo = guards
+      .map((gd) => ({
+        guard: gd.label,
+        node: gd.id,
+        // MUST-analysis honesty: 'verified' only when a deny path was SEEN in the body;
+        // an opaque middleware trusted by name is 'asserted' — the proof says which.
+        provenance: gd.meta?.verified ? 'verified' : 'asserted',
+        via: gd.meta?.verifiedVia ?? 'structural',
+      }))
+      .sort((a, b) => cmp(a.node, b.node));
+    proofs.push({
+      obligation: 'GUARDED_MUTATION',
+      route: ep.label,
+      entrypoint: ep.id,
+      discharged_by: {
+        // the obligation is only as strong as its weakest guard: verified iff ALL are verified
+        provenance: guardInfo.every((x) => x.provenance === 'verified')
+          ? 'verified'
+          : 'asserted',
+        corroboratedBy: [...new Set(guardInfo.map((x) => x.via))].sort(),
+        guards: guardInfo.map(({ guard, node, provenance }) => ({
+          guard,
+          node,
+          provenance,
+        })),
+        // the re-checkable path: every id exists in ubg.json; a gate edge links guard→handler,
+        // and the handler control-flow-reaches each listed mutation. Trace it to confirm.
+        deny_path: [ep.id, ...guardInfo.map((x) => x.node)],
+        mutations: [...new Set(writes.map((w) => w.effect.id))].sort(),
+      },
+    });
+  }
+  proofs.sort((a, b) => cmp(a.entrypoint, b.entrypoint));
+  return proofs;
+}
+
 export function reachOf(epId, cfOut) {
   const seen = new Set();
   const queue = [epId];
@@ -100,15 +160,100 @@ export function checkGraph(graph) {
       // sharpens the worst routes (open AND fed by user input) without adding false
       // alarms. Under-approximated (SOUNDNESS Direction 1): a missed tag hides nothing.
       const tainted = writes.filter((w) => w.effect.meta.tainted);
+      // G2 (guard taxonomy families B–D): a public-by-design route whose body checks a
+      // CREDENTIAL and can refuse — a stored-token lookup (reset/invite/verification), a
+      // signature/token verify call, or a webhook/callback handshake — is not "unguarded"
+      // in the critical sense; it is gated by a mechanism the guard model doesn't carry.
+      // The invariant (non-negotiable): this can only DOWNGRADE critical → advisory, with
+      // the mechanism named. It never proves (identity scope stays unproven), never
+      // silences (the finding remains, visible), so it can never make a false PROVEN on
+      // its own — though fewer hard findings CAN promote a clean app; that is the
+      // taxonomy's sanctioned direction (a stored-token reset flow is not a vuln).
+      // Credential/refusal signals reach the entrypoint two ways: from its own middleware chain
+      // (ep.meta.*, set in translate) OR from a body it REACHES through the call graph (the
+      // owner.meta.body* tags — the imported/DI service where the throw actually lives). The
+      // second path is what closes the first-run and API-key false criticals: their refusal sits
+      // in a service method with no effect of its own, so the signal never rode the direct chain.
+      const reachedDenies = reached.some((n) => n?.meta?.bodyDenies);
+      const reachedVerifies = reached.some((n) => n?.meta?.bodyVerifies);
+      const reachedRedirects = reached.some((n) => n?.meta?.bodyRedirects);
+      const credGates = ep.meta?.credentialGates === true || reachedDenies;
+      const credVerify = ep.meta?.credentialVerify === true || reachedVerifies;
+      const credRedirects = ep.meta?.credentialRedirects === true || reachedRedirects;
+      // family A/B: a stored-credential lookup — reset/invite/OTP/magic tokens AND long-lived API
+      // keys / access tokens / personal-access tokens. Same "read the secret, refuse if it doesn't
+      // match" mechanism; only the secret's lifetime differs.
+      const tokenRead = reached.some(
+        (n) =>
+          n?.kind === 'effect' &&
+          n.meta.effectType === 'db_read' &&
+          /token|verif|invite|otp|magic|api[_-]?key|access[_-]?token|credential|personal[_-]?access/i.test(
+            n.meta.table ?? '',
+          ),
+      );
+      const callbackish = /(^|[:/])(callback|webhook|hook)s?([/:]|$)/i.test(ep.label);
+      // family E (first-run / admin-setup): a bootstrap-shaped route — sign-up-admin, setup,
+      // install, onboard, restore/recover — whose body reads an identity table and refuses. The
+      // "only before an admin exists" / "only an admin may" gate. Bounded to bootstrap-shaped
+      // PATHS so an ordinary route's generic "user not found → throw" can never trip it, AND still
+      // requires a real refusal shape below (credGates) to downgrade.
+      const bootstrapish =
+        /(^|[:/\- ])(setup|install|onboard(ing)?|bootstrap|first[-_ ]?run|initiali[sz]e|admin[-_ ]?sign[-_ ]?up|register[-_ ]?admin|restore|recover)([/:\- ]|$)/i.test(
+          ep.label,
+        );
+      const identityRead = reached.some(
+        (n) =>
+          n?.kind === 'effect' &&
+          n.meta.effectType === 'db_read' &&
+          /user|account|admin|member|identit/i.test(n.meta.table ?? ''),
+      );
+      const family = tokenRead
+        ? 'a stored credential-token lookup'
+        : credVerify
+          ? 'a signature/token verification call'
+          : callbackish
+            ? 'a webhook/callback handshake'
+            : bootstrapish && identityRead
+              ? 'a first-run/admin-setup guard'
+              : null;
+      // refusal shapes per family: token/verify/first-run families must throw or 4xx; the callback
+      // family may also refuse by redirecting away (the browser-facing OAuth deny idiom).
+      const credentialGated =
+        family !== null && (credGates || (callbackish && credRedirects));
+      // Class 1 (public-by-design re-label): a route whose PATH is a curated public signature —
+      // login/register/logout, forgot/reset-password, verify-email, oauth/sso/saml, callback/webhook,
+      // health/metrics/.well-known — is *conventionally* meant to run without a session guard. Unlike
+      // the credential families above this carries NO evidence of a gate; it is triage, not proof. So
+      // it only ever RE-LABELS critical → info (`expectedPublic`), names the convention, and says
+      // "confirm intent" — never hidden, never marked safe, never touches PROVEN. The list is the
+      // HEAD of the distribution (deliberately precise, not `**/auth/**` blanket: change-password /
+      // 2fa / session management are NOT public, and re-labeling those would hide a real hole).
+      const expectedPublic =
+        !credentialGated &&
+        (/(^|[:/\- ])(log-?in|sign-?in|sign-?up|register|log-?out|sign-?out|forgot-?password|reset-?password|forgot|verify-?email|email-?verification|confirm-?email|magic-?link|oauth\d?|openid|sso|saml|health(z|check|-?check)?|livez|readyz|metrics|well-known)([/:\- ]|$)/i.test(
+          ep.label,
+        ) ||
+          /\.well-known/i.test(ep.label) ||
+          callbackish);
+      const softened = credentialGated || expectedPublic;
       findings.push({
         rule: 'UNGUARDED_MUTATION',
-        severity: 'critical',
+        severity: softened ? 'info' : 'critical',
+        ...(credentialGated
+          ? { advisory: true, credentialFamily: family }
+          : expectedPublic
+            ? { advisory: true, expectedPublic: true }
+            : {}),
         entrypoint: ep.id,
-        message: `${ep.label} mutates ${fmtStates(writes)} with no guard anywhere on the path${
-          tainted.length ? ' — and request data flows straight into the write' : ''
-        }`,
+        message: credentialGated
+          ? `${ep.label} mutates ${fmtStates(writes)} with no modeled guard — but the body checks ${family} and can refuse; verify that credential's scope covers the mutation`
+          : expectedPublic
+            ? `${ep.label} mutates ${fmtStates(writes)} with no modeled guard — but its path matches a public-by-design signature (auth / oauth / callback / health / metrics); confirm this endpoint is meant to be unauthenticated`
+            : `${ep.label} mutates ${fmtStates(writes)} with no guard anywhere on the path${
+                tainted.length ? ' — and request data flows straight into the write' : ''
+              }`,
         evidence: writes.map((w) => `${w.effect.id} (${locOf(w.effect)})`),
-        ...(tainted.length ? { tainted: true } : {}),
+        ...(tainted.length && !softened ? { tainted: true } : {}),
       });
     }
 
@@ -244,7 +389,18 @@ export function checkGraph(graph) {
     const adminish =
       /(^|[:/])(admin|internal|system|cron|webhooks?|callback)([/:]|$)/i.test(ep.label) ||
       guards.some((gd) => /admin|internal|system|cron|super/i.test(gd?.label ?? ''));
-    if (idScoped.length && !ownerScopedSeen && guards.length && !adminish) {
+    // G1: a call-site ownership assertion on the route (`getXOrThrow({ workspaceId:
+    // workspace.id })`) scopes the object to the caller even when the proof lives in an
+    // imported helper we don't expand — so it clears the BOLA advisory, same as a visible
+    // `ownerScoped` query. Advisory-only, so this can never mask a hard finding.
+    const ownerAsserted = ep.meta?.ownerAsserted === true;
+    if (
+      idScoped.length &&
+      !ownerScopedSeen &&
+      !ownerAsserted &&
+      guards.length &&
+      !adminish
+    ) {
       const tables = [
         ...new Set(idScoped.map((n) => n.meta.table).filter(Boolean)),
       ].sort();
