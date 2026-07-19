@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
-  "description": "Compile backends to behavior graphs. Statically prove security, simulate APIs, and replay bugs.",
-  "version": "0.65.0",
+  "description": "AI writes. SPARDA proves. A deterministic, offline gate that catches when an AI edit removes a guard, exposes a route, or breaks an invariant — no API key, right in the agent edit loop.",
+  "version": "0.66.0",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "sparda-mcp",
-      "version": "0.65.0",
+      "version": "0.66.0",
       "transport": {
         "type": "stdio"
       },
