@@ -318,4 +318,17 @@ Each version converts to Apache 2.0 four years after its release.
 
 <br/>
 
-By [Residual Labs](https://residual-labs.fr)
+## Residual Labs
+
+**We don't pitch. We prove.** · *On ne vend pas de rêve. On prouve.*
+
+SPARDA is the first instrument from [**Residual Labs**](https://residual-labs.fr) — a
+deep-tech engineering lab building **proof-grade tools for problems that can't afford to
+be wrong**. Deterministic, offline, honest about their own blind spots. SPARDA is where
+we started, not where we stop.
+
+*Un laboratoire d'ingénierie deep-tech : des outils de niveau preuve pour les problèmes
+qui n'ont pas droit à l'erreur.*
+
+**A hard problem in systems, verification, or AI-written software?**
+→ [residual-labs.fr](https://residual-labs.fr) · or open an issue on this repo.
