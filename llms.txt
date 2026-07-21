@@ -1,0 +1,49 @@
+# Residual Labs
+
+> A deep-tech engineering lab that builds proof-grade tools for problems that can't
+> afford to be wrong. We don't pitch — we prove. Founded and led by a Principal
+> Engineer working in systems & verification. Based in France; work shipped in English.
+
+Residual Labs builds **proof-grade tools**: precision instruments that are deterministic,
+run offline with no API key, and never claim more than they can prove. Our flagship,
+**SPARDA**, is the trust layer for AI-written code — it compiles a backend into a
+deterministic behavior graph and proves what the code can and can't break before it
+ships (no unguarded mutation, no removed auth guard, no broken invariant). SPARDA is the
+first instrument, not the last: Residual Labs exists to solve strong pains, one at a
+time, wherever getting it wrong is not an option.
+
+The pain we own: **AI writes code faster than anyone can verify it.** We make
+verification run at the speed of the machines writing the code — and it never shows a
+false green.
+
+## Flagship — SPARDA
+
+- [SPARDA on GitHub](https://github.com/zyx77550/sparda): the trust layer for AI-written code — behavior compiler, deterministic proof, the agent edit-loop gate.
+- [SPARDA on npm](https://www.npmjs.com/package/sparda-mcp): `npx sparda-mcp prove` — one command, zero config, zero key.
+- Try in 60 seconds: `npx sparda-mcp prove` from any Express, Next.js, NestJS, Medusa, FastAPI or Flask backend.
+- Claude Code plugin: `/plugin marketplace add zyx77550/sparda` then `/plugin install sparda-gate@sparda` — proves each AI edit lost no guard, dropped no route, grew no blast radius.
+
+## What SPARDA proves
+
+- Unguarded mutation: a state change that crosses no security guard.
+- Removed guard / dropped route: a regression an AI edit introduced vs a baseline.
+- Broken invariant, non-atomic aggregate write, irreversible observable effect.
+- Honest by design: it reports its own blind spots and coverage %, and never emits a false "proven".
+
+## Contact
+
+- Lab: Residual Labs (France) — https://residual-labs.fr
+- For hard problems in systems, verification, or AI-written software: open an issue on the flagship repo or reach the lab via the site.
+
+---
+
+## Residual Labs — en français
+
+Residual Labs est un laboratoire d'ingénierie deep-tech qui construit des **outils de
+niveau preuve** : déterministes, hors-ligne, sans clé API, et qui ne prétendent jamais
+plus que ce qu'ils peuvent prouver. Notre produit phare, **SPARDA**, est la couche de
+confiance du code écrit par l'IA — il compile un backend en graphe de comportement
+déterministe et prouve ce que le code peut casser avant la mise en prod. La douleur
+qu'on règle : *l'IA écrit du code plus vite que quiconque ne peut le vérifier.* On rend
+la vérification aussi rapide que l'écriture, sans jamais montrer un faux feu vert.
+On ne vend pas de rêve — on prouve.
