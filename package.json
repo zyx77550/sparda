@@ -43,19 +43,22 @@
     "node": ">=18"
   },
   "keywords": [
+    "ai-code-verification",
+    "trust-layer",
+    "ai-code-review",
+    "guardrails",
+    "behavior-compiler",
     "mcp",
+    "mcp-server",
     "model-context-protocol",
     "claude",
     "claude-code",
-    "ai-code-review",
     "code-review",
-    "guardrails",
     "static-analysis",
     "security",
     "authorization",
     "bola",
-    "ai-agents",
-    "trust-layer"
+    "ai-agents"
   ],
   "author": "Residual Labs (residual-labs.fr)",
   "license": "BUSL-1.1",

@@ -6,51 +6,77 @@
 
 <br/>
 
-> 🇫🇷 **Français** : Pour comprendre SPARDA en 10 minutes (douleur, architecture, vision), lisez le document du fondateur : [SPARDA-EXPLIQUE.md](docs/SPARDA-EXPLIQUE.md).
+> 🇫🇷 **Français** — _L'IA écrit. SPARDA prouve._ Un gate déterministe et hors-ligne qui détecte quand une modif d'IA retire une garde, expose une route ou casse un invariant — sans clé API, directement dans la boucle d'édition de l'agent. Pour tout comprendre en 10 minutes (douleur, architecture, vision) : [SPARDA-EXPLIQUE.md](docs/SPARDA-EXPLIQUE.md).
 
 ---
 
-**A compiler for backend behavior. The LLVM of web applications.**
+<h1 align="center">AI writes. SPARDA proves.</h1>
+<p align="center"><em>L'IA écrit. SPARDA prouve.</em></p>
 
-For twenty years software communicated through APIs. Then AI agents arrived, and the industry's answer was to expose more endpoints (MCP). But an agent doesn't *understand* an application from a list of disconnected tools — and neither can a linter, a debugger, or a deploy gate reason about a codebase they only read line by line.
+**The trust layer for AI-written backends.** SPARDA compiles your backend — routes, database queries, state mutations, guards, side-effects — into one deterministic behavior graph, then **statically proves what can and can't break before you ship**: no unguarded mutation, no broken invariant, no non-atomic aggregate write.
 
-SPARDA compiles your backend — routes, database queries, state mutations, permissions, side-effects — into one language-agnostic, mathematical graph: the **Unified Behavior Graph (UBG)**, serialized as `.sparda/ubg.json` under the **SBIR** specification ([SPARDA Behavior IR](docs/SBIR_SPEC_V1.1.md)). Compile once; then every tool is a simple pass over that graph.
+[![npm](https://img.shields.io/npm/v/sparda-mcp)](https://www.npmjs.com/package/sparda-mcp)
+[![CI](https://github.com/zyx77550/sparda/actions/workflows/ci.yml/badge.svg)](https://github.com/zyx77550/sparda/actions/workflows/ci.yml)
+![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![runtime deps](https://img.shields.io/badge/runtime%20deps-4%20pinned-4c1)
+[![license](https://img.shields.io/badge/license-BUSL--1.1-blue)](./LICENSE)
+
+100% local · deterministic · zero API key · no cloud account. It fails loudly on a real risk, and when it can only see part of your app it says **PROVEN (PARTIAL)** — never a false green.
+
+## 60-second proof
+
+From your Express, FastAPI, Flask, Next.js, NestJS or Medusa app — nothing to configure:
+
+```bash
+npx sparda-mcp apocalypse   # prove the tree is safe to deploy — exit 1 on any real risk
+npx sparda-mcp prove        # the whole verdict: proof + coverage + shareable seal
+npx sparda-mcp badge        # a README badge: proven · coverage% · routes
+```
+
+Under the hood it compiles your backend into one language-agnostic graph — the **Unified Behavior Graph (UBG)**, serialized as `.sparda/ubg.json` under the **SBIR** specification ([SPARDA Behavior IR](docs/SBIR_SPEC_V1.1.md)) — and every command is a pass over that graph.
 
 > [!IMPORTANT]  
-> **The 3700-Route Proof:** In our latest stress-test (v0.26.0), SPARDA successfully compiled and proved **3700+ routes** from elite open-source monsters (Next.js *Dub*, NestJS *Immich*, *MedusaJS*, and GitHub's OpenAPI) in **< 2.2 seconds** per repo, with zero crashes. It natively resolves deep Dependency Injection, external controllers, and Next.js handlers.
+> **The Route-Compilation Proof — reproduce it yourself.** SPARDA compiles real open-source monsters to their behavior graph with **zero crashes**, each in **≈1–2 seconds**: Next.js _Dub_ (579 routes), NestJS _Immich_ (281), _MedusaJS_ (477). It natively resolves deep Dependency Injection, external controllers, and Next.js handlers. Try it on your own codebase in 60 seconds:
+>
+> ```bash
+> npx sparda-mcp prove
+> ```
+>
+> Honesty first: _compiling_ a route is a parser result; _proving_ it safe is a separate per-repo verdict — and most real apps come back **NOT_PROVEN**, which is the true state, not a failure.
 
 **What the graph unlocks — 100% local, deterministic, zero runtime dependencies, zero API key:**
 
-| Command | What it does |
-|---|---|
-| **`ubg`** | Compile the codebase to its behavior graph (Express · FastAPI · Next.js natively; **any** stack via OpenAPI) |
-| **`apocalypse`** | *Prove the deploy* — no guard, invariant, transaction or aggregate boundary can be broken (SARIF + CI gate) |
-| **`timeless`** | *Time-travel* — record a production request, replay it byte-identically, export the bug as a test |
-| **`heal`** | *Self-heal, proven* — bug → fix → the machine proves the fix is correct and breaks nothing |
-| **`mirror`** | *Execute the graph* — serve the compiled behavior over HTTP with no framework and no source |
-| **`openapi`** | *Emit the standard* — produce an OpenAPI 3.1 spec from the graph |
-| **`verify`** | *Prove the compiler's own laws* (determinism, soundness, round-trip) on your app |
-| **`init` / `dev`** | Expose the graph to AI clients as a live MCP server (+ Twin, Immune, Evolution runtime layer) |
+| Command            | What it does                                                                                                                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`prove`**        | _The whole trust verdict in one gesture_ — proof + coverage + a shareable seal (`--json` / `--markdown`)                                                                                                                             |
+| **`apocalypse`**   | _Prove the deploy_ — no guard, invariant, transaction or aggregate boundary can be broken (SARIF + CI gate)                                                                                                                          |
+| **`heal`**         | _Self-heal, **proven**_ — the gate Copilot Autofix doesn't have: a fix ships **only if** replay matches, `verify` still passes, and `apocalypse` finds no new risk / no dropped guard. Whoever wrote the fix, the machine judges it. |
+| **`badge`**        | _The shareable artifact_ — a self-contained SVG badge + README snippet (verdict · coverage · routes)                                                                                                                                 |
+| **`dossier`**      | _The public report_ — one self-contained HTML page: verdict, risks, and SPARDA's own blind spots                                                                                                                                     |
+| **`ubg`**          | Compile the codebase to its behavior graph (Express · FastAPI · Flask · Next.js · NestJS · Medusa natively; **any** stack via OpenAPI)                                                                                               |
+| **`timeless`**     | _Time-travel_ — record a production request, replay it byte-identically, export the bug as a test                                                                                                                                    |
+| **`mirror`**       | _Execute the graph_ — serve the compiled behavior over HTTP with no framework and no source                                                                                                                                          |
+| **`init` / `dev`** | _Runtime, optional_ — expose the graph to AI clients as a live MCP server (+ Twin, Immune, Evolution)                                                                                                                                |
 
-```bash
-npx sparda-mcp ubg          # compile your backend → .sparda/ubg.json
-npx sparda-mcp apocalypse   # prove the current tree is safe to deploy
-```
+The prover is the product. The MCP server is one _output_ of the graph, not the point — SPARDA compiles the whole system's behavior, then proves, replays, heals, and (optionally) serves it.
 
-No cloud account. No server to host. Exposing raw APIs to AI is the old way — SPARDA compiles the whole system's behavior, then proves, replays, heals, and serves it.
+**Nomenclature:** **SBIR** is the specification (the format, like "JSON"); **UBG** is the compiled graph itself (the artifact, `ubg.json`). The MCP server is one _output_ of the graph, not the product.
 
-**Nomenclature:** **SBIR** is the specification (the format, like "JSON"); **UBG** is the compiled graph itself (the artifact, `ubg.json`). The MCP server is one *output* of the graph, not the product.
+## Optional: expose the graph to AI clients (MCP runtime)
 
-## Quickstart
+Beyond proving, SPARDA can turn your running app into a live MCP server — the graph, executable, with write-safety and an immune layer. This is optional and separate from the prover above.
 
 1. **Scan + inject** — run once, from your app's directory:
+
    ```bash
    npx sparda-mcp init
    ```
+
    SPARDA parses your routes (AST), generates a marked `/mcp` router, injects it into
    your app (with a backup), and writes `sparda.json`. Every step is reversible.
 
 2. **Start your app, then start the bridge:**
+
    ```bash
    npx sparda-mcp dev
    ```
@@ -74,25 +100,31 @@ No cloud account. No server to host. Exposing raw APIs to AI is the old way — 
 ## Try the Standalone Demo
 
 To see SPARDA in action instantly without modifying your codebase:
+
 ```bash
 npx sparda-mcp demo
 ```
+
 This runs the entire MCP lifecycle (detect → parse → generate → inject → remove) on a bundled demo app in a temporary folder, in about 10 seconds. For the compiler itself, run `npx sparda-mcp ubg` then `apocalypse` on any Express/FastAPI app.
 
 ## Black Box Report
 
 SPARDA is designed as a local organism. To see what it remembers and how much compute it has recycled:
+
 ```bash
 npx sparda-mcp report
 ```
+
 This prints a terminal dashboard aggregating your exposed tools, write opt-ins, proof journal decisions, and crystallized composite tools.
 
 To write a self-contained, offline HTML dashboard at `.sparda/report.html`, append the `--html` flag:
+
 ```bash
 npx sparda-mcp report --html
 ```
 
 To output raw JSON for integration:
+
 ```bash
 npx sparda-mcp report --json
 ```
@@ -100,28 +132,35 @@ npx sparda-mcp report --json
 ## Deployment Proof: Apocalypse
 
 SPARDA's Behavior Graph is a formal model of your system. Instead of waiting for runtime failures or relying on static analysis vibes, you can statically prove the safety of your backend before any deployment:
+
 ```bash
 npx sparda-mcp apocalypse
 ```
+
 This command reads the compiled `.sparda/ubg.json` (with zero source code parsing at runtime) and discharges five static correctness obligations:
-* **Unguarded Mutation (Critical)**: Flags any mutation path that does not cross a security `guard`.
-* **Non-Atomic Aggregate Write (High)**: Flags when an API writes to multiple tables of the same Consistency Domain (Aggregate) outside a single transaction scope.
-* **Unvalidated Constrained Write (Medium)**: Flags writes into columns with declared invariants (CHECK, NOT NULL, UNIQUE — parsed from your `.sql` DDL **or `schema.prisma`**, Prisma enums included) without prior validation (Zod/Pydantic).
-* **Irreversible Observable Effect (High)**: Flags out-of-process actions (like Stripe charges) that happen alongside state writes without a structural compensation path (like a catch-refund).
-* **Aggregate Member Bypass (Info)**: Flags mutating a member table directly without routing through the aggregate root.
+
+- **Unguarded Mutation (Critical)**: Flags any mutation path that does not cross a security `guard`.
+- **Non-Atomic Aggregate Write (High)**: Flags when an API writes to multiple tables of the same Consistency Domain (Aggregate) outside a single transaction scope.
+- **Unvalidated Constrained Write (Medium)**: Flags writes into columns with declared invariants (CHECK, NOT NULL, UNIQUE — parsed from your `.sql` DDL **or `schema.prisma`**, Prisma enums included) without prior validation (Zod/Pydantic).
+- **Irreversible Observable Effect (High)**: Flags out-of-process actions (like Stripe charges) that happen alongside state writes without a structural compensation path (like a catch-refund).
+- **Aggregate Member Bypass (Info)**: Flags mutating a member table directly without routing through the aggregate root.
 
 To save your current graph as a safe baseline:
+
 ```bash
 npx sparda-mcp apocalypse --save-baseline
 ```
+
 Subsequent runs will diff the candidate graph against this baseline to detect regression vectors:
-* Deletion of any security `guard` (Critical).
-* Deletion of a database SQL invariant (High).
-* API blast radius expansion (Medium).
+
+- Deletion of any security `guard` (Critical).
+- Deletion of a database SQL invariant (High).
+- API blast radius expansion (Medium).
 
 If any Critical or High finding is found, `apocalypse` exits with a non-zero code to block your CI pipeline.
 
 **One step in your workflow — findings land in the GitHub Security tab (SARIF):**
+
 ```yaml
 - uses: zyx77550/sparda@main
   with:
@@ -139,11 +178,13 @@ npx sparda-mcp timeless export <id>    # the production bug is now a vitest test
 ```
 
 Recording is two lines in your app (ESM), with deterministic sampling and GDPR redaction built in:
+
 ```js
 import { getFlightBox } from 'sparda-mcp/src/flight/box.js';
-const box = getFlightBox(); box.arm();
-app.use(box.middleware({ sample: 100 }));   // 1 request in 100; passwords/tokens redacted by default
-const db = box.wrapClient(pgPool);           // your query client, tapped
+const box = getFlightBox();
+box.arm();
+app.use(box.middleware({ sample: 100 })); // 1 request in 100; passwords/tokens redacted by default
+const db = box.wrapClient(pgPool); // your query client, tapped
 ```
 
 The closed loop nobody else has: **production bug → recorded flight → failing test → AI writes the fix → `apocalypse` proves the fix breaks no guard, invariant or transaction → deploy.** Replay is per-request (concurrent-race capture is out of scope for v1 — stated, not hidden).
@@ -160,7 +201,7 @@ npx sparda-mcp heal <flightId> --check --expect '{"status":404}'
 
 The brief is built from the graph itself — it hands the fixer the handler's `file:line`, the capabilities the fix must not grow, and the guards it must not remove. Then the **gate** — the actual product — proves the fix on three axes at once:
 
-1. **Behavior** — lenient replay of the recorded flight (same deterministic inputs) now produces the *expected* response, not the recorded bug. The fix may reformulate a query (the tap is relabeled, allowed); it may **not** change the effect order or kinds.
+1. **Behavior** — lenient replay of the recorded flight (same deterministic inputs) now produces the _expected_ response, not the recorded bug. The fix may reformulate a query (the tap is relabeled, allowed); it may **not** change the effect order or kinds.
 2. **Compiler laws** — `verify` still passes: the graph is still sound and deterministic.
 3. **No regression** — `apocalypse` diff against the frozen pre-fix graph: zero new critical/high findings, no guard removed, no blast radius grown.
 
@@ -168,11 +209,11 @@ The brief is built from the graph itself — it hands the fixer the handler's `f
 ✓ HEALED & PROVEN — same recorded inputs, correct output, zero law broken, zero protection lost. Ship it.
 ```
 
-The gate is honest in both directions: an unfixed bug, or a "fix" that silently drops a guard, keeps it **closed** (exit 1). This is the difference between an AI that writes plausible code and a system that *proves* the code is correct — the trust layer the agent era is missing.
+The gate is honest in both directions: an unfixed bug, or a "fix" that silently drops a guard, keeps it **closed** (exit 1). This is the difference between an AI that writes plausible code and a system that _proves_ the code is correct — the trust layer the agent era is missing.
 
 ## Any Backend On Earth: OpenAPI Lowering
 
-SPARDA parses Express, FastAPI and Next.js natively — and **every other stack through the format the industry already agreed on**. Go, Java, Rails, Laravel, .NET: if it has an OpenAPI spec, it compiles.
+SPARDA parses Express, FastAPI, Flask and Next.js natively — and **every other stack through the format the industry already agreed on**. Go, Java, Rails, Laravel, .NET: if it has an OpenAPI spec, it compiles.
 
 ```bash
 npx sparda-mcp ubg --openapi openapi.json
@@ -213,7 +254,7 @@ To undo everything: **`npx sparda-mcp remove`** restores your code byte-for-byte
 5. **Nothing leaves your machine.** No telemetry to us, no cloud, local key auth, 4 exact-pinned dependencies.
 6. **What it learns is never lost.** Diagnoses, descriptions, settings — versioned with your git, surviving every re-init.
 
-What we *don't* promise: the honest limits in [docs/SECURITY.md](./docs/SECURITY.md).
+What we _don't_ promise: the honest limits in [docs/SECURITY.md](./docs/SECURITY.md).
 
 ## How it works
 
@@ -230,34 +271,52 @@ What we *don't* promise: the honest limits in [docs/SECURITY.md](./docs/SECURITY
 ## What SPARDA gives your AI
 
 ### Operate, not just read
+
 Every route becomes a tool that runs against your live process — real auth, real data,
 warm connections. One call to **`sparda_get_context`** hands the AI the whole living
 picture: enabled tools, suggested workflows, runtime telemetry, quarantine state, and
 immune memory — so every session resumes where the last one stopped.
 
+### Prove the edit before you commit — the one check an LLM can't do to itself
+
+The AI just edited a route. Did it quietly drop a guard? It calls **`sparda_prove`** and
+finds out **now**, not in a CI run later. The tool recompiles the app to its behavior graph,
+discharges the same static obligations as `sparda apocalypse`, and returns a deterministic
+verdict — the exact word the CLI and badge emit, so it can never over-claim (a low-coverage
+clean app reads `SURFACE`, never a bare `PROVEN`). Save a baseline once
+(`sparda apocalypse --save-baseline`) and every later `sparda_prove` flags any finding with
+`regression: true` — the guard your edit removed, the route it dropped, the blast radius it
+grew. That's _"AI writes. SPARDA proves."_ inside the edit loop. Clients that list MCP prompts
+also get the **`prove-my-edit`** workflow.
+
 ### Write-safety: the AI can't write until you say so
+
 - Writes (POST/PUT/DELETE) ship **disabled**. Enable them per tool in `sparda.json`; your choice survives every re-init.
 - An enabled write is **never executed on the first call**. SPARDA returns an `awaiting_confirmation` envelope — a single-use token plus a preview of the action — and commits only after an explicit confirm step.
 - When your client supports MCP elicitation, that confirmation prompt appears **in the AI's own UI**.
 - **Proof-after-write**: every successful write is followed by a read-back of the same resource, so the AI — and you — see the real effect, not a hopeful guess.
 
 ### Your app defends itself — zero LLM on the hot path
+
 - **Quarantine.** A tool that returns 3 consecutive 5xx is quarantined: further calls get a `503` with a reason and a retry delay instead of hammering your broken route. After a cooldown it half-opens for a single probe.
 - **Latency & anomaly flags.** The router learns each route's baseline and flags deviations locally, in a few lines of math.
 - **Adaptive diagnosis, only on surprise.** A genuinely new failure wakes your AI client's own model to diagnose it once; the diagnosis is cached as an "antibody" in `sparda.json`, so the same failure later costs zero tokens. Cloning your code doesn't clone its immune memory.
 
 ### A free intelligence layer, zero API key
+
 On first connection your AI client's own model (via MCP sampling) rewrites raw routes
 into business-language tool descriptions and proposes multi-step workflows — cached in
 `sparda.json` and exposed as MCP prompts. Nothing to configure, nothing to pay.
 
 ### It gets cheaper the more you use it
+
 - **Response recycling.** When a read keeps returning the same answer, SPARDA serves the next identical call straight from memory — without touching your host app. Reads only; writes always hit the host.
 - **A recycling gauge.** `GET /mcp/stats` counts how many calls were answered from SPARDA's own knowledge vs. how many paid the host route. It reads 0% on day one and fills with usage — a measure, never a promise.
 
 ### Tools nobody wrote — Labs, opt-in, default OFF
+
 Turn it on with `"labs": { "recordSequences": true }` in `sparda.json`. SPARDA then
-notices when one tool's output feeds the next tool's input and records the *circuit* —
+notices when one tool's output feeds the next tool's input and records the _circuit_ —
 structure only (tool names, argument names, counts), never your data. A read-only
 circuit seen enough times **crystallizes into a composite tool**, announced
 mid-session: one call runs the whole chain, auto-feeding each step from the previous
@@ -265,11 +324,13 @@ step's real response. Write routes are never absorbed — their per-call confirm
 always stands.
 
 ### Living context & telemetry
+
 `GET /mcp/stats` (per-tool calls/errors, tool "purity", quarantine state) and
 `GET /mcp/events` (errors, latency anomalies, cached diagnoses) expose exactly what
 your app is doing — surfaced to the AI as live notifications.
 
 ## Built for AI clients: the bundled Skill
+
 SPARDA ships with an Agent Skill ([`SKILL.md`](./SKILL.md)) that teaches any compatible
 AI client how to drive a SPARDA server to its **full potential** — call
 `sparda_get_context` first, exploit response recycling, honor quarantine, prefer
@@ -287,6 +348,7 @@ runtime, so the guidance never goes stale.
 - **FastAPI** (Python >= 3.9) — AST-based router injection.
 
 ## Security posture (honest)
+
 - 4 runtime dependencies, exact-pinned.
 - **Dynamic Local Key Resolution.** The generated router contains no baked secrets. It resolves authorization keys at runtime from the `SPARDA_LOCAL_KEY` environment variable or the local gitignored `.sparda/key` file, and fails closed (503) when neither is found. For custom production or staging setups, you can override this behavior by exposing `SPARDA_LOCAL_KEY` in your environment.
 - Local key on every router call; self-reference loop protection; 30s timeouts; 8 KB output truncation.
@@ -296,18 +358,21 @@ runtime, so the guidance never goes stale.
 Full threat model and known gaps: [docs/SECURITY.md](./docs/SECURITY.md).
 
 ## Documentation
+
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — how `init`, the injected router, and the bridge fit together, plus the `sparda.json` schema.
 - [docs/SECURITY.md](./docs/SECURITY.md) — threat model, defenses, and honest known gaps.
 - [docs/TESTING.md](./docs/TESTING.md) — how the promises above are kept honest in CI.
 - [docs/ERRORS.md](./docs/ERRORS.md) — the error knowledge base.
 
 ## Beyond the open core
+
 SPARDA is free, including in production (see License). Team-scale capabilities —
 fine-grained per-person access policies and a signed, tamper-evident audit log — are
 planned for a future paid tier. The open core stands on its own; nothing here is
 crippled to upsell you.
 
 ## License
+
 [Business Source License 1.1](./LICENSE) — free to use, including in production.
 You may not resell SPARDA or offer it as a competing commercial service.
 Each version converts to Apache 2.0 four years after its release.
@@ -318,17 +383,4 @@ Each version converts to Apache 2.0 four years after its release.
 
 <br/>
 
-## Residual Labs
-
-**We don't pitch. We prove.** · *On ne vend pas de rêve. On prouve.*
-
-SPARDA is the first instrument from [**Residual Labs**](https://residual-labs.fr) — a
-deep-tech engineering lab building **proof-grade tools for problems that can't afford to
-be wrong**. Deterministic, offline, honest about their own blind spots. SPARDA is where
-we started, not where we stop.
-
-*Un laboratoire d'ingénierie deep-tech : des outils de niveau preuve pour les problèmes
-qui n'ont pas droit à l'erreur.*
-
-**A hard problem in systems, verification, or AI-written software?**
-→ [residual-labs.fr](https://residual-labs.fr) · or open an issue on this repo.
+By [Residual Labs](https://residual-labs.fr)

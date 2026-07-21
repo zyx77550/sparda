@@ -1,5 +1,5 @@
 # SPARDA — behavior proof + PR review from the compiled graph. 100% local,
-# deterministic, no keys. Two modes:
+# deterministic, no keys. Three modes:
 #
 #   mode: apocalypse (default) — prove the deploy, fail the job on any
 #   critical/high finding. Optionally upload SARIF to the Security tab.
@@ -16,8 +16,12 @@
 #       with: { fetch-depth: 0 }
 #     - uses: zyx77550/sparda@main
 #       with: { mode: 'review' }
-name: 'Sparda MCP'
-description: 'Prove the deploy and review PR behavior graphs — guards, invariants, transactions. 100% local, deterministic, no keys.'
+#
+#   mode: prove — comment the trust verdict + badge on the PR.
+#     - uses: zyx77550/sparda@main
+#       with: { mode: 'prove' }
+name: 'SPARDA'
+description: "The trust layer for AI-written code — prove a deploy, diff a PR's behavior, gate an AI edit. 100% local, deterministic, no keys."
 author: 'Residual Labs'
 branding:
   icon: 'shield'
