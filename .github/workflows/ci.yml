@@ -111,7 +111,7 @@ jobs:
       # HQ run stays quiet. Never fails CI — coverage is report-only (no gate yet).
       - name: Upload coverage to Codecov
         if: github.repository == 'zyx77550/sparda'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
