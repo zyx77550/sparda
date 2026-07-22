@@ -20,8 +20,8 @@
 #   mode: prove — comment the trust verdict + badge on the PR.
 #     - uses: zyx77550/sparda@main
 #       with: { mode: 'prove' }
-name: 'SPARDA'
-description: "The trust layer for AI-written code — prove a deploy, diff a PR's behavior, gate an AI edit. 100% local, deterministic, no keys."
+name: 'Sparda Security Gate'
+description: 'The trust layer for AI code: prove a deploy, diff PR behavior, and gate AI edits. 100% local, deterministic, no keys.'
 author: 'Residual Labs'
 branding:
   icon: 'shield'
