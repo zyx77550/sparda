@@ -13,7 +13,11 @@
 <h1 align="center">AI writes. SPARDA proves.</h1>
 <p align="center"><em>L'IA écrit. SPARDA prouve.</em></p>
 
-**The trust layer for AI-written backends.** SPARDA compiles your backend — routes, database queries, state mutations, guards, side-effects — into one deterministic behavior graph, then **statically proves what can and can't break before you ship**: no unguarded mutation, no broken invariant, no non-atomic aggregate write.
+**The trust layer for AI-written code. AI writes. SPARDA proves.**
+
+Under the hood: a compiler for backend behavior — the LLVM of web applications.
+
+SPARDA compiles your backend — routes, database queries, state mutations, guards, side-effects — into one deterministic behavior graph, then **statically proves what can and can't break before you ship**: no unguarded mutation, no broken invariant, no non-atomic aggregate write.
 
 [![npm](https://img.shields.io/npm/v/sparda-mcp)](https://www.npmjs.com/package/sparda-mcp)
 [![CI](https://github.com/zyx77550/sparda/actions/workflows/ci.yml/badge.svg)](https://github.com/zyx77550/sparda/actions/workflows/ci.yml)
