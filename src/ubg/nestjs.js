@@ -30,6 +30,23 @@ const GLOBAL_GUARD_SCAN = {
   guardSignals: { deniesWithStatus: true },
 };
 
+// A principal-injection param decorator (@AuthUser, @GetUser, @CurrentUser) has no
+// resolvable body — it consumes request.user, it does not deny. This marks its chain step
+// as an ASSERTED guard (assertedGuard, never deniesWithStatus) so isGuardLike honors it as
+// a name-only gate even when the bare decorator name (@GetUser, @Principal) carries no
+// GUARD_NAME token. It can NEVER read `verified` on its own — only a PROVEN global guard
+// (GLOBAL_GUARD_SCAN) upgrades it — so it downgrades a false UNGUARDED_MUTATION on a
+// genuinely-authenticated route but never buys a PROVEN or hides a hole (ADR-063).
+const ASSERTED_PRINCIPAL_SCAN = {
+  effects: [],
+  returnShapes: [],
+  calls: [],
+  async: false,
+  validatesInput: false,
+  guardSignals: {},
+  assertedGuard: true,
+};
+
 const traverse = traverseModule.default ?? traverseModule;
 const EXCLUDE = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.sparda']);
 
@@ -111,6 +128,31 @@ export function extractNest(cwd, entryDir) {
           if (!http) continue;
           const fullPath = joinPath(prefix, http.path);
           const guards = [...classGuards, ...useGuards(m.decorators)];
+          // Principal-injection param decorators (@AuthWorkspace/@AuthUser on twenty's
+          // resolvers) are the auth idiom that lives on the METHOD PARAMETERS, invisible
+          // to useGuards — deduped against the named guards so one route never counts the
+          // same auth twice.
+          const principalGuards = paramAuthGuards(m, mod).filter(
+            (n) => !guards.includes(n),
+          );
+
+          // Prove a guard, don't just trust its name: resolve @UseGuards(X)'s canActivate
+          // and check it can DENY (401/403 or an auth exception). A resolved deny → the
+          // guard node reads VERIFIED, not asserted. Only the deny SIGNAL is kept — the
+          // guard's own reads never enter the app's graph. Fallbacks: an auth-named guard
+          // on an app with a PROVEN global auth guard is gated by it; a principal-injection
+          // decorator with no global proof stays an ASSERTED guard (name-only, never
+          // verified). `allowAssert` is on only for the param decorators.
+          const guardStepScan = (name, allowAssert) =>
+            guardScan(name, mod, engine) ??
+            (nestPassportGuard(name, mod)
+              ? GLOBAL_GUARD_SCAN // catalog-verified: @nestjs/passport AuthGuard provably 401s
+              : globalGuardDenies &&
+                  (GUARD_DECORATOR.test(name) || nameLooksLikePrincipal(name))
+                ? GLOBAL_GUARD_SCAN
+                : allowAssert
+                  ? ASSERTED_PRINCIPAL_SCAN
+                  : null);
 
           // the handler's effects = the controller method body + every service
           // method it delegates to through DI (this.<prop>.<call>())
@@ -118,17 +160,7 @@ export function extractNest(cwd, entryDir) {
 
           const chain = [
             ...guards.map((name) => {
-              // Prove the guard, don't just trust its name: resolve @UseGuards(X)'s
-              // canActivate and check it can DENY (401/403 or an auth exception). A
-              // resolved deny → the guard node reads VERIFIED, not asserted. Only the
-              // deny SIGNAL is kept — the guard's own reads never enter the app's graph.
-              // Fallback: an auth-named guard on an app with a PROVEN global auth guard is
-              // gated by it (the decorator's metadata triggers the app-wide guard's deny).
-              const scan =
-                guardScan(name, mod, engine) ??
-                (globalGuardDenies && GUARD_DECORATOR.test(name)
-                  ? GLOBAL_GUARD_SCAN
-                  : null);
+              const scan = guardStepScan(name, false);
               return {
                 name,
                 sourceFile: rel,
@@ -138,6 +170,14 @@ export function extractNest(cwd, entryDir) {
                 role: 'middleware',
               };
             }),
+            ...principalGuards.map((name) => ({
+              name,
+              sourceFile: rel,
+              sourceLine: m.loc?.start.line ?? 0,
+              fn: null,
+              scan: guardStepScan(name, true),
+              role: 'middleware',
+            })),
             {
               name: m.key.name,
               sourceFile: rel,
@@ -325,6 +365,42 @@ function gqlName(call, methodName) {
 const GUARD_DECORATOR =
   /^(auth|authenticated|guard|acl|permission|role|protect|secured|require|jwt|loggedin|signedin)/i;
 
+// The NestJS half of the auth-library catalog (ADR-069): a `@UseGuards(...)` guard built on
+// `@nestjs/passport`'s `AuthGuard`. Two forms, both of which provably 401 via passport:
+//   • inline `@UseGuards(AuthGuard('jwt'))` — the guard name is imported from @nestjs/passport;
+//   • `@UseGuards(JwtAuthGuard)` where `class JwtAuthGuard extends AuthGuard('jwt') {}`.
+// Deny-FORM precision: if the subclass OVERRIDES `canActivate`/`handleRequest`, its deny is custom
+// (it may swallow the 401) → abstain (return false, stays asserted — the safe direction), never
+// falsely verify. Provenance-based (the import package), never a name test.
+function nestPassportGuard(name, mod) {
+  const pkgOf = mod.authGuards?.pkgOf;
+  if (!pkgOf) return false;
+  // inline AuthGuard('jwt') — the name itself is imported straight from @nestjs/passport
+  if (pkgOf.get(name) === '@nestjs/passport') return true;
+  // a subclass of AuthGuard(...) — resolve the class (same file, else through its import)
+  let gmod = mod;
+  let cls = classInModule(mod, name);
+  if (!cls) {
+    const file = mod.imports.get(name);
+    if (!file) return false;
+    gmod = parseModule(file);
+    if (gmod.error) return false;
+    cls = classInModule(gmod, name);
+  }
+  if (!cls || cls.superClass?.type !== 'CallExpression') return false;
+  const superName =
+    cls.superClass.callee?.type === 'Identifier' ? cls.superClass.callee.name : null;
+  if (!superName || gmod.authGuards?.pkgOf?.get(superName) !== '@nestjs/passport')
+    return false;
+  const overridesDeny = cls.body.body.some(
+    (mm) =>
+      mm.type === 'ClassMethod' &&
+      mm.key?.type === 'Identifier' &&
+      (mm.key.name === 'canActivate' || mm.key.name === 'handleRequest'),
+  );
+  return !overridesDeny;
+}
+
 // Resolve @UseGuards(X) → X's canActivate → keep ONLY whether it can deny (401/403 or
 // an auth exception). Returns a minimal scan carrying just the deny signal, so the guard
 // node earns `verified` without importing the canActivate's own effects (a user-lookup
@@ -456,6 +532,181 @@ function useGuards(decorators) {
     if (name && GUARD_DECORATOR.test(name)) out.push(name);
   }
   return out;
+}
+
+// Custom PARAMETER decorators that inject the authenticated principal into a handler —
+// `@AuthWorkspace()`, `@AuthUser()`, `@CurrentUser()`, `@GetUser()` (twenty & every DI/GraphQL
+// Nest app's auth idiom). They live on the method's PARAMETERS, so useGuards() never sees them,
+// yet their presence means the framework resolved `request.user`/`.workspace` from an
+// AUTHENTICATED request. An asserted guard DOWNGRADES an UNGUARDED_MUTATION, so a false match
+// would HIDE a real hole (SOUNDNESS Direction 2) — the bar is strict: does this decorator
+// actually inject the principal?
+//
+// SPARDA's own thesis is "behaviour, not names" (E-060: the old name-regex read `@Author` as
+// auth). So we PROVE it: resolve the decorator's `createParamDecorator(...)` body and read what
+// request field it returns. `@AuthWorkspace` → `getRequest().workspace` (a principal field) →
+// guard; `@Author` → `getRequest().body.author` (user input) → NOT a guard. When the body is
+// visible, the BODY is final — the name is irrelevant. Only when the definition is opaque
+// (imported from a library, no body) do we fall back to the name, and even then on whole TOKENS
+// (`@Author` → [author], never matches `auth`), not substrings. Either way it stays an ASSERTED
+// guard (ADR-063) — reading the principal proves the route CONSUMES auth, never that it DENIES.
+
+// request-context fields that hold the authenticated principal (not user input).
+const PRINCIPAL_FIELD = new Set([
+  'user',
+  'auth',
+  'workspace',
+  'account',
+  'session',
+  'principal',
+  'currentuser',
+  'tenant',
+  'identity',
+  'viewer',
+  'actor',
+  'loggeduser',
+  'authuser',
+  'me',
+]);
+// request fields that carry USER INPUT — a principal-named field UNDER one of these
+// (`req.body.user`) is caller-controlled, NOT the authenticated principal.
+const INPUT_FIELD = new Set([
+  'body',
+  'params',
+  'param',
+  'query',
+  'headers',
+  'header',
+  'cookies',
+  'ip',
+]);
+// whole-token principal vocabulary for the NAME FALLBACK (opaque/imported decorators).
+const PRINCIPAL_TOKEN = new Set([
+  'auth',
+  'user',
+  'users',
+  'workspace',
+  'account',
+  'session',
+  'principal',
+  'tenant',
+  'identity',
+  'viewer',
+  'actor',
+  'jwt',
+  'login',
+  'loggedin',
+]);
+
+// split an identifier into lowercased word tokens: `AuthWorkspace` → [auth, workspace],
+// `get_user` → [get, user], `JWTUser` → [jwt, user]. Whole-token matching kills the
+// substring false-positives a name regex makes (`Author` → [author], never `auth`).
+function splitIdent(name) {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((t) => t.toLowerCase());
+}
+
+const nameLooksLikePrincipal = (name) =>
+  splitIdent(name).some((t) => PRINCIPAL_TOKEN.has(t));
+
+// the `createParamDecorator(fn)` factory function for a decorator `name`, resolved same-file
+// or through its import — or null if the definition is opaque (library import, no body).
+function paramDecoratorFactory(name, mod) {
+  const search = (m) => {
+    let fn = null;
+    walkAst(m.ast.program, (n) => {
+      if (
+        !fn &&
+        n.type === 'VariableDeclarator' &&
+        n.id?.type === 'Identifier' &&
+        n.id.name === name &&
+        n.init?.type === 'CallExpression' &&
+        idName(n.init.callee) === 'createParamDecorator'
+      ) {
+        const arg = n.init.arguments.find(
+          (a) =>
+            a?.type === 'ArrowFunctionExpression' || a?.type === 'FunctionExpression',
+        );
+        if (arg) fn = arg;
+      }
+    });
+    return fn;
+  };
+  const here = search(mod);
+  if (here) return here;
+  const file = mod.imports.get(name);
+  if (!file) return null;
+  const dmod = parseModule(file);
+  return dmod.error ? null : search(dmod);
+}
+
+// Does the decorator's body read the authenticated principal? True iff it accesses a
+// PRINCIPAL_FIELD (`.user`/`.workspace`/…) whose object chain does NOT pass through a
+// user-input field (`req.body.user` is caller-controlled, not the principal).
+function decoratorReadsPrincipal(fnNode) {
+  let reads = false;
+  walkAst(fnNode.body ?? fnNode, (n) => {
+    if (
+      !reads &&
+      n.type === 'MemberExpression' &&
+      n.property?.type === 'Identifier' &&
+      PRINCIPAL_FIELD.has(n.property.name.toLowerCase()) &&
+      !objectChainHasInput(n.object)
+    )
+      reads = true;
+  });
+  return reads;
+}
+
+// walk down a member/call receiver chain — true if any property is a user-input field.
+function objectChainHasInput(node) {
+  let cur = node;
+  while (cur) {
+    if (cur.type === 'MemberExpression') {
+      if (
+        cur.property?.type === 'Identifier' &&
+        INPUT_FIELD.has(cur.property.name.toLowerCase())
+      )
+        return true;
+      cur = cur.object;
+    } else if (cur.type === 'CallExpression') {
+      cur = cur.callee;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Does this decorator inject the authenticated principal? Body visible → BEHAVIOUR is final
+// (proven read of the principal); body opaque → tokenized-name fallback (an honest guess).
+function injectsPrincipal(name, mod) {
+  const fn = paramDecoratorFactory(name, mod);
+  if (fn) return decoratorReadsPrincipal(fn);
+  return nameLooksLikePrincipal(name);
+}
+
+// The authenticated-principal param decorators on a route method's parameters, deduped by
+// name. Reads both a plain parameter's decorators and a TSParameterProperty's (defensive —
+// handler params are rarely parameter-properties, but constructor-style methods exist).
+function paramAuthGuards(method, mod) {
+  const out = new Set();
+  for (const param of method.params ?? []) {
+    const decs =
+      param.decorators ??
+      (param.type === 'TSParameterProperty' ? param.parameter?.decorators : null) ??
+      [];
+    for (const d of decs) {
+      const call = d.expression;
+      const name = call?.type === 'CallExpression' ? idName(call.callee) : idName(call);
+      if (name && injectsPrincipal(name, mod)) out.add(name);
+    }
+  }
+  return [...out];
 }
 
 // DI resolution — following this.<prop>.<method>() through the constructor-type

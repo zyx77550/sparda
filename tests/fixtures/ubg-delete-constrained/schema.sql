@@ -1,0 +1,5 @@
+CREATE TABLE members (
+  id    SERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name  TEXT NOT NULL
+);

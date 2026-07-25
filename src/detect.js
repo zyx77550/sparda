@@ -40,6 +40,15 @@ export function detectStack(cwd) {
     // out-of-the-box for a skeptic testing the framework repo directly (E-043).
     const medusaApi = medusaApiDir(cwd);
     if (medusaApi) return { framework: 'medusa', entryFile: medusaApi, port: 9000 };
+    // Strapi: routes are a DECLARATIVE data structure (`module.exports = { routes: [...] }`
+    // or `createCoreRouter(uid)`), invisible to every route-CALL scan. Detected by its dep
+    // (`@strapi/strapi`) OR — for the framework repo / a dep-less checkout — by its structural
+    // signature: a `src/api/*/routes/*` file whose export is a route table or a core router.
+    // Checked before express (Strapi lists koa/express transitively) so its config routes win
+    // over a stray bootstrap. Cheap on a non-Strapi app: the dep check is a map lookup, the
+    // structural probe two statSync + a bounded read only when src/api exists (E-043 style).
+    if (deps['@strapi/strapi'] || deps['@strapi/core'] || strapiApiDir(cwd))
+      return { framework: 'strapi', entryFile: 'src/api', port: 1337 };
     // A decorator-framework app (routes on `@Get`/`@Post` class methods, not
     // `app.get()`) is read by the decorator extractor even when `express` is a direct
     // dep and no `@nestjs/*` is present — n8n's home-made `@RestController` registry,
@@ -92,7 +101,7 @@ export function detectStack(cwd) {
     const known = ['fastify', 'koa'].find((d) => deps[d]);
     if (known)
       throw err(
-        `${known} detected — not supported yet. Express, NestJS & FastAPI in v0.`,
+        `${known} detected — not supported yet. Express, NestJS, FastAPI & Flask in v0.`,
         '+1 the framework vote: github.com/zyx77550/sparda/issues/1',
       );
   }
@@ -106,6 +115,18 @@ export function detectStack(cwd) {
       const port = detectFastAPIPort(cwd, entryFile);
       const pythonCmd = detectPython();
       return { framework: 'fastapi', entryFile, port, pythonCmd };
+    }
+  }
+  // Flask — checked AFTER FastAPI (a FastAPI project may pull flask transitively; FastAPI
+  // wins). The same Python extractor handles it; only the entry-file marker differs.
+  for (const f of ['requirements.txt', 'pyproject.toml']) {
+    const p = path.join(cwd, f);
+    if (
+      fs.existsSync(p) &&
+      /(^|[^a-z])flask([^a-z]|$)/i.test(fs.readFileSync(p, 'utf8'))
+    ) {
+      const entryFile = findFlaskEntry(cwd);
+      return { framework: 'flask', entryFile, port: 5000, pythonCmd: detectPython() };
     }
   }
 
@@ -130,7 +151,7 @@ export function detectStack(cwd) {
 
   const suggestions = suggestAppDirs(cwd);
   throw err(
-    'No supported framework found (Express, Next.js, NestJS, Medusa, FastAPI).',
+    'No supported framework found (Express, Next.js, NestJS, Medusa, FastAPI, Flask).',
     suggestions.length
       ? `This looks like a monorepo — the analyzable app is in a sub-directory. Try:\n` +
           suggestions
@@ -299,6 +320,31 @@ function medusaApiDir(cwd) {
   return null;
 }
 
+// Strapi's structural signature: a `src/api/*/routes/*` file whose export is a route table
+// (`routes:` array) or a `createCoreRouter(...)` — the two shapes strapi.js reads. Structural
+// so a dep-less checkout (the framework repo, a monorepo app) is still detected. Bounded +
+// short-circuits at the first match. Returns true, or false when src/api is absent/non-Strapi.
+const STRAPI_ROUTE_SIG = /createCoreRouter\s*\(|routes\s*:\s*\[/;
+function strapiApiDir(cwd) {
+  const abs = path.join(cwd, 'src/api');
+  try {
+    if (!fs.statSync(abs).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  for (const file of walkSourceFiles(abs, 400)) {
+    if (!/([\\/])routes([\\/])/.test(file)) continue;
+    let src;
+    try {
+      src = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (STRAPI_ROUTE_SIG.test(src)) return true;
+  }
+  return false;
+}
+
 const DECO_EXCLUDE = new Set([
   'node_modules',
   '.git',
@@ -401,7 +447,28 @@ function findFastAPIEntry(cwd) {
   );
 }
 
-function searchPyFiles(dir, root, countRef = { val: 0 }) {
+// Flask's entry is the file that calls `Flask(__name__)` — conventionally app.py /
+// wsgi.py / run.py / main.py, else the first .py declaring it. Same shape as the
+// FastAPI finder; the Python extractor handles both frameworks from that entry.
+function findFlaskEntry(cwd) {
+  const candidates = ['app.py', 'wsgi.py', 'run.py', 'main.py', 'src/app.py'];
+  for (const rel of candidates) {
+    const abs = path.resolve(cwd, rel);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      if (fs.readFileSync(abs, 'utf8').includes('Flask(')) {
+        return path.relative(cwd, abs).split(path.sep).join('/');
+      }
+    }
+  }
+  const entry = searchPyFiles(cwd, cwd, { val: 0 }, 'Flask(');
+  if (entry) return path.relative(cwd, entry).split(path.sep).join('/');
+  throw err(
+    'Could not locate your Flask entry file (the one calling Flask()).',
+    'Specify it manually, or make sure Flask() is declared in one of your python files.',
+  );
+}
+
+function searchPyFiles(dir, root, countRef = { val: 0 }, marker = 'FastAPI(') {
   const EXCLUDE = new Set([
     'node_modules',
     '.git',
@@ -434,7 +501,7 @@ function searchPyFiles(dir, root, countRef = { val: 0 }) {
       countRef.val++;
       if (countRef.val > 200) return null;
       const src = fs.readFileSync(abs, 'utf8');
-      if (src.includes('FastAPI(')) {
+      if (src.includes(marker)) {
         return abs;
       }
     }

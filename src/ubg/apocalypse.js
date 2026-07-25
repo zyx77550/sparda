@@ -58,11 +58,14 @@ export function buildProofObjects(graph) {
       .map((id) => g.nodes.get(id))
       .filter(Boolean);
     const guards = reached.filter((n) => n.kind === 'guard');
-    const writes = [];
+    const allWrites = [];
     for (const n of reached)
       if (n.kind === 'effect')
         for (const e of g.mutOut.get(n.id) ?? [])
-          writes.push({ effect: n, stateId: e.to });
+          allWrites.push({ effect: n, stateId: e.to });
+    // guard-dominance (C2): a write that runs BEFORE the route's guard is NOT discharged by it —
+    // never claim it in a proof (scan-level truth, authoritative over the graph's hoisted gate edge).
+    const writes = allWrites.filter((w) => !w.effect.meta?.bypassesGuard);
     // a proof object is emitted ONLY for a genuinely DISCHARGED obligation: a mutating route
     // (O1 applies) that actually reaches a guard. A guardless mutation is a FINDING, not a proof.
     if (!writes.length || !guards.length) continue;
@@ -120,6 +123,36 @@ export function reachOf(epId, cfOut) {
 
 const locOf = (node) => (node?.loc ? `${node.loc.file}:${node.loc.line}` : 'unknown');
 
+// The type-lock (ADR-070). Counts CLEAN mutation routes whose protection is ASSERTED-only — a
+// route that mutates state, is guarded (so no UNGUARDED_MUTATION fires), but where NO guard is
+// VERIFIED (SPARDA never saw a deny; the guards are trusted by name / opaque middleware). Such a
+// route is clean only because an UNPROVEN signal suppressed the finding, so the app's safety rests
+// on TRUST, not PROOF — it must read PARTIAL, never PROVEN. Computed here in ONE place (the verdict
+// chokepoint) so the honesty rule is structural: no signal author can accidentally let an asserted
+// guard buy PROVEN (E-060 was exactly that class of mistake). Only ever SOFTENS PROVEN→PARTIAL —
+// same safe direction as the coverage/blind-spot rungs — never masks a finding, never touches the
+// CI gate. Verified guards (incl. the ADR-069 auth-library catalog) keep a route PROVEN.
+const MUTATING_EFFECT = new Set(['db_write', 'http_call', 'fs_write']);
+function assertedOnlyMutations(graph) {
+  if (!graph) return 0;
+  const g = indexGraph(graph);
+  let count = 0;
+  for (const ep of g.entrypoints) {
+    const reached = [...reachOf(ep.id, g.cfOut)].map((id) => g.nodes.get(id));
+    const mutates = reached.some(
+      (n) =>
+        n?.kind === 'effect' &&
+        MUTATING_EFFECT.has(n.meta.effectType) &&
+        !n.meta.bypassesGuard,
+    );
+    if (!mutates) continue;
+    const guards = reached.filter((n) => n?.kind === 'guard');
+    if (guards.length === 0) continue; // unguarded → a hard finding already, not "clean"
+    if (!guards.some((n) => n.meta.verified === true)) count++; // guarded, but by trust only
+  }
+  return count;
+}
+
 // ---------------------------------------------------------------------------
 // static obligations
 // ---------------------------------------------------------------------------
@@ -146,14 +179,44 @@ export function checkGraph(graph) {
     const writes = []; // { effect, stateId }
     for (const n of reached) {
       if (n?.kind !== 'effect') continue;
-      for (const e of g.mutOut.get(n.id) ?? []) writes.push({ effect: n, stateId: e.to });
+      const outs = g.mutOut.get(n.id) ?? [];
+      for (const e of outs) writes.push({ effect: n, stateId: e.to });
+      // Opaque persistence write (ADR-068): a proven-handle call with an UNKNOWN target table has
+      // no mutation edge (the linker needs a table), but it IS a mutation. Count it with a null
+      // state so the guard obligation (O1) fires — while O2/O3/O5 skip it for lack of a state
+      // node, so it can NEVER fabricate value/atomicity/aggregate precision, only the unguarded
+      // check. This is the effect-bias inversion: a missed write is a hidden hole; an over-counted
+      // one is a surfaceable false positive.
+      if (n.meta.opaque && n.meta.effectType === 'db_write' && outs.length === 0)
+        writes.push({ effect: n, stateId: null });
     }
     const observables = reached.filter((n) => n?.kind === 'effect' && n.meta.observable);
     const vec = { auth: 0, validation: 0, atomicity: 0, reversibility: 0, aggregate: 0 };
 
     // O1 — every mutation path must pass a guard
     obligations++;
-    if (writes.length) vec.auth = guards.length ? 1 : -1;
+    // Guard-DOMINANCE (kills the C2 false PROVEN): a guard on the route does NOT cover a mutation
+    // that runs BEFORE it — an early-return branch that mutates then checks auth after, or a write in
+    // a branch a sibling guards. `bypassesGuard` is the SCAN-LEVEL truth (set only when a guard
+    // demonstrably follows the write in the SAME body), and it is authoritative: the graph hoists an
+    // in-body guard into a chain node with a gate edge, so a gate edge cannot be trusted to mean
+    // "runs before the whole body". Under-approximated by construction, so it can only ever turn a
+    // PROVEN into NOT_PROVEN — never fabricate a guard, never a false PROVEN.
+    const bypassWrites =
+      guards.length > 0 ? writes.filter((w) => w.effect.meta.bypassesGuard) : [];
+    if (writes.length) vec.auth = guards.length === 0 || bypassWrites.length ? -1 : 1;
+    if (bypassWrites.length) {
+      // A bypassed guard is worse than no guard (it reads as protected but isn't) — a hard critical,
+      // never softened by the credential/public-by-design taxonomy below.
+      findings.push({
+        rule: 'UNGUARDED_MUTATION',
+        severity: 'critical',
+        guardBypass: true,
+        entrypoint: ep.id,
+        message: `${ep.label} mutates ${fmtStates(bypassWrites)} BEFORE its guard runs — an early-return / pre-check branch reaches the write without passing the route's auth check, so the guard does not cover it`,
+        evidence: bypassWrites.map((w) => `${w.effect.id} (${locOf(w.effect)})`),
+      });
+    }
     if (writes.length && guards.length === 0) {
       // taint enrichment (ADR-P1): does request data provably flow into one of these
       // writes? A tag on an ALREADY-emitted finding — never a finding of its own — so it
@@ -280,21 +343,39 @@ export function checkGraph(graph) {
       });
     }
 
-    // O2 — writes into constrained tables need validated input
+    // O2 — writes into constrained tables need validated input. A DELETE removes a row, so it
+    // can never violate a value constraint (CHECK / NOT NULL / UNIQUE) — those constrain the
+    // values a row CARRIES, not its removal. Flagging a delete here was noise (medium finding on
+    // `DELETE /users/:id` because `users.email` is UNIQUE). Only value-writing ops qualify; an
+    // unknown op (raw SQL we couldn't classify) is kept, conservatively.
     obligations++;
-    const constrained = writes.filter((w) =>
-      (g.nodes.get(w.stateId)?.meta.invariants ?? []).some((i) =>
-        CONSTRAINING.has(i.type),
-      ),
+    const constrained = writes.filter(
+      (w) =>
+        w.effect.meta.op !== 'delete' &&
+        (g.nodes.get(w.stateId)?.meta.invariants ?? []).some((i) =>
+          CONSTRAINING.has(i.type),
+        ),
     );
     if (constrained.length) vec.validation = ep.meta.inputValidated ? 1 : -1;
     if (!ep.meta.inputValidated && constrained.length) {
+      // Proof-grade tier: a constrained write the taint pass PROVED carries request data
+      // (`const { email } = req.body; insert({ email })`) is a demonstrated source→sink —
+      // unvalidated input reaches a column whose CHECK/NOT NULL/UNIQUE it can violate. The
+      // conservative flag still fires when taint is not proven (taint under-approximates —
+      // never drop the finding, only sharpen it when the flow is visible).
+      const taintedConstrained = constrained.filter((w) => w.effect.meta.tainted);
+      const proven = taintedConstrained.length > 0;
       findings.push({
         rule: 'UNVALIDATED_CONSTRAINED_WRITE',
         severity: 'medium',
         entrypoint: ep.id,
-        message: `${ep.label} writes ${fmtStates(constrained)} whose declared invariants (CHECK/NOT NULL/UNIQUE) can be violated by unvalidated input`,
-        evidence: constrained.map((w) => w.stateId),
+        message: proven
+          ? `${ep.label} lets unvalidated request data flow straight into ${fmtStates(taintedConstrained)}, whose declared invariants (CHECK/NOT NULL/UNIQUE) it can violate`
+          : `${ep.label} writes ${fmtStates(constrained)} whose declared invariants (CHECK/NOT NULL/UNIQUE) can be violated by unvalidated input`,
+        evidence: proven
+          ? taintedConstrained.map((w) => `${w.effect.id} (${locOf(w.effect)})`)
+          : constrained.map((w) => w.stateId),
+        ...(proven ? { tainted: true } : {}),
       });
     }
 
@@ -333,14 +414,28 @@ export function checkGraph(graph) {
       for (const obs of observables) {
         if (obs.meta.compensable) continue;
         if (g.compensators.has(obs.id)) continue; // the undo itself is not a risk
-        bad = true;
+        // Innate immunity (ADR-072): only a KNOWN-dangerous observable — a recognized
+        // payment / mail / SMS / push effect from the SDK PAMP catalog (`target: sdk:…`) — is a
+        // HARD irreversible risk: you genuinely cannot un-send an email or un-charge a card, so an
+        // email+write with no compensation is a real saga hole. A GENERIC external call
+        // (`target: dynamic` — an unknown fetch, and in the wild almost always a READ: a search
+        // hitting an embedding API, an OAuth token handshake) is TOLERATED as an ADVISORY, not
+        // cried-wolf as a hard finding. This is the immune principle — attack the KNOWN pathogen,
+        // tolerate the unfamiliar (autoimmunity = the false positive). It kills the wolf-cry
+        // WITHOUT hiding a hole: the unknown call stays surfaced (advisory), at the honest
+        // confidence level (we cannot prove a generic fetch is irreversible), never silenced.
+        const knownDangerous = String(obs.meta.target ?? '').startsWith('sdk:');
         findings.push({
           rule: 'IRREVERSIBLE_OBSERVABLE',
-          severity: 'high',
+          severity: knownDangerous ? 'high' : 'info',
+          ...(knownDangerous ? {} : { advisory: true }),
           entrypoint: ep.id,
-          message: `${ep.label} makes an irreversible external call (${obs.meta.target ?? obs.label}) while also mutating state — no compensation path exists if the write fails`,
+          message: knownDangerous
+            ? `${ep.label} makes an irreversible external call (${obs.meta.target ?? obs.label}) while also mutating state — no compensation path exists if the write fails`
+            : `${ep.label} makes an external call (${obs.meta.target ?? obs.label}) while also mutating state — if that call is irreversible (payment/mail/…), add a compensation path; a generic fetch/read is fine`,
           evidence: [`${obs.id} (${locOf(obs)})`],
         });
+        if (knownDangerous) bad = true;
       }
       vec.reversibility = bad ? -1 : 1;
     }
@@ -677,8 +772,9 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
     provable && entrypoints > 0 && (provableBehavior === 0 || lowCoverage);
   // guard provenance: how many guards did SPARDA actually VERIFY (see a deny path in
   // the body) vs only assert by name (opaque middleware/decorators it couldn't read).
-  // Honest signal — it does not change the verdict, but it tells you how much of the
-  // auth posture rests on trust vs proof.
+  // As of the type-lock (ADR-070) this is LOAD-BEARING: a clean mutation route protected
+  // ONLY by asserted guards forces PARTIAL (see `assertedMutations` below), so PROVEN can
+  // never rest on trust. The count here is the headline for the dossier/CLI.
   const guards = graph ? graph.nodes.filter((n) => n.kind === 'guard') : [];
   const guardsVerified = guards.filter((g) => g.meta?.verified).length;
   // A clean whole-app proof below the completeness bar is PARTIAL — proved, but not over
@@ -694,10 +790,16 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
   // finding, never touches the CI gate (`safe`). blindHigh defaults to 0, so a caller that
   // did not survey blind spots (heal delta) is unaffected.
   const clean = provable && !surfaceOnly && hardCount === 0;
+  // The type-lock (ADR-070): PROVEN requires that no CLEAN mutation route rests on an
+  // ASSERTED-only guard. If any does, the app is proved-but-on-trust → PARTIAL, not PROVEN.
+  // Only computed when the app is otherwise clean (so it can only SOFTEN PROVEN→PARTIAL).
+  const assertedMutations = clean ? assertedOnlyMutations(graph) : 0;
   const partial =
     clean &&
     entrypoints > 0 &&
-    ((coverage != null && coverage < COVERAGE_COMPLETE) || blindHigh > 0);
+    ((coverage != null && coverage < COVERAGE_COMPLETE) ||
+      blindHigh > 0 ||
+      assertedMutations > 0);
   // `safe` is the CI gate (block a risky deploy): a surface-only app has no
   // critical/high findings and is NOT risky, so it does not fail the gate — it just
   // isn't a positive proof. `clean` is the strong claim (PROVEN) and DOES require
@@ -710,6 +812,7 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
     surfaceOnly,
     guards: guards.length,
     guardsVerified,
+    assertedMutations,
     safe: provable && counts.critical === 0 && counts.high === 0,
     clean,
     partial,
@@ -776,7 +879,13 @@ function sortFindings(findings) {
 }
 
 const fmtStates = (writes) =>
-  [...new Set(writes.map((w) => w.stateId.split(':').pop()))].sort().join(', ');
+  [
+    ...new Set(
+      writes.map((w) => (w.stateId ? w.stateId.split(':').pop() : 'an unknown table')),
+    ),
+  ]
+    .sort()
+    .join(', ');
 
 const fmtInvariant = (inv) =>
   inv.type === 'check'

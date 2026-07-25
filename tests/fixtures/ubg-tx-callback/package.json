@@ -1,0 +1,1 @@
+{ "name":"ubg-tx-callback","type":"module","main":"src/app.js","dependencies":{"express":"^4.19.0"} }

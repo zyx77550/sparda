@@ -38,6 +38,7 @@ export function extractFastAPI(cwd, entryFile, pythonCmd = 'python') {
   } catch (err) {
     throw new Error(
       `FastAPI UBG extractor returned invalid JSON: ${err.message}. Raw: ${res.stdout.slice(0, 200)}`,
+      { cause: err },
     );
   }
   if (payload.error) throw new Error(payload.error);

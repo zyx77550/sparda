@@ -30,6 +30,7 @@ export function parseFastAPIProject(cwd, entryFile, pythonCmd = 'python') {
   } catch (err) {
     throw new Error(
       `Failed to parse Python extractor output: ${err.message}. Raw output: ${res.stdout}`,
+      { cause: err },
     );
   }
 }

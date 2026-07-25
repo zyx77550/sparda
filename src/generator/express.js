@@ -80,7 +80,7 @@ export function generateExpress({ cwd, entryFile, moduleType, port, routes }) {
   const isESM = moduleType === 'esm';
   const isTS = ext === '.ts';
 
-  let importLine = '';
+  let importLine;
   let reqType = '';
   let resType = '';
   let nextType = '';

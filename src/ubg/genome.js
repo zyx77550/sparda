@@ -134,7 +134,7 @@ export function verifyAntibody(ab) {
   const id = `${ANTIBODY_VERSION}_${sha256(body).slice(0, 32)}`;
   if (id !== ab.id) return { ok: false, reason: 'content-address' };
   // signature: Ed25519 over the same claim bytes the id commits to.
-  let sigOk = false;
+  let sigOk;
   try {
     sigOk = crypto.verify(
       null,

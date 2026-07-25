@@ -100,7 +100,7 @@ async function gate(opts, id, flight, healDir) {
   // 3. apocalypse: no new critical/high, nothing protected got removed
   const fixedGraph = canonicalizeGraph(compileUBG(opts.cwd, { write: false }).graph);
   const staticFindings = checkGraph(fixedGraph).findings;
-  let regressions = [];
+  let regressions;
   const baselinePath = path.join(healDir, 'baseline.json');
   if (fs.existsSync(baselinePath)) {
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));

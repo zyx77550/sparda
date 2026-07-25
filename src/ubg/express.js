@@ -6,10 +6,23 @@
 // Depth stays bounded like the v0 parser: entry file + mounted routers.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseModule, resolveRelImport } from './extract.js';
+import { parseModule, resolveRelImport, authDenyCall } from './extract.js';
 import { createResolver, relOf } from './resolve.js';
 
 const HTTP = new Set(['get', 'post', 'put', 'patch', 'delete']);
+
+// A minimal scan carrying ONLY the deny signal — attached to a middleware recognized as a known
+// auth-library guard (ADR-069: `passport.authenticate()`, `expressjwt({…})`) whose body lives in
+// node_modules and so can't be read in-repo. The catalog is a VERIFIED published fact, so the guard
+// earns `verified` (→ can reach PROVEN), not merely `asserted`. No effects/reads enter the graph.
+const AUTH_DENY_SCAN = {
+  effects: [],
+  returnShapes: [],
+  calls: [],
+  async: false,
+  validatesInput: false,
+  guardSignals: { deniesWithStatus: true },
+};
 
 // → { routes, globalMiddlewares, helpers, skipped, scannedFiles }
 export function extractExpress(cwd, entryFile) {
@@ -224,6 +237,10 @@ export function extractExpress(cwd, entryFile) {
         sourceFile: relFile,
         sourceLine: arg.loc?.start.line ?? 0,
         fn: arg,
+        // deep-scan the inline handler like every other callable branch: follows its
+        // service/model calls AND carries the module's effect-client provenance (import
+        // labels), so an SDK call in an inline handler is recognized by origin.
+        scan: resolver.deepScan(arg, mod),
       };
     }
     if (arg.type === 'CallExpression') {
@@ -245,6 +262,20 @@ export function extractExpress(cwd, entryFile) {
           sourceLine: fnArg.loc?.start.line ?? 0,
           fn: fnArg,
           scan: resolver.deepScan(fnArg, mod),
+        };
+      }
+      // known auth-library deny-form middleware (ADR-069): `passport.authenticate('jwt')`,
+      // `expressjwt({…})`. Its body is in node_modules (opaque), but the catalog is a verified
+      // published fact that it denies — so the guard reads VERIFIED, not asserted, and its app
+      // can legitimately reach PROVEN. Deny-FORM precision (a custom callback / credentialsRequired
+      // false) is handled in authDenyCall, which abstains rather than over-verify.
+      if (authDenyCall(arg, mod.authGuards?.pkgOf)) {
+        return {
+          name,
+          sourceFile: relFile,
+          sourceLine: arg.loc?.start.line ?? 0,
+          fn: null,
+          scan: AUTH_DENY_SCAN,
         };
       }
       // factory middleware: validate(schema), rateLimit({…}) — the factory
@@ -328,6 +359,17 @@ export function extractExpress(cwd, entryFile) {
           scan: resolver.deepScan(fn.node, target),
         };
       }
+    }
+    // aliased auth-library guard (ADR-069): `const requireAuth = passport.authenticate('jwt')`
+    // used by name here — verified by the catalog, exactly like the inline form above.
+    if (mod.authGuards?.denyBindings?.has(arg.name)) {
+      return {
+        name: arg.name,
+        sourceFile: relFile,
+        sourceLine: arg.loc?.start.line ?? 0,
+        fn: null,
+        scan: AUTH_DENY_SCAN,
+      };
     }
     // known but bodyless — node exists, microscope stays blind
     return {

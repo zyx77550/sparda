@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPARDA — Turn any codebase into an MCP server. Residual Labs.
+// SPARDA — The trust layer for AI-written code. AI writes. SPARDA proves. Residual Labs.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -30,6 +30,8 @@ const opts = {
   check: flags.has('--check'),
   hook: flags.has('--hook'),
   arm: flags.has('--arm'),
+  installClaude: flags.has('--install-claude'),
+  uninstallClaude: flags.has('--uninstall-claude'),
   markdown: flags.has('--markdown'),
   port: getOpt('port', null),
   out: getOpt('out', null),
@@ -49,7 +51,7 @@ const opts = {
 const HELP = {
   prove: `sparda prove [--dir <path>] [--json | --markdown]\n  The whole trust verdict: proof + coverage + a shareable seal.\n  --markdown  emit a sticky-PR-comment body (used by the GitHub Action).`,
   apocalypse: `sparda apocalypse [--dir <path>] [--sarif] [--proof] [--save-baseline]\n  Prove the deploy — exit 1 on any critical/high finding.\n  --sarif         also write .sparda/apocalypse.sarif for the Security tab.\n  --proof         also write .sparda/apocalypse.proof.json — a re-verifiable\n                  discharge trace (deny_path per guarded mutation) a third party\n                  can audit against the graph hash without re-compiling.\n  --save-baseline freeze this graph; later runs diff against it.`,
-  gate: `sparda gate [--dir <path>] [--arm] [--hook] [--json]\n  The agent edit-loop gate: prove THIS edit lost no guard, dropped no route,\n  grew no blast radius — delta vs the armed baseline only (pre-existing state\n  never blocks an edit). Arms itself on first run.\n  --arm   accept the current graph as the new baseline.\n  --hook  Claude Code PostToolUse contract: silent when clean, report on\n          stderr + exit 2 (blocking feedback to the agent) on regression.`,
+  gate: `sparda gate [--dir <path>] [--arm] [--hook] [--json]\n  The agent edit-loop gate: prove THIS edit lost no guard, dropped no route,\n  grew no blast radius — delta vs the armed baseline only (pre-existing state\n  never blocks an edit). Arms itself on first run.\n  --arm   accept the current graph as the new baseline.\n  --hook  Claude Code PostToolUse contract: silent when clean, report on\n          stderr + exit 2 (blocking feedback to the agent) on regression.\n  --install-claude    wire the gate into .claude/settings.json PostToolUse (one command).\n  --uninstall-claude  remove exactly that hook again (clean).`,
   ubg: `sparda ubg [--dir <path>] [--json] [--out <file>] [--openapi <spec>]\n  Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json).`,
   stitch: `sparda stitch <dir1> <dir2> [...] [--json]\n  Cross-service proof: join one service's outbound HTTP calls to another's routes,\n  surface cross-service trust boundaries + BOLA no mono-repo tool can see.`,
   badge: `sparda badge [--dir <path>] [--out <file>] [--json]\n  Emit a shareable SVG badge + README snippet (verdict · coverage · routes).`,
@@ -167,6 +169,26 @@ try {
       break;
     }
     case 'gate': {
+      if (opts.installClaude || opts.uninstallClaude) {
+        const { installClaudeHook, uninstallClaudeHook } =
+          await import('./commands/claude-hook.js');
+        if (opts.uninstallClaude) {
+          const { changed, file } = uninstallClaudeHook(opts.cwd);
+          console.log(
+            changed
+              ? `✓ Removed the SPARDA gate from Claude Code's PostToolUse hook (${file}).`
+              : `· No SPARDA gate hook found in ${file} — nothing to remove.`,
+          );
+        } else {
+          const { changed, file } = installClaudeHook(opts.cwd);
+          console.log(
+            changed
+              ? `✓ Installed — Claude Code now proves every edit in the loop.\n  ${file} → PostToolUse runs \`sparda gate --hook\`. Remove with \`sparda gate --uninstall-claude\`.`
+              : `· Already installed — ${file} already runs the SPARDA gate on PostToolUse.`,
+          );
+        }
+        break;
+      }
       const { runGate } = await import('./commands/gate.js');
       await runGate(opts);
       break;

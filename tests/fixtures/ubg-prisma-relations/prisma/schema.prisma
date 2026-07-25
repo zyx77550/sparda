@@ -1,0 +1,33 @@
+// Real-world @relation variants that the old single-line regex silently dropped:
+// a plain relation, a NAMED relation with onDelete, and a MULTILINE relation.
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+model User {
+  id       Int       @id @default(autoincrement())
+  accounts Account[]
+  orders   Order[]
+  posts    Post[]
+  @@map("users")
+}
+model Account {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id])
+  @@map("accounts")
+}
+model Order {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation("UserOrders", fields: [userId], references: [id], onDelete: Cascade)
+  @@map("orders")
+}
+model Post {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(
+    fields: [userId],
+    references: [id]
+  )
+  @@map("posts")
+}

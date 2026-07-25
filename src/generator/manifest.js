@@ -42,7 +42,7 @@ export function ensureSpardaKey(cwd, prevManifest = null) {
 // state (opt-in flags + observed circuits), and the `sparding` security
 // memory survive as long as the tool's method+path are unchanged.
 export function carryOverManifest(cwd, tools) {
-  let prev = null;
+  let prev;
   try {
     prev = JSON.parse(fs.readFileSync(path.join(cwd, 'sparda.json'), 'utf8'));
   } catch {

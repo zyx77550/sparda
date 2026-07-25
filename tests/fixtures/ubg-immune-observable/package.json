@@ -1,0 +1,2 @@
+{ "name": "ubg-immune-observable", "type": "module", "main": "src/app.js",
+  "dependencies": { "express": "^4.19.0", "axios": "^1.6.0", "stripe": "^14.0.0" } }

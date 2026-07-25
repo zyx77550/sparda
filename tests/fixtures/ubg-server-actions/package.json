@@ -1,0 +1,1 @@
+{ "name": "server-actions", "dependencies": { "next": "^14", "@prisma/client": "^5" } }

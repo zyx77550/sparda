@@ -8,6 +8,7 @@ import { clearModuleCache } from './extract.js';
 import { extractExpress } from './express.js';
 import { extractNest } from './nestjs.js';
 import { extractMedusa } from './medusa.js';
+import { extractStrapi } from './strapi.js';
 import { extractNext } from './nextjs.js';
 import { extractFastAPI } from './fastapi.js';
 import { extractOpenAPI } from './openapi.js';
@@ -32,8 +33,12 @@ export function compileUBG(
     express: () => extractExpress(cwd, stack.entryFile),
     nestjs: () => extractNest(cwd, stack.entryFile),
     medusa: () => extractMedusa(cwd, stack.entryFile),
+    strapi: () => extractStrapi(cwd, stack.entryFile),
     nextjs: () => extractNext(cwd, stack.entryFile),
     fastapi: () => extractFastAPI(cwd, stack.entryFile, stack.pythonCmd),
+    // Flask reuses the FastAPI (Python) extractor — same stdlib-ast walk, Flask route
+    // discovery folded in (Flask()/Blueprint/@app.route/register_blueprint/@login_required).
+    flask: () => extractFastAPI(cwd, stack.entryFile, stack.pythonCmd),
     openapi: () => extractOpenAPI(cwd, stack.entryFile),
   };
   if (!extractors[stack.framework]) {

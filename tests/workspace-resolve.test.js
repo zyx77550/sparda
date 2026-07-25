@@ -16,6 +16,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveRelImport, parseModule, clearModuleCache } from '../src/ubg/extract.js';
 import { parsePrismaSchemas } from '../src/ubg/prisma.js';
+import { compileUBG } from '../src/ubg/compile.js';
+import { canonicalizeGraph } from '../src/ubg/schema.js';
+import { checkGraph, verdictOf } from '../src/ubg/apocalypse.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const WS = path.join(here, 'fixtures', 'ubg-workspace');
@@ -79,5 +82,48 @@ describe('workspace schema resolution (P4)', () => {
     const check = (order.invariants ?? []).find((i) => i.type === 'check');
     expect(check?.expression).toContain('status in');
     expect(check?.expression).toContain('pending');
+  });
+});
+
+// End-to-end (audit hole #4): the write lives in the SIBLING package @acme/data, reached only
+// via route → controller → @acme/data barrel → order.service.js → Order.create(). It used to
+// dead-end at SURFACE because the leaf was exported as `module.exports.createOrder = async …`
+// (a direct function-to-exports assignment the function collector never captured). This locks
+// the whole chain: the cross-package effect resolves, so an unguarded route across the boundary
+// is caught instead of silently passing.
+describe('cross-package effect resolution end-to-end (audit hole #4)', () => {
+  clearModuleCache();
+  const { graph } = compileUBG(p('packages', 'api'), { write: false });
+  const g = canonicalizeGraph(graph);
+  const { findings } = checkGraph(g);
+  const verdict = verdictOf(findings, g);
+
+  it('resolves the db_write in the sibling @acme/data package', () => {
+    const writes = g.nodes.filter(
+      (n) => n.kind === 'effect' && n.meta.effectType === 'db_write',
+    );
+    expect(writes.some((w) => w.meta.table === 'order')).toBe(true);
+  });
+
+  it('is NOT surface-only — behavior one package away was resolved', () => {
+    expect(verdict.surfaceOnly).toBe(false);
+  });
+
+  it('catches the unguarded mutation that crosses the package boundary', () => {
+    const unguarded = findings.filter(
+      (f) => f.rule === 'UNGUARDED_MUTATION' && !f.advisory,
+    );
+    expect(unguarded.some((f) => /\/orders\/public/.test(f.entrypoint))).toBe(true);
+  });
+});
+
+// The root-cause capability, independent of monorepos: a leaf function exported as
+// `module.exports.f = async () => …` (or a wrapped `exports.f = catchAsync(async …)`) is now a
+// resolvable function — the const-arrow path never saw this common CommonJS style.
+describe('direct function-to-exports assignment is a resolvable function', () => {
+  it('registers `module.exports.createOrder = async …` under its exported name', () => {
+    clearModuleCache();
+    const service = parseModule(p('packages', 'data', 'src', 'order.service.js'));
+    expect(service.functions.has('createOrder')).toBe(true);
   });
 });

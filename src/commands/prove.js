@@ -99,8 +99,19 @@ export async function runProve(opts) {
   if (state === 'PROVEN') {
     console.log(`  ${obligations} obligations discharged · 0 violations`);
   } else if (state === 'PARTIAL') {
+    // PARTIAL has three possible reasons (ADR-070): a mutation rests on an asserted-only guard
+    // (deny not proven), high-risk blind spots, or incomplete coverage. Name the real one(s) —
+    // "only X% resolved" is misleading when coverage is high but a guard is merely trusted.
+    const reasons = [];
+    if (verdict.assertedMutations > 0)
+      reasons.push(
+        `${verdict.assertedMutations} guarded mutation(s) rest on a guard SPARDA could not verify (trusted by name — the deny is not proven)`,
+      );
+    if (summary.blindHigh > 0)
+      reasons.push(`${summary.blindHigh} high-risk blind spot(s)`);
+    reasons.push(`${cov} of the surface resolved`);
     console.log(
-      `  ${obligations} obligations discharged · 0 violations — but only ${cov} of the surface resolved; the rest is UNPROVEN, not safe`,
+      `  ${obligations} obligations discharged · 0 violations — PARTIAL: ${reasons.join('; ')}. The unproven part is not asserted safe.`,
     );
   } else if (state === 'NO_PROOF') {
     console.log(

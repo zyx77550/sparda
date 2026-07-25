@@ -1060,3 +1060,193 @@ byRisk.high` from the same `surveyBlindspots` it already computes — single sou
 - **Rule:** two honest ways to soften a false critical — *evidence* (G2: a refusal shape is present,
   name the mechanism) and *convention* (Class 1: the path is public by design, say "confirm intent").
   Keep them separately labeled; never let convention masquerade as proof.
+
+## E-051 — a guard that doesn't DOMINATE the write: false PROVEN by non-dominance (the C2 cardinal sin)
+
+- **Symptom (found in the 2026-07-20 perfection audit, then reproduced minimally):** a handler that
+  mutates in an early-return branch and only checks auth AFTERWARDS reads as **✓ PROVEN** —
+  `if (body.preview) { await charge.create(); return } … const denied = await requireAuth(req); if
+  (denied) return denied; await charge.create(...)`. The `preview` write runs and returns BEFORE the
+  guard, so it is a real auth bypass, yet SPARDA credited `requireAuth` on **both** writes. This is a
+  false PROVEN — the cardinal sin — and it **holed the `sparda gate` wedge**: arm a baseline on the
+  clean route, let an agent introduce the bypass, and the gate stayed silent (exit 0), because it
+  inherits the compiler's verdict.
+- **Root cause:** O1 asked "does a guard exist ANYWHERE on the route", not "does a guard DOMINATE
+  this effect" — the known dominator gap, never implemented. The UBG flattens a body
+  into a bag of effects + calls under the handler (the control-flow `order` is effects-then-calls, so
+  it can't express before/after), so dominance is invisible at the graph level.
+- **Fix (shipped, SOUND by construction):** compute dominance at SCAN time, where the AST still has
+  the control structure. A recursive spine walk tracks whether a guard has executed on the current
+  PATH (a guard in a branch never covers a sibling); each mutation reached while the path is still
+  unguarded is tagged, and promoted to `bypassesGuard` only when THIS body also holds a guard (so a
+  body guarded cross-procedurally is left to the route model). apocalypse then flags a `bypassesGuard`
+  write as a hard critical (`guardBypass`, never softened) even on an otherwise-guarded route, and
+  `buildProofObjects` never claims it as discharged. Because the flag only ever SUBTRACTS guard credit
+  (never invents a guard), it can turn a PROVEN into NOT_PROVEN but **never fabricate a false PROVEN**.
+- **Precision (the hard part — measured to zero):** the barrier is **auth-specific**, not the broad
+  `GUARD_NAME` — only `require/ensure/assert{Auth,Session,User,Owner,Permission,…}`, `authenticate`,
+  `authorize`, `canActivate`, `get(Server)Session`, `check/verify{Auth,Session,…}`, or a `401/403`
+  deny (NOT any throw, NOT any 4xx — a service's `NcError.badRequest`/`hasAdmin()` is not auth). And
+  `bypassesGuard` is **stripped at `mergeScan`** so a delegated service's INTERNAL ordering never
+  flags the route (only the handler's own body counts — "effects merge; guards do not"). First cut
+  fired 25 false positives on the corpus; after tightening + the merge-strip: **0 across dub (580),
+  immich (281), nocodb, medusa, ghostfolio, +4**, while the adversarial repros (early-return AND
+  branch-sibling) both catch. Fixture `tests/fixtures/ubg-guard-dominance` + `tests/guard-dominance.test.js`
+  + 2 mutation guards pin it.
+- **Rule:** a guard proves nothing about a write it doesn't dominate. "A guard exists on the route" is
+  necessary, not sufficient — the guard must run on every path to the write, before it.
+
+## E-052 — Next server actions (`'use server'`) were an invisible mutation surface (the C3 blind spot)
+
+- **Symptom (perfection audit C3):** a Next.js **server action** — an exported `async` function in a
+  `'use server'` module (or with a function-level `'use server'` directive) — is remotely invocable:
+  a client form can call it with any args, exactly like an HTTP route. An unguarded mutating action
+  (`export async function deleteUser(id) { await prisma.user.delete(...) }`) is a real hole. But SPARDA
+  walked only `route.ts` files, so actions were **invisible** — and worse, `blindspots` reported
+  `coverage 100% — nothing hidden`. A false coverage claim: the ledger's whole job is to name what
+  SPARDA can't see, and it was silent about a live attack surface.
+- **Fix (shipped — extract, not just flag):** `nextjs.js` now also scans non-route `.ts/.tsx` files
+  (behind a cheap `'use server'` string pre-filter, so ordinary components are never parsed) and
+  registers each server action as a **POST entrypoint** (`(action) <file>#<name>`), with the same
+  in-body auth-verifier detection routes get. So an unguarded action becomes a normal
+  UNGUARDED_MUTATION critical, a credential-verifying one is handled by G2, and the action is counted
+  in coverage instead of hiding. Extraction subsumes flagging — the action is both VISIBLE and fully
+  analyzed.
+- **Precision:** only `async` exports (a non-async export in a `'use server'` file is a re-exported
+  constant, not an action); both module-level and function-level `'use server'` directives; a
+  per-file+name synthetic path so two same-named actions never collide (a collision would re-hide one).
+- **Measured (corpus):** dub 580 → +2 actions (both `verifyPassword`, credential-verify → handled by
+  G2, **0 false criticals**), rallly +1 (`setVerificationEmail`, likewise), papermark/formbricks +0.
+  My repro's two unguarded actions flag correctly. Fixture `tests/fixtures/ubg-server-actions` +
+  `tests/server-actions.test.js` + a mutation guard pin it.
+- **Rule:** the analyzed surface is every REMOTELY-INVOCABLE entrypoint, not just files named
+  `route.ts`. A `'use server'` export is a route by another name — walk it, or the ledger lies.
+
+---
+
+## E-053 — a Next `config.matcher`-scoped middleware was credited as a guard on paths it never runs on (false PROVEN)
+
+- **Symptom (re-verification on vibe-coded Next apps — Fable 5's ARBITRE-4 pass):** a global
+  middleware that returns `401` with `export const config = { matcher: ['/dashboard/:path*'] }`
+  runs ONLY on `/dashboard/*`. Next never executes it for `/api/*`. But SPARDA credited every
+  global middleware to every route, so an unguarded mutating `/api` route inherited the middleware
+  as its "guard" → a **false PROVEN on the dominant next-auth pattern**. Cardinal sin.
+- **Fix (integrated from `claude/sparda-compiler-analysis-3qvx9b`):** `nextjs.js` `readMatcher()`
+  reads `config.matcher` from the AST; `matcherCovers()` decides coverage for the two dominant
+  forms — the positive path glob (`/dashboard/:path*`, which also covers `/dashboard` itself) and
+  the negative-lookahead exclude (`/((?!api/|_next/).*)`). `translate.js` now attributes a global
+  middleware guard **only** to routes its matcher provably covers. An undecidable matcher
+  (computed value, exotic regex) attributes **nothing** — abstain, never fabricate a guard
+  (SOUNDNESS.md).
+- **Why it can't regress soundness:** the change is monotonic in the safe direction. It can only
+  ever *withhold* a middleware guard credit, never add one — so it can turn a wrong PROVEN into
+  NOT_PROVEN, never the reverse. No path where it manufactures a false PROVEN.
+- **Measured:** all 4 matcher forms correct (unit tests); dub unchanged (518 verified guards, per
+  Fable's corpus run). Locked end-to-end by `tests/fixtures/ubg-next-matcher` + two integration
+  tests (the `/api` route flags, the `/dashboard` route keeps its guard) and a mutation guard that
+  reintroducing "credit all middlewares" is killed.
+- **Rule:** a middleware only guards what it runs on. `config.matcher` is part of the guard's
+  reachability — ignore it and the guard is attributed to routes it never sees.
+
+## E-054 — vendor-SDK effects were invisible (HTTP detection was fetch/known-client only)
+
+- **Symptom (audit blind spot #1):** `stripe.charges.create()` charges a card but wears no
+  `fetch`/http-client skin, so it resolved to nothing; O4 (`IRREVERSIBLE_OBSERVABLE`) never fired
+  on real payment code. The exact same bug written with `fetch()` WAS caught — the SDK form was a
+  clean false negative.
+- **Fix (brick #1/#5, `extract.js`):** a PAMP catalog (`EFFECT_SDK_PATHS`, matched on the property
+  path below the user-named root) + AWS SDK v3 command detection (`.send(new PutObjectCommand())`,
+  matched on the command class in the argument). Emits an observable `http_call`. Additive,
+  write-only — can only raise a finding. The bare-`.send()` tail is handled by E-057's provenance.
+
+## E-055 — Prisma FK harvest dropped named & multiline @relation (domains collapsed on real apps)
+
+- **Symptom (audit blind spot #2):** the `@relation` parser used a single-line regex
+  `@relation(\s*fields:` that only matched a plain, first-attribute relation. NAMED relations
+  (`@relation("Name", …, onDelete: Cascade)`) and MULTILINE relations were silently dropped, so
+  consistency domains collapsed to one-table islands on serious schemas (ghostfolio: 0 FK edges)
+  and O3/O5 never fired. dub happened to use the plain form, so it worked there — masking the gap.
+  Root cause was NOT `@@map` (the table node is keyed by the model name; `@@map` is only an alias).
+- **Fix (brick #2, `prisma.js`):** harvest FKs over the WHOLE model body with `[\s\S]`, pulling
+  `fields:`/`references:` INDEPENDENTLY (order- and newline-agnostic).
+
+## E-056 — interactive `$transaction(async (tx) => …)` made every write vanish
+
+- **Symptom (audit blind spot #3):** the dominant Prisma idiom hands the callback a transactional
+  client named `tx`, which the `/prisma|client|db/` heuristic can't see, so every write inside
+  vanished → the handler compiled to `SURFACE` and an unguarded write inside a transaction was a
+  silent pass.
+- **Fix (brick #3, `extract.js`):** the "prion" bind — the TX-wrapper visit binds the callback's
+  param name(s) into `txCtx.dbAliases` (scoped to the transaction body, never leaks); the Prisma
+  op check honors it. Writes reappear, share the tx scope (atomic), and unguarded ones fire.
+
+## E-057 — cross-package effect dead-ended; root cause was `module.exports.f = async…` uncaptured
+
+- **Symptom (audit blind spot #4):** an app whose write lived in a sibling workspace package
+  compiled to `SURFACE`. Workspace resolution already worked (the `@acme/data` specifier + barrel
+  re-export resolved) — the write dead-ended because the leaf was exported as `module.exports.
+  createOrder = async () => …`, a direct function-to-exports assignment the function collector
+  never captured, so `service.createOrder()` resolved to no body. A CommonJS export-style gap that
+  also affects single-package apps.
+- **Fix (brick #4, `extract.js`):** the `exports.X = …` handler now registers a directly-assigned
+  function/arrow (incl. a wrapped `catchAsync(async …)`) as an exported function. Separately,
+  inline arrow route handlers are now `deepScan`ned (were not), so they follow service calls.
+
+## E-058 — TypeORM writes were invisible (NestJS+TypeORM read SURFACE, proved nothing)
+
+- **Symptom (round-2 re-audit):** TypeORM write verbs (`save/insert/update/delete/remove/upsert`)
+  run on a repository whose entity is nowhere in the call — `this.repo.save(dto)` (injected) or
+  `getRepository(User).save()`. The ORM handlers didn't know these shapes, so a NestJS+TypeORM app
+  (a top enterprise stack) resolved zero mutations.
+- **Fix (brick #7, `extract.js` + `resolve.js`):** repository provenance —
+  `collectRepoFields(cls)` (from `@InjectRepository(Entity)` / `Repository<Entity>`) +
+  `collectRepoVars(fn)` (local `getRepository(Entity)`) build `ctx.repoTables`; a write verb on a
+  known repo emits a `db_write` on the entity table. A generic `.save()` on an unknown object
+  never fires. Remaining tail: `manager.save`, active-record `Entity.save`, and parsing @Entity
+  classes into `state` nodes (no FK/domain layer on a TypeORM-only app yet).
+
+## E-059 — the published npm package did not run (runtime deps filed as devDependencies)
+
+- **Symptom (found via a clean-install reproduction, v0.66.2):** `@babel/parser`, `@babel/traverse`
+  and `@clack/prompts` are imported by `src/` at runtime but sat in **devDependencies**, which npm
+  does NOT install for a consumer. A fresh `npm i sparda-mcp` therefore crashed on every flagship
+  command — `sparda ubg|prove|apocalypse|review|gate` → `Cannot find package '@babel/parser'`;
+  `sparda init|demo|remove` → `@clack/prompts`. Only `--version`/help worked, so smoke-testing the
+  CLI locally (where devDeps ARE installed) never surfaced it. Confirmed by `npm pack` + installing
+  the tarball into an empty project (@babel/@clack absent) and running the commands.
+- **Root cause of the blind spot:** `prepublishOnly: vitest run` gates on tests, which run WITH
+  devDependencies present — so the gate can never see a missing runtime dep. `CLAUDE.md` even
+  states the intended runtime surface is "4, exact-pinned"; three of the four had drifted to dev.
+- **Fix:** move the three to `dependencies`, exact-pinned (runtime surface = exactly the four
+  advertised deps). New guard `tests/packaging.test.js` parses `src/` with babel (ignoring imports
+  inside generated-code template strings) and fails if any runtime import is not a declared
+  dependency, and asserts the deps stay exactly the four, exact-pinned. Bump → 0.67.0.
+
+## E-060 — self-audit: `@Author`/`@Authorization` param decorators falsely asserted a guard (could HIDE a finding)
+
+- **Symptom (found by turning the audit on my own Task-1 work, ADR-063):** `PARAM_AUTH_DECORATOR`
+  matched `/^auth/i`, so a param decorator named `@Author()` (injects a post's author entity) or
+  `@Authorization()` (injects the raw header string — presence is NOT proof of authentication) was
+  read as an asserted auth guard. Probe: `@Author` on a resolver mutation SUPPRESSED its
+  `UNGUARDED_MUTATION`.
+- **Why it matters (the dangerous direction):** an asserted guard DOWNGRADES `UNGUARDED_MUTATION`.
+  A false match therefore HIDES a real unguarded mutation — SOUNDNESS Direction 2, the one class of
+  error SPARDA must never make. (Its sibling ADR-063 rail — "asserted, never verified" — protects the
+  PROVEN direction; this hole was in the other direction and slipped the first review.)
+- **Fix (initial, band-aid):** gated the `auth` prefix behind a lookahead —
+  `auth(?=user|workspace|account|session|context|principal|$)`. Correct but still a name-regex.
+- **Fix (real, ADR-067 — superseded the lookahead):** Zak's push ("on peut pas faire mieux que des
+  regex?") led to the thesis-aligned fix — RESOLVE the decorator's `createParamDecorator` body and
+  PROVE what request field it reads. `@Author` reads `body.author` (user input) → NOT a guard,
+  regardless of name; `@AuthWorkspace` reads `.workspace` (principal) → guard. Body-visible ⇒
+  behaviour is final; body-opaque ⇒ a tokenized-name fallback (`splitIdent`, whole tokens not
+  substrings). This kills the whole CLASS (any auth-named input-reader) and ADDS recall (`@Whoami`,
+  no auth token in its name, reads `request.user` → correctly a guard — impossible for a name-match).
+  Regression tests: `@Author` decoy MUST flag; `@Whoami` must NOT (`tests/param-auth-decorator.test.js`).
+- **Also corrected in the same audit (honest scope, not bugs):** (a) ADR-066 interprocedural taint
+  covers BARE function calls only, NOT DI/instance method calls (`this.svc.save(req.body)`) — the
+  Nest/Strapi-dominant shape — because threading a taint seed through `classBundle`'s memo key would
+  risk cache poisoning; the ADR claim was corrected and DI-taint queued as its own brick. (b) taint
+  under-approximates on NESTED (`const { user: { id } } = req.body`) and ARRAY destructuring (safe
+  direction, documented). (c) Strapi's custom-vs-core route collision on the same method+path resolves
+  to the custom route by file order (correct outcome, but by luck of ordering, not by design).

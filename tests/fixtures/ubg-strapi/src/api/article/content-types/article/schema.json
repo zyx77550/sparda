@@ -1,0 +1,13 @@
+{
+  "kind": "collectionType",
+  "collectionName": "articles",
+  "info": {
+    "singularName": "article",
+    "pluralName": "articles",
+    "displayName": "Article"
+  },
+  "attributes": {
+    "title": { "type": "string", "required": true },
+    "body": { "type": "text" }
+  }
+}

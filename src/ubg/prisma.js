@@ -192,14 +192,9 @@ function parseModel(modelName, body, line, sourceFile, enums, modelNames, skippe
     const name = fieldName.toLowerCase();
     const typeLower = rawType.toLowerCase();
 
-    // relation field (points at another model) — FK lives in @relation
-    if (modelNames.has(rawType)) {
-      const rel = attrs.match(
-        /@relation\(\s*fields:\s*\[([^\]]*)\]\s*,\s*references:\s*\[([^\]]*)\]/,
-      );
-      if (rel) fk(fieldList(rel[1]), rawType, fieldList(rel[2]));
-      continue; // relations are edges, not columns
-    }
+    // relation field (points at another model) — an edge, never a column. The FK itself is
+    // harvested from the WHOLE body below (multiline- and order-robust), not from this line.
+    if (modelNames.has(rawType)) continue;
     if (isList) continue; // scalar lists & back-relations carry no column
 
     const isPk = /@id\b/.test(attrs);
@@ -235,6 +230,21 @@ function parseModel(modelName, body, line, sourceFile, enums, modelNames, skippe
           expression: `${name} in (${enumValues.map((v) => `'${v}'`).join(', ')})`,
         });
     }
+  }
+
+  // FK harvest over the WHOLE model body — real schemas write `@relation("Name", fields: [...],
+  // references: [...], onDelete: Cascade)` with a leading relation name, extra attributes, or the
+  // call split across several lines. The old single-line `@relation(\s*fields:` regex silently
+  // dropped all of those, so consistency domains collapsed to one-table islands on serious apps
+  // (ghostfolio: 0 FK edges) and O3/O5 never fired. Scanning the body with `[\s\S]` and pulling
+  // `fields:`/`references:` INDEPENDENTLY makes the harvest order- and newline-robust. The field's
+  // type token (a known model) is captured right before `@relation(`; back-relation list fields
+  // carry no `fields:`/`references:` and are naturally skipped.
+  for (const rm of body.matchAll(/(\w+)(?:\[\])?\??\s+@relation\(([\s\S]*?)\)/g)) {
+    if (!modelNames.has(rm[1])) continue; // the token before @relation must be a model (the target)
+    const fMatch = rm[2].match(/fields:\s*\[([^\]]*)\]/);
+    const rMatch = rm[2].match(/references:\s*\[([^\]]*)\]/);
+    if (fMatch && rMatch) fk(fieldList(fMatch[1]), rm[1], fieldList(rMatch[1]));
   }
 
   const name = modelName.toLowerCase();

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { checkGraph } from '../src/ubg/apocalypse.js';
-import { gateDelta } from '../src/commands/gate.js';
+import { gateDelta, remediationFor } from '../src/commands/gate.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const graphOf = (fixture) =>
@@ -60,6 +60,42 @@ describe('sparda gate — delta-only judgment', () => {
     expect(preExisting.findings.some((f) => f.entrypoint === offender)).toBe(false);
   });
 
+  it('abstains on a removal whose baseline route lives in a now-unparseable file (E-GATE-1)', () => {
+    // an edit that leaves the route file broken → its routes vanish from the candidate
+    const offender = 'entrypoint:DELETE /orders/:id';
+    const file = baseline.nodes.find((n) => n.id === offender)?.loc?.file;
+    expect(file).toBeTruthy();
+    const candidate = clone(baseline);
+    // simulate the vanish: drop the entrypoint node (as an unparseable file would)
+    candidate.nodes = candidate.nodes.filter((n) => n.id !== offender);
+    candidate.edges = candidate.edges.filter(
+      (e) => e.from !== offender && e.to !== offender,
+    );
+
+    // WITHOUT the unparsed hint → reads as a real removal (blocking)
+    const naive = gateDelta(baseline, candidate);
+    expect(naive.findings.some((f) => f.rule === 'ENTRYPOINT_REMOVED')).toBe(true);
+
+    // WITH the file flagged unparseable → abstained, never blocking
+    const held = gateDelta(baseline, candidate, new Set([file]));
+    expect(held.blocking).toEqual([]);
+    expect(held.findings.some((f) => f.rule === 'ENTRYPOINT_REMOVED')).toBe(false);
+    expect(held.abstained.some((f) => f.entrypoint === offender)).toBe(true);
+  });
+
+  it('a removal in a file that STILL parses is never abstained away', () => {
+    const offender = 'entrypoint:DELETE /orders/:id';
+    const candidate = clone(baseline);
+    candidate.nodes = candidate.nodes.filter((n) => n.id !== offender);
+    candidate.edges = candidate.edges.filter(
+      (e) => e.from !== offender && e.to !== offender,
+    );
+    // an UNRELATED file is broken — the removal must still count
+    const held = gateDelta(baseline, candidate, new Set(['some/other/file.ts']));
+    expect(held.findings.some((f) => f.rule === 'ENTRYPOINT_REMOVED')).toBe(true);
+    expect(held.abstained).toEqual([]);
+  });
+
   it('medium/info regressions report but never block', () => {
     const shrunk = clone(baseline);
     const ep = shrunk.nodes.find((n) => n.id === 'entrypoint:POST /transfer');
@@ -69,5 +105,30 @@ describe('sparda gate — delta-only judgment', () => {
     const grew = findings.find((f) => f.rule === 'BLAST_RADIUS_GREW');
     expect(grew?.severity).toBe('medium');
     expect(blocking).not.toContain(grew);
+  });
+});
+
+describe('sparda gate — agent-facing remediation (self-heal in the loop)', () => {
+  // every regression the gate can emit must carry an actionable, imperative fix — an agent
+  // reading stderr must always know its next move, never just WHAT broke.
+  const DIFF_RULES = [
+    'GUARD_REMOVED',
+    'ENTRYPOINT_REMOVED',
+    'INVARIANT_REMOVED',
+    'BLAST_RADIUS_GREW',
+  ];
+  for (const rule of DIFF_RULES) {
+    it(`gives a concrete fix for ${rule}`, () => {
+      const hint = remediationFor({ rule });
+      expect(typeof hint).toBe('string');
+      expect(hint.length).toBeGreaterThan(0);
+      expect(hint).not.toMatch(/undefined/);
+    });
+  }
+
+  it('never returns empty for an unknown rule (safe fallback names the escape hatch)', () => {
+    const hint = remediationFor({ rule: 'SOMETHING_NEW' });
+    expect(hint.length).toBeGreaterThan(0);
+    expect(hint).toMatch(/--arm/);
   });
 });

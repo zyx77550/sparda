@@ -1,0 +1,1 @@
+{ "name": "ubg-sdk-effect", "type": "module", "main": "src/app.js", "dependencies": { "express": "^4.19.0", "stripe": "^14.0.0" } }

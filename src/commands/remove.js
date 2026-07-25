@@ -6,6 +6,7 @@ import { removeInjection as removeExpress } from '../generator/express.js';
 import { removeInjection as removeFastAPI } from '../generator/fastapi.js';
 import { detectStack } from '../detect.js';
 import { removeHook } from './hook.js';
+import { uninstallClaudeHook } from './claude-hook.js';
 
 export async function runRemove(opts) {
   const manifestPath = path.join(opts.cwd, 'sparda.json');
@@ -99,6 +100,8 @@ export async function runRemove(opts) {
   if (revertGitignore(opts.cwd, manifest.gitignore))
     console.log('✓ Reverted .gitignore edit');
   if (removeHook(opts.cwd)) console.log('✓ Uninstalled post-commit sentinel hook');
+  if (uninstallClaudeHook(opts.cwd).changed)
+    console.log('✓ Removed the SPARDA gate from Claude Code PostToolUse');
   fs.rmSync(manifestPath);
   fs.rmSync(path.join(opts.cwd, '.sparda'), { recursive: true, force: true });
   console.log('✓ Deleted sparda.json and .sparda/');

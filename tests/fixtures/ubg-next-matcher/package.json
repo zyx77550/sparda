@@ -1,0 +1,1 @@
+{ "name": "next-matcher", "dependencies": { "next": "^14", "@prisma/client": "^5" } }

@@ -12,9 +12,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      # Windows runners bill at 2x Actions minutes. Run the full cross-OS matrix on push to
+      # main (the source of truth), but keep pull requests Ubuntu-only — the vast majority of
+      # runs — so the 2,000-minute monthly quota lasts. Node 20 + 22 stay on every run.
       matrix:
-        os: [ ubuntu-latest, windows-latest ]
-        node-version: [ 18, 22 ]
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        node-version: [ 20, 22 ]
 
     steps:
       - name: Checkout repository

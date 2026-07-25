@@ -24,6 +24,18 @@ import {
   stateId,
 } from './schema.js';
 import { isGuardLike, isNoOpGuard, scanFunction } from './extract.js';
+import { matcherCovers } from './nextjs.js';
+
+// A global middleware only guards a route whose path its Next `config.matcher`
+// actually covers. No matcher → every path (Next default). A matcher present but
+// unresolved, or one that resolves to "not covered", → do NOT attribute (an
+// unproven guard is never fabricated — SOUNDNESS.md, no false PROVEN).
+function middlewareAppliesTo(mw, routePath) {
+  if (mw.role !== 'middleware' || mw.matcherPatterns == null) {
+    return !mw.matcherUnresolved; // no matcher = all paths; unresolved matcher = abstain
+  }
+  return matcherCovers(mw.matcherPatterns, routePath) === true;
+}
 
 // Is this chain step / helper a REAL guard? Named or deny-bodied like a guard, and
 // NOT a visible no-op pass-through (a disabled `(req,res,next)=>next()` guards nothing).
@@ -149,8 +161,12 @@ function translateRoute(
     ),
   );
 
-  // global middlewares run before route-level ones — same chain, lower order
-  const fullChain = [...globalMiddlewares, ...route.chain];
+  // global middlewares run before route-level ones — same chain, lower order —
+  // but only those whose matcher actually covers this route's path (E-NEXT-MW)
+  const applicable = globalMiddlewares.filter((mw) =>
+    middlewareAppliesTo(mw, route.path),
+  );
+  const fullChain = [...applicable, ...route.chain];
   let prevId = epId;
   let order = 0;
   const chainNodes = [];
@@ -314,6 +330,9 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           // symbolic table (`:collection`): a request-derived target, resolved as a
           // rule, not a literal — carried so the blindspot ledger doesn't flag it opaque
           ...(eff.symbolic ? { symbolic: true } : {}),
+          // opaque persistence write (ADR-068): a proven-handle call with an unknown method/table
+          // — fires the guard obligation (O1) with no table, never O2/O3 precision.
+          ...(eff.opaque ? { opaque: true } : {}),
           ...(eff.target ? { target: eff.target } : {}),
           ...(eff.driver ? { driver: eff.driver } : {}),
           ...(eff.httpMethod ? { httpMethod: eff.httpMethod } : {}),
@@ -325,6 +344,9 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           // Advisory provenance — it enriches an UNGUARDED_MUTATION, never a finding of
           // its own (a per-function under-approximation can't see service-layer validation).
           ...(eff.tainted ? { tainted: true } : {}),
+          // guard-dominance (kills the C2 false PROVEN): this mutation runs BEFORE a guard that
+          // follows it on the same body spine — i.e. it executes without having passed that check.
+          ...(eff.bypassesGuard ? { bypassesGuard: true } : {}),
           // object-scope provenance (ADR-058 B): the query targets a bare `id`, and whether
           // it is scoped to the caller. A route with an idScoped access and NO ownerScoped
           // access anywhere on its resolved path is a BOLA candidate (advisory).

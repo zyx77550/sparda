@@ -75,8 +75,11 @@ describe('polarity ⇄ findings — one source of truth', () => {
       const { findings, polarity } = checkGraph(graphOf(fx));
       const byEp = new Map(polarity.map((p) => [p.entrypoint, p.vector]));
 
-      // every finding → a -1 on its axis
+      // every finding → a -1 on its axis. Advisory findings are review-flags, not proven
+      // violations (ADR-072: a generic external call is surfaced advisory, not a reversibility
+      // -1), so they are exempt — the polarity vector records only PROVEN violations.
       for (const f of findings) {
+        if (f.advisory) continue;
         const axis = RULE_AXIS[f.rule];
         if (!axis) continue;
         expect(byEp.get(f.entrypoint)?.[axis]).toBe(-1);

@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.zyx77550/sparda-mcp",
   "title": "SPARDA",
-  "description": "The trust layer for AI-written code — AI writes, SPARDA proves. Deterministic, offline behavior proofs (guards, invariants, irreversible effects) plus a live gate for AI edits. No API key, no cloud.",
-  "version": "0.66.0",
+  "description": "AI writes. SPARDA proves. Deterministic, offline security gate for AI edits.",
+  "version": "0.68.0",
   "repository": {
     "url": "https://github.com/zyx77550/sparda",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "sparda-mcp",
-      "version": "0.66.0",
+      "version": "0.68.0",
       "transport": {
         "type": "stdio"
       },

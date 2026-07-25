@@ -1,0 +1,1 @@
+{ "name": "ubg-taint-flow", "type": "module", "main": "src/app.js", "dependencies": { "express": "^4.19.0" } }

@@ -277,7 +277,7 @@ export async function runSeed(opts, args) {
     if (opts.germinate) {
       const { buildGrammar } = await import('./grammar.js');
       const { twinFilePath } = await import('./twin.js');
-      let exemplars = null;
+      let exemplars;
       try {
         exemplars =
           JSON.parse(fs.readFileSync(twinFilePath(opts.cwd), 'utf8')).exemplars ?? null;

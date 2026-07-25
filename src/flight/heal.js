@@ -27,7 +27,7 @@ export function evaluateHealing(flight, replay, expectation = null) {
     reasons.push('response is byte-identical to the recorded bug — nothing changed');
   }
 
-  let expectationMet = null;
+  let expectationMet;
   if (expectation) {
     expectationMet = true;
     if (expectation.status !== undefined && replay.actual.status !== expectation.status) {

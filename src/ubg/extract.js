@@ -109,6 +109,23 @@ const PRISMA_OPS = {
   delete: 'delete',
   deletemany: 'delete',
 };
+// TypeORM write verbs on a repository / entity-manager. Only fire when the RECEIVER is provably
+// a repository (in ctx.repoTables) — a generic `.save()`/`.update()` on an unknown object never
+// fires, so false positives stay near zero. Reads (find/findOne/count/…) are not here.
+const TYPEORM_WRITE = {
+  save: 'insert',
+  insert: 'insert',
+  upsert: 'insert',
+  update: 'update',
+  increment: 'update',
+  decrement: 'update',
+  delete: 'delete',
+  remove: 'delete',
+  softdelete: 'delete',
+  softremove: 'delete',
+  restore: 'update',
+};
+
 const FS_WRITE = new Set([
   'writefile',
   'writefilesync',
@@ -133,6 +150,547 @@ const FS_READ = new Set([
   'existssync',
 ]);
 const HTTP_CLIENTS = new Set(['axios', 'got', 'ky', 'superagent', 'undici']);
+
+// Innate immunity (PAMP table): vendor-SDK call shapes that ARE an irreversible external
+// effect but wear no `fetch`/http-client skin (the SDK hides the network call). Extraction
+// blind spot #1 in the audit: `stripe.charges.create()` charges a card, yet resolved to
+// nothing, so O4 (irreversibility) never fired on real payment code. We can't enumerate every
+// SDK — so, like the olfactory system, we recognize a small set of CONSERVED, highly-specific
+// call SHAPES directly (combinatorial coding, not one receptor per molecule). Matched on the
+// property path BELOW the (user-named) root, so the variable name is irrelevant; DB handlers
+// above have already returned, so no double-count. Additive + write-only: it can only ever
+// RAISE a finding (an observable http_call), never fabricate a false PROVEN — a stale catalog
+// under-detects, it never lies. This is the deterministic, zero-LLM, zero-network innate layer;
+// the adaptive layer (LLM-on-surprise → antibody) is a later brick that fills the long tail.
+const EFFECT_SDK_PATHS = new Set([
+  // Stripe — money movement, irreversible
+  'charges.create',
+  'paymentintents.create',
+  'paymentintents.confirm',
+  'paymentintents.capture',
+  'refunds.create',
+  'payouts.create',
+  'transfers.create',
+  'subscriptions.create',
+  'subscriptions.cancel',
+  'invoices.pay',
+  'checkout.sessions.create',
+  'paymentmethods.attach',
+  // Twilio — SMS / voice, irreversible once sent
+  'messages.create',
+  'calls.create',
+  // Resend / modern mail SDKs — the email leaves once sent
+  'emails.send',
+  'emails.create',
+]);
+// AWS SDK v3 & friends speak `client.send(new XCommand(...))` — the verb is a generic `.send`,
+// but the COMMAND class in the argument names the effect unmistakably. Match the command name
+// (lowercased) so the modern AWS style is not a blind spot the way v2 `s3.putObject()` isn't.
+const EFFECT_SDK_COMMANDS = new Set([
+  'putobjectcommand', // S3 write
+  'deleteobjectcommand',
+  'copyobjectcommand',
+  'sendemailcommand', // SES
+  'sendrawemailcommand',
+  'sendtemplatedemailcommand',
+  'sendmessagecommand', // SQS
+  'sendmessagebatchcommand',
+  'publishcommand', // SNS
+  'publishbatchcommand',
+  'invokecommand', // Lambda
+  'putitemcommand', // DynamoDB writes
+  'updateitemcommand',
+  'deleteitemcommand',
+]);
+// Strong single-token methods: specific enough to fire without a multi-segment path
+// (an email leaves, an object is written to a bucket, a message enters a queue — all
+// observable and irreversible). Deliberately narrow to keep false positives near zero.
+const EFFECT_SDK_METHODS = new Set([
+  'sendmail', // nodemailer transporter.sendMail
+  'sendemail', // AWS SES sendEmail
+  'sendemailcommand',
+  'putobject', // AWS S3 putObject
+  'deleteobject',
+  'copyobject',
+  'sendmessage', // AWS SQS sendMessage
+  'publishcommand',
+]);
+
+// The property path below the root of a call (`stripe.charges.create` → "charges.create"),
+// lowercased, non-computed segments only. Null if not a plain member chain.
+function memberPathBelowRoot(memberExpr) {
+  const segs = [];
+  let cur = memberExpr;
+  while (cur.type === 'MemberExpression') {
+    if (cur.computed || cur.property.type !== 'Identifier') return null;
+    segs.unshift(cur.property.name.toLowerCase());
+    if (cur.object.type === 'ThisExpression') break;
+    cur = cur.object;
+  }
+  segs.pop(); // drop the method itself — we want the path BELOW root, incl. method re-added below
+  return segs;
+}
+
+// Innate-immunity match: does this call's shape name a known irreversible external effect?
+// Returns { httpMethod, target } to emit as an observable http_call, or null.
+function knownExternalEffect(callee, methodLower, node) {
+  if (callee.type !== 'MemberExpression') return null;
+  // AWS SDK v3 shape: `client.send(new PutObjectCommand(...))` — the command class in the
+  // argument names the effect, the `.send` verb alone does not.
+  if (methodLower === 'send' && node) {
+    const arg0 = node.arguments?.[0];
+    const cmd =
+      arg0?.type === 'NewExpression' && arg0.callee?.type === 'Identifier'
+        ? arg0.callee.name.toLowerCase()
+        : null;
+    if (cmd && EFFECT_SDK_COMMANDS.has(cmd))
+      return { httpMethod: 'POST', target: `sdk:${cmd}` };
+  }
+  const below = memberPathBelowRoot(callee); // e.g. ["charges"] for stripe.charges.create
+  const path = below === null ? methodLower : [...below, methodLower].join('.');
+  const hit =
+    EFFECT_SDK_METHODS.has(methodLower) ||
+    EFFECT_SDK_PATHS.has(path) ||
+    [...EFFECT_SDK_PATHS].some((sig) => path.endsWith('.' + sig));
+  if (!hit) return null;
+  // Vendor writes are non-idempotent from the outside → POST makes the effect algebra mark
+  // it observable + non-compensable, which is the whole point (O4 must see the irreversibility).
+  return { httpMethod: 'POST', target: `sdk:${path}` };
+}
+// Import provenance for effect clients (the ant cuticular-hydrocarbon / "colony odor" model):
+// a binding IMPORTED from a package whose whole job is an external side effect (payment, mail,
+// SMS, cloud storage, queue, push) carries an effect LABEL acquired at its source — and that
+// label propagates by contact: `const stripe = require('stripe')(key)`, `const s3 = new
+// S3Client()`, `const x = s3`. Thereafter ANY call on a labeled binding is recognized as an
+// external effect by ORIGIN, not by guessing the method name — which is what the bare `.send()`
+// tail (SendGrid `sgMail.send`, Kafka `producer.send`) needs. Read-shaped methods stay GET (not
+// observable), so a `.get`/`.list`/`.retrieve` never becomes a false irreversibility finding.
+const EFFECT_PACKAGES = new Set([
+  // payment
+  'stripe',
+  'braintree',
+  'razorpay',
+  'square',
+  // mail
+  '@sendgrid/mail',
+  'nodemailer',
+  'resend',
+  'postmark',
+  'mailgun.js',
+  '@mailchimp/mailchimp_transactional',
+  // sms / comms / push
+  'twilio',
+  '@slack/web-api',
+  'firebase-admin',
+  // cloud (v3 clients) + legacy aws-sdk v2
+  'aws-sdk',
+  '@aws-sdk/client-s3',
+  '@aws-sdk/client-ses',
+  '@aws-sdk/client-sesv2',
+  '@aws-sdk/client-sns',
+  '@aws-sdk/client-sqs',
+  '@aws-sdk/client-lambda',
+  '@aws-sdk/client-dynamodb',
+  '@google-cloud/storage',
+  '@google-cloud/pubsub',
+  // queues / streams
+  'kafkajs',
+  'amqplib',
+]);
+// A read-shaped method on an effect client is a GET (idempotent, NOT observable) — so tagging a
+// client can never turn a `.retrieve`/`.list` into a false irreversible effect. Everything else
+// on a labeled client is treated as an outbound POST (observable). Config/wiring methods emit no
+// effect at all.
+const SDK_READ_METHOD =
+  /^(get|list|describe|retrieve|fetch|read|find|query|scan|head|count|exists|search)/;
+const SDK_IGNORE_METHOD = new Set([
+  'setapikey',
+  'config',
+  'configure',
+  'use',
+  'on',
+  'once',
+  'off',
+  'addeventlistener',
+  'connect',
+  'disconnect',
+  'end',
+  'destroy',
+  'constructor',
+  'middleware',
+  'setclient',
+]);
+
+// Collect the effect-labeled bindings of a module, in source order so a later `new X()` sees the
+// earlier `import X`. Pure over the top-level body; returns a Set of local names.
+function collectEffectClients(body) {
+  const labeled = new Set();
+  const isLabeled = (n) => n?.type === 'Identifier' && labeled.has(n.name);
+  for (const node of body) {
+    if (node.type === 'ImportDeclaration') {
+      if (EFFECT_PACKAGES.has(node.source.value))
+        for (const s of node.specifiers) labeled.add(s.local.name);
+      continue;
+    }
+    if (node.type !== 'VariableDeclaration') continue;
+    for (const d of node.declarations) {
+      const init = d.init;
+      if (!init || d.id.type !== 'Identifier') continue;
+      const requirePkg =
+        init.type === 'CallExpression' &&
+        init.callee.type === 'Identifier' &&
+        init.callee.name === 'require' &&
+        init.arguments[0]?.type === 'StringLiteral'
+          ? init.arguments[0].value
+          : null;
+      if (
+        // const x = require('stripe')  OR  const x = require('stripe')(key)  (factory)
+        (requirePkg && EFFECT_PACKAGES.has(requirePkg)) ||
+        (init.type === 'CallExpression' &&
+          init.callee.type === 'CallExpression' &&
+          init.callee.callee?.type === 'Identifier' &&
+          init.callee.callee.name === 'require' &&
+          EFFECT_PACKAGES.has(init.callee.arguments?.[0]?.value)) ||
+        // const y = new X(...)  /  const y = X(...)  where X is already labeled
+        (init.type === 'NewExpression' && isLabeled(init.callee)) ||
+        (init.type === 'CallExpression' && isLabeled(init.callee)) ||
+        // const y = x  (alias)
+        isLabeled(init)
+      )
+        labeled.add(d.id.name);
+    }
+  }
+  return labeled;
+}
+
+// Persistence-client packages: a binding imported from one, or built (`new`/call) from such an
+// import, is a PROVEN database handle — by provenance, not by its name (ADR-068). Used to close
+// the opaque-write hole: an UNKNOWN method on a proven handle (`db.nukeEverything(...)`) must be
+// treated as a write, not ignored, or an unguarded custom write passes invisible.
+const DB_PACKAGES = new Set([
+  'knex',
+  'pg',
+  'pg-pool',
+  'mysql',
+  'mysql2',
+  'mysql2/promise',
+  'mongoose',
+  'mongodb',
+  'sequelize',
+  'typeorm',
+  'drizzle-orm',
+  '@prisma/client',
+  'better-sqlite3',
+  '@libsql/client',
+  'postgres',
+  'sqlite3',
+  '@mikro-orm/core',
+  'objection',
+  'kysely',
+]);
+
+// Methods on a DB handle that are clearly READS — never flagged as an opaque write.
+const DB_KNOWN_READ = new Set([
+  'select',
+  'find',
+  'findone',
+  'findmany',
+  'findunique',
+  'findfirst',
+  'findall',
+  'first',
+  'get',
+  'getone',
+  'getmany',
+  'count',
+  'exists',
+  'all',
+  'aggregate',
+  'scan',
+  'list',
+  'fetch',
+  'read',
+  'describe',
+  'explain',
+  'has',
+  'pluck',
+  'stream',
+  'cursor',
+  'iterate',
+  'tolist',
+  'toarray',
+]);
+// Plumbing / chaining / promise / introspection / wiring on a DB handle — never an effect. Also
+// parks the ambiguous raw-SQL methods (`raw`/`query`/`execute`) OUT of the opaque-write fallback:
+// their literal-vs-dynamic read/write split is a separate follow-on (ADR-068), and firing them
+// blindly would flood reads. So V1 catches the custom-named write (`db.archiveAll()`), not raw SQL.
+const DB_NON_EFFECT = new Set([
+  'then',
+  'catch',
+  'finally',
+  'tostring',
+  'valueof',
+  'tosql',
+  'toquery',
+  'clone',
+  'as',
+  'ref',
+  'unref',
+  'on',
+  'off',
+  'once',
+  'emit',
+  'addlistener',
+  'removelistener',
+  'destroy',
+  'end',
+  'connect',
+  'disconnect',
+  'close',
+  'release',
+  'begin',
+  'commit',
+  'rollback',
+  'savepoint',
+  'transaction',
+  'pipe',
+  'listen',
+  'use',
+  'ping',
+  'authenticate',
+  'sync',
+  'define',
+  'model',
+  'prepare',
+  'unprepare',
+  'bind',
+  'escape',
+  'format',
+  'migrate',
+  'seed',
+  'schema',
+  'fn',
+  'client',
+  'pool',
+  'raw',
+  'query',
+  'execute',
+  'exec',
+  'command',
+  'sql',
+  'template',
+  'with',
+  'withschema',
+  'table',
+]);
+
+// Auth packages whose guard middleware PROVABLY DENIES (401/403/throw) on missing/invalid auth.
+// A catalog of VERIFIED published facts (versioned, auditable) — NOT a name guess (ADR-069): the
+// claim is "`passport.authenticate()` denies", checkable by anyone reading passport once. This is
+// what lets an opaque npm auth guard count as VERIFIED instead of merely asserted, so a real app
+// on passport/express-jwt can legitimately reach PROVEN. Innate immunity: know the known pathogens.
+const AUTH_GUARD_PACKAGES = new Set([
+  'passport',
+  'express-jwt',
+  'express-oauth2-jwt-bearer',
+  'express-openid-connect',
+  'connect-ensure-login',
+  'express-basic-auth',
+  '@clerk/clerk-sdk-node',
+]);
+
+const objectOptionIsFalse = (objNode, key) =>
+  objNode?.type === 'ObjectExpression' &&
+  objNode.properties.some(
+    (p) =>
+      p.type === 'ObjectProperty' &&
+      p.key?.type === 'Identifier' &&
+      p.key.name === key &&
+      p.value.type === 'BooleanLiteral' &&
+      p.value.value === false,
+  );
+
+// Is this call a known auth-lib DENY-form middleware, per the provenance map `pkgOf`
+// (localName → package)? Deny-FORM precision keeps the catalog honest — a form that does NOT
+// auto-deny is abstained on (stays asserted, the safe direction), never falsely verified:
+//   • passport.authenticate(strategy, opts?) denies UNLESS a custom callback fn is passed
+//     (then the deny logic is the user's, not passport's default 401).
+//   • express-jwt expressjwt(opts) throws UNLESS `credentialsRequired: false`.
+export function authDenyCall(node, pkgOf) {
+  if (node?.type !== 'CallExpression' || !pkgOf) return false;
+  const callee = node.callee;
+  if (
+    callee.type === 'MemberExpression' &&
+    callee.object.type === 'Identifier' &&
+    callee.property.type === 'Identifier' &&
+    callee.property.name === 'authenticate' &&
+    pkgOf.get(callee.object.name) === 'passport'
+  ) {
+    const hasCallback = node.arguments.some(
+      (a) => a.type === 'ArrowFunctionExpression' || a.type === 'FunctionExpression',
+    );
+    return !hasCallback;
+  }
+  if (callee.type === 'Identifier') {
+    const pkg = pkgOf.get(callee.name);
+    if (!pkg || !AUTH_GUARD_PACKAGES.has(pkg)) return false;
+    if (pkg === 'express-jwt')
+      return !objectOptionIsFalse(node.arguments[0], 'credentialsRequired');
+    return true;
+  }
+  return false;
+}
+
+// Provenance for auth guards: the import map (localName → package) plus the local const names
+// bound to a deny-form auth call (`const requireAuth = passport.authenticate('jwt')`). Same shape
+// as collectDbHandles/collectEffectClients — provenance, never a name test.
+export function collectAuthGuards(body) {
+  const pkgOf = new Map();
+  for (const node of body)
+    if (node.type === 'ImportDeclaration')
+      for (const s of node.specifiers) pkgOf.set(s.local.name, node.source.value);
+  const denyBindings = new Set();
+  for (const node of body) {
+    if (node.type !== 'VariableDeclaration') continue;
+    for (const d of node.declarations)
+      if (d.id.type === 'Identifier' && authDenyCall(d.init, pkgOf))
+        denyBindings.add(d.id.name);
+  }
+  return { pkgOf, denyBindings };
+}
+
+// Vars/params bound to a database handle, by IMPORT PROVENANCE (same shape as
+// collectEffectClients): imported from a DB package, or `new X()`/`X(...)`/alias of a labeled
+// binding. Deliberately provenance-only — never a name test — so `const db = notARealDb` is NOT
+// a handle, and a handle named `store` still IS one.
+function collectDbHandles(body) {
+  const labeled = new Set();
+  const isLabeled = (n) => n?.type === 'Identifier' && labeled.has(n.name);
+  for (const node of body) {
+    if (node.type === 'ImportDeclaration') {
+      if (DB_PACKAGES.has(node.source.value))
+        for (const s of node.specifiers) labeled.add(s.local.name);
+      continue;
+    }
+    if (node.type !== 'VariableDeclaration') continue;
+    for (const d of node.declarations) {
+      const init = d.init;
+      if (!init || d.id.type !== 'Identifier') continue;
+      const requirePkg =
+        init.type === 'CallExpression' &&
+        init.callee.type === 'Identifier' &&
+        init.callee.name === 'require' &&
+        init.arguments[0]?.type === 'StringLiteral'
+          ? init.arguments[0].value
+          : null;
+      if (
+        (requirePkg && DB_PACKAGES.has(requirePkg)) ||
+        (init.type === 'CallExpression' &&
+          init.callee.type === 'CallExpression' &&
+          init.callee.callee?.type === 'Identifier' &&
+          init.callee.callee.name === 'require' &&
+          DB_PACKAGES.has(init.callee.arguments?.[0]?.value)) ||
+        (init.type === 'NewExpression' && isLabeled(init.callee)) ||
+        (init.type === 'CallExpression' && isLabeled(init.callee)) ||
+        isLabeled(init)
+      )
+        labeled.add(d.id.name);
+    }
+  }
+  return labeled;
+}
+
+// TypeORM repository provenance — like the effect-client label, but for ORM repositories, so a
+// `repo.save()` / `this.userRepo.save()` resolves to a db_write with its entity table even though
+// the table is nowhere in the call. Two sources: (1) a class constructor param that is an injected
+// or typed repository (`@InjectRepository(User) repo` / `repo: Repository<User>`), keyed by field
+// name; (2) a local `const r = getRepository(User)` (or `ds.getRepository(User)`), keyed by var.
+// The entity name is lowercased to a table, matching how Prisma models are keyed.
+export function collectRepoFields(cls) {
+  const map = new Map();
+  if (!cls?.body?.body) return map;
+  const ctor = cls.body.body.find(
+    (m) => m.type === 'ClassMethod' && m.kind === 'constructor',
+  );
+  for (const param of ctor?.params ?? []) {
+    // NestJS constructor params are `TSParameterProperty` wrapping the real Identifier.
+    const inner = param.type === 'TSParameterProperty' ? param.parameter : param;
+    const field = inner?.type === 'Identifier' ? inner.name : null;
+    if (!field) continue;
+    // entity from `@InjectRepository(User)` (authoritative) …
+    let entity = null;
+    for (const dec of param.decorators ?? []) {
+      const call = dec.expression;
+      if (
+        call?.type === 'CallExpression' &&
+        call.callee.type === 'Identifier' &&
+        call.callee.name === 'InjectRepository' &&
+        call.arguments[0]?.type === 'Identifier'
+      )
+        entity = call.arguments[0].name;
+    }
+    // … or from the `Repository<User>` / `TreeRepository<User>` type annotation.
+    if (!entity) {
+      const ta = inner.typeAnnotation?.typeAnnotation;
+      if (
+        ta?.type === 'TSTypeReference' &&
+        /repository$/i.test(ta.typeName?.name ?? '') &&
+        ta.typeParameters?.params?.[0]?.type === 'TSTypeReference'
+      )
+        entity = ta.typeParameters.params[0].typeName?.name ?? null;
+    }
+    if (entity) map.set(field, entity.toLowerCase());
+  }
+  return map;
+}
+
+// Merge the class-level repo fields with the body-local repo vars into one lookup (or null when
+// both are empty, so the common non-TypeORM path allocates nothing).
+function mergeRepoTables(fields, vars) {
+  if ((!fields || !fields.size) && (!vars || !vars.size)) return null;
+  const m = new Map(fields ?? []);
+  for (const [k, v] of vars ?? []) m.set(k, v);
+  return m;
+}
+
+function collectRepoVars(fnNode) {
+  const map = new Map();
+  walkAst(fnNode, (node) => {
+    if (
+      node.type !== 'VariableDeclarator' ||
+      node.id?.type !== 'Identifier' ||
+      node.init?.type !== 'CallExpression'
+    )
+      return;
+    const callee = node.init.callee;
+    const isGetRepo =
+      (callee.type === 'Identifier' && callee.name === 'getRepository') ||
+      (callee.type === 'MemberExpression' &&
+        callee.property?.type === 'Identifier' &&
+        callee.property.name === 'getRepository');
+    const entity = node.init.arguments?.[0];
+    if (isGetRepo && entity?.type === 'Identifier')
+      map.set(node.id.name, entity.name.toLowerCase());
+  });
+  return map;
+}
+
+// walkAst lives in resolve.js; a local minimal copy for the collectors above (extract.js must not
+// import resolve.js — resolve.js imports extract.js).
+function walkAst(node, fn) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const n of node) walkAst(n, fn);
+    return;
+  }
+  if (typeof node.type === 'string') fn(node);
+  for (const k of Object.keys(node)) {
+    if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+    const v = node[k];
+    if (v && typeof v === 'object') walkAst(v, fn);
+  }
+}
+
 const GUARD_NAME = /auth|guard|acl|permission|verif|session|admin|protect|role|token/i;
 
 const moduleCache = new Map(); // absFile -> module facts (parse once per compile run)
@@ -181,6 +739,9 @@ export function parseModule(absFile) {
   }
 
   for (const node of facts.ast.program.body) collectTopLevel(node, facts, absFile, false);
+  facts.effectClients = collectEffectClients(facts.ast.program.body);
+  facts.dbHandles = collectDbHandles(facts.ast.program.body);
+  facts.authGuards = collectAuthGuards(facts.ast.program.body);
   return facts;
 }
 
@@ -345,6 +906,29 @@ function collectTopLevel(node, facts, absFile, exported) {
     ) {
       const resolved = resolveRelImport(absFile, rhs.arguments[0].value);
       if (resolved) facts.reexports.set(left.property.name, resolved);
+    }
+    // Direct function export: `module.exports.createOrder = async (b) => …` / `exports.f =
+    // function () {}` / a wrapped `exports.create = catchAsync(async () => …)`. A common
+    // CommonJS style the const-arrow path never saw, so the exported function was invisible
+    // and every effect below it (often a sibling workspace package away) dead-ended. Register
+    // it under the exported name so a `service.createOrder()` call resolves to this body.
+    else if (isExports) {
+      const bodyFn =
+        rhs.type === 'ArrowFunctionExpression' || rhs.type === 'FunctionExpression'
+          ? rhs
+          : rhs.type === 'CallExpression'
+            ? rhs.arguments.find(
+                (a) =>
+                  a?.type === 'ArrowFunctionExpression' ||
+                  a?.type === 'FunctionExpression',
+              )
+            : null;
+      if (bodyFn)
+        facts.functions.set(left.property.name, {
+          node: bodyFn,
+          line: node.loc?.start.line ?? 0,
+          exported: true,
+        });
     }
   }
 }
@@ -839,6 +1423,8 @@ export function scanFunction(fnNode, env = {}) {
     // an advisory (never prove a guard, never silence a finding), so widening them can
     // never fabricate a gate (E-042) or a false PROVEN.
     credentialSignals: { verifyCall: false, denies4xxOrThrows: false, redirects: false },
+    // guard-dominance (C2): set true once any in-body guard barrier is seen while walking the body.
+    hasInBodyGuard: false,
     async: Boolean(fnNode?.async),
   };
   if (!fnNode) return result;
@@ -847,12 +1433,27 @@ export function scanFunction(fnNode, env = {}) {
     isolation: 'default',
     tryId: null,
     catchOf: null,
-    reqDerived: collectReqDerived(fnNode),
+    reqDerived: collectReqDerived(fnNode, env.reqDerivedSeed),
     // symbolic `this.<field>` bindings, supplied by the caller when this body is a
     // CLASS METHOD reached through `new X(req.params.collection)` — lets a
     // `this.knex(this.collection)` inside a service resolve to `:collection`.
     thisSymbols: env.thisSymbols ?? null,
+    // effect-labeled bindings of the owning module (import-provenance), so a call on an
+    // SDK client is recognized by origin. Absent → the path/command catalog still applies.
+    effectClients: env.effectClients ?? null,
+    dbHandles: env.dbHandles ?? null,
+    // TypeORM repository provenance: class-injected repo fields (env.repoFields, from the owning
+    // class) merged with local `getRepository(Entity)` vars found in THIS body → receiver → table.
+    repoTables: mergeRepoTables(env.repoFields, collectRepoVars(fnNode)),
   });
+  // guard-dominance: a mutation on an unguarded path is a real bypass ONLY when THIS body also holds
+  // a guard (so a guard is genuinely being circumvented). A body with no guard of its own is guarded
+  // elsewhere (positional middleware / a caller) — leave it to the route model, untouched. Strip the
+  // temporary marker either way so it never leaks into the graph.
+  for (const e of result.effects) {
+    if (result.hasInBodyGuard && e._unguardedPath) e.bypassesGuard = true;
+    delete e._unguardedPath;
+  }
   return result;
 }
 
@@ -992,6 +1593,38 @@ function callAssertsOwnership(node) {
   return false;
 }
 
+// Does this `if` assert caller-ownership by FETCH-THEN-COMPARE — the most common hand-rolled
+// authorization check: `if (row.ownerId !== req.user.id) return res.sendStatus(403)`. The scope
+// lives in a value comparison + deny, NOT in a `where` clause, so `whereOwnerScoped` abstains and
+// O7 false-positives. This is the deterministic half of the generate-and-check loop (ADR-074): a
+// proposed ownership witness ("scope is proven by comparing <field> to the principal, gating a
+// deny") is VERIFIED here against the AST. SOUND both ways, adversarially tested:
+//   • the compared-against value must be the caller's VERIFIED identity (`valueIsIdentity` rejects
+//     `req.body.ownerId` — an attacker-controlled spoof — even though it is named like an owner);
+//   • the branch must actually DENY (a throw or a 401/403 response) — a compare that only logs
+//     proves nothing and is rejected.
+// Advisory-only (feeds O7, never a hard rule), so it can never create a false PROVEN; at worst a
+// mis-clear drops an advisory that was already non-gating.
+function ifAssertsOwnership(node) {
+  if (node.type !== 'IfStatement') return false;
+  let denies = false;
+  walkNodes(node.consequent, (c) => {
+    if (c.type === 'ThrowStatement') denies = true;
+    if (c.type === 'CallExpression' && deniedStatusOf(c)) denies = true;
+  });
+  if (!denies) return false;
+  let owns = false;
+  walkNodes(node.test, (b) => {
+    if (b.type !== 'BinaryExpression' || !/^[=!]==?$/.test(b.operator)) return;
+    // one side is the caller's verified identity, the OTHER is a fetched field (a member access
+    // like `row.ownerId`). Order-agnostic. `valueIsIdentity` is the honesty gate — request input
+    // (`req.body.*`, `req.params.*`) is never identity, so a spoofable compare is rejected.
+    if (valueIsIdentity(b.left) && b.right?.type === 'MemberExpression') owns = true;
+    if (valueIsIdentity(b.right) && b.left?.type === 'MemberExpression') owns = true;
+  });
+  return owns;
+}
+
 // does this `where` target a specific object by a bare `id` key (the BOLA shape)?
 function whereHasIdKey(whereNode) {
   if (whereNode?.type !== 'ObjectExpression') return false;
@@ -1023,7 +1656,7 @@ function optionValueOf(arg, name) {
   return null;
 }
 
-function reqParamName(node, reqDerived, thisSymbols) {
+export function reqParamName(node, reqDerived, thisSymbols) {
   node = unwrapTS(node);
   if (node?.type === 'Identifier') return reqDerived?.get(node.name) ?? null;
   if (node?.type !== 'MemberExpression') return null;
@@ -1044,22 +1677,72 @@ function reqParamName(node, reqDerived, thisSymbols) {
 }
 
 // map local vars assigned straight from a request member: `const c = req.params.collection`
-// → { c: ':collection' }. One shallow pass; deterministic; bounded by the function body.
-function collectReqDerived(fnNode) {
+// → { c: ':collection' }. Also follows the two commonest value-flow shapes the direct-member
+// case misses — OBJECT DESTRUCTURING (`const { title, body } = req.body` → title/body carry
+// the request taint, the dominant handler idiom) and IDENTIFIER ALIAS (`const b = req.body;
+// const c = b`). One source-order pass — earlier bindings are in the map when a later one
+// references them; deterministic; bounded by the function body. UNDER-approximates on
+// purpose (a missed alias is a false-negative on an advisory taint tag, never a hidden
+// write) — see valueTainted.
+//
+// `seed` (interprocedural, ADR-066): request-derived PARAMETER bindings supplied by the
+// caller — when a handler calls `saveItem(req.body)`, the resolver seeds `saveItem`'s param
+// as request-derived so a write inside it taints. Seeded first so a local re-binding in the
+// body can still override. MUST-analysis: the caller only seeds a param it PROVED tainted.
+export function collectReqDerived(fnNode, seed = null) {
   const map = new Map();
+  if (seed) for (const [k, v] of seed) map.set(k, v);
+  // non-null request-taint marker if `init` is request-derived: a req member (`req.body`),
+  // or an identifier already tracked as request-derived (`b` after `const b = req.body`).
+  const reqSourceOf = (init) => {
+    const node = unwrapTS(init);
+    if (!node) return null;
+    if (node.type === 'Identifier') return map.get(node.name) ?? null;
+    if (node.type === 'MemberExpression') return reqParamName(node, map);
+    return null;
+  };
   const walk = (n) => {
     if (!n || typeof n !== 'object') return;
     if (Array.isArray(n)) {
       for (const x of n) walk(x);
       return;
     }
-    if (
-      n.type === 'VariableDeclarator' &&
-      n.id?.type === 'Identifier' &&
-      n.init?.type === 'MemberExpression'
-    ) {
-      const name = reqParamName(n.init, null);
-      if (name) map.set(n.id.name, name);
+    if (n.type === 'VariableDeclarator') {
+      if (n.id?.type === 'Identifier' && n.init?.type === 'MemberExpression') {
+        const name = reqParamName(n.init, map);
+        if (name) map.set(n.id.name, name);
+      } else if (n.id?.type === 'Identifier' && n.init?.type === 'Identifier') {
+        // alias: `const c = b` where b is already request-derived
+        const src = map.get(n.init.name);
+        if (src) map.set(n.id.name, src);
+      } else if (n.id?.type === 'ObjectPattern' && reqSourceOf(n.init)) {
+        // destructure: `const { title, body: b, ...rest } = req.body` — each binding is
+        // request-derived; a named binding carries its KEY as the symbolic leaf (`:title`).
+        const src = reqSourceOf(n.init);
+        for (const prop of n.id.properties) {
+          if (prop.type === 'RestElement' && prop.argument?.type === 'Identifier') {
+            map.set(prop.argument.name, src); // rest carries the whole source taint
+            continue;
+          }
+          if (prop.type !== 'ObjectProperty') continue;
+          const key =
+            prop.key?.type === 'Identifier'
+              ? prop.key.name
+              : prop.key?.type === 'StringLiteral'
+                ? prop.key.value
+                : null;
+          // local binding: `{ title }` (value=title), `{ title: t }` (value=t),
+          // `{ title = 'x' }` (value=AssignmentPattern → left)
+          const val = prop.value;
+          const local =
+            val?.type === 'Identifier'
+              ? val.name
+              : val?.type === 'AssignmentPattern' && val.left?.type === 'Identifier'
+                ? val.left.name
+                : null;
+          if (key && local) map.set(local, `:${key}`);
+        }
+      }
     }
     for (const k of Object.keys(n)) {
       if (
@@ -1080,6 +1763,91 @@ function collectReqDerived(fnNode) {
 // SBIR §2.2 — transaction wrappers whose function arguments open a scope
 const TX_WRAPPERS = new Set(['transaction', '$transaction', 'withTransaction']);
 
+// Mutating effect kinds — the ones a guard is supposed to dominate (O1). A read is never a bypass.
+const MUTATING_EFFECTS = new Set(['db_write', 'http_call', 'fs_write']);
+
+// Guard-DOMINANCE (kills the C2 false PROVEN): a guard on a route's chain does not make EVERY
+// write on the route safe — the guard must run BEFORE the write. A handler that mutates in an
+// early-return branch and only checks auth afterwards (`if (preview) { charge.create(); return }
+// … await requireAuth(req)`) bypasses its own guard. We compute, per body, which mutations
+// execute on a path that has not yet passed a guard, AND where a guard follows on the same spine
+// (so there genuinely IS a guard being bypassed — a body whose guard lives cross-procedurally is
+// left to the route-level model, unchanged). This can only ever SUBTRACT guard credit — it never
+// invents a guard — so a heuristic barrier is sound: at worst it misses a bypass, never fabricates.
+//
+// A spine statement sets the barrier when everything sequentially after it has passed the check:
+//   (a) an early-deny gate — `if (test) throw | return <4xx>` (fall-through ⇒ the check passed), or
+//   (b) a guard CALL on the spine — `await requireAuth(req)` / `const s = await getSession()`.
+function spineCall(stmt) {
+  let e = null;
+  if (stmt.type === 'ExpressionStatement') e = stmt.expression;
+  else if (stmt.type === 'VariableDeclaration' && stmt.declarations[0])
+    e = stmt.declarations[0].init;
+  if (e?.type === 'AwaitExpression') e = e.argument;
+  return e?.type === 'CallExpression' ? e : null;
+}
+
+// An AUTHORIZATION gate, tightly — NOT the broad GUARD_NAME (which matches business calls like
+// `hasAdmin`/`getRole`/`verifyEmail` and would flood false bypasses). Only names that unambiguously
+// gate access: `require/ensure/assert{Auth,Session,User,Owner,Permission,Role,Admin,Login,Access}`,
+// `authenticate`/`authorize`, `canActivate`, `get(Server)Session`, `check/verify{Auth,Session,…}`.
+const AUTH_GATE_CALL =
+  /(^|[^a-z])(require|ensure|assert)[_]?(auth|session|user|owner|permission|role|admin|login|access)|authenticate|authoriz(e|ation)|can[_]?activate|get[_]?server[_]?session|get[_]?session|check[_]?(auth|permission|access|session)|verify[_]?(auth|session|permission)|protect[_]?route/i;
+
+function isGuardCall(call) {
+  const callee = call.callee;
+  const name =
+    callee?.type === 'Identifier'
+      ? callee.name
+      : callee?.type === 'MemberExpression' && callee.property?.type === 'Identifier'
+        ? callee.property.name
+        : '';
+  return AUTH_GATE_CALL.test(name);
+}
+
+// Does this subtree AUTH-deny — refuse with 401/403 or an auth exception? (Deliberately NOT any
+// throw or any 4xx: a validation `throw new BadRequestException()` inside a service is not an auth
+// gate, and treating it as one is what produced false bypasses.)
+function subtreeAuthDenies(node) {
+  let found = false;
+  const walk = (n) => {
+    if (found || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) {
+      for (const x of n) walk(x);
+      return;
+    }
+    if (n.type === 'CallExpression' && deniedStatusOf(n)) return void (found = true);
+    if (n.type === 'NewExpression') {
+      const nm = n.callee?.name;
+      if (
+        /^(Unauthorized|Forbidden)(Exception|Error)$/.test(nm ?? '') ||
+        (Array.isArray(n.arguments) && n.arguments.some(isDenyOptions))
+      )
+        return void (found = true);
+    }
+    for (const k of Object.keys(n)) {
+      if (
+        k === 'loc' ||
+        k === 'range' ||
+        k === 'leadingComments' ||
+        k === 'trailingComments'
+      )
+        continue;
+      const v = n[k];
+      if (v && typeof v === 'object') walk(v);
+    }
+  };
+  walk(node);
+  return found;
+}
+
+function statementSetsBarrier(stmt) {
+  if (!stmt) return false;
+  if (stmt.type === 'IfStatement') return subtreeAuthDenies(stmt.consequent);
+  const call = spineCall(stmt);
+  return call ? isGuardCall(call) : false;
+}
+
 function visit(node, out, ctx) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) {
@@ -1087,10 +1855,33 @@ function visit(node, out, ctx) {
     return;
   }
 
+  // Ordered spine walk of a block, tracking whether a guard has executed ON THE CURRENT PATH. A
+  // spine guard covers everything sequentially after it AND everything nested inside those later
+  // statements; a guard INSIDE a branch covers only that branch, never a sibling. Each mutation
+  // visited while the path is still unguarded is tagged `_unguardedPath` — a write reachable without
+  // passing a guard. (scanFunction promotes those to `bypassesGuard` only when THIS body actually
+  // has an in-body guard, so a body guarded cross-procedurally is left to the route model, unchanged.)
+  if (node.type === 'BlockStatement') {
+    let guarded = ctx.guarded === true;
+    for (const stmt of node.body) {
+      visit(stmt, out, { ...ctx, guarded });
+      if (statementSetsBarrier(stmt)) {
+        guarded = true;
+        out.hasInBodyGuard = true;
+      }
+    }
+    return;
+  }
+
   // G2 credential signal (advisory-only): the body can refuse — any throw, or any 4xx
   // response. Deliberately BROADER than guardSignals.deniesWithStatus (401/403) because it
   // can only ever downgrade a critical to an advisory, never verify a guard.
   if (node.type === 'ThrowStatement') out.credentialSignals.denies4xxOrThrows = true;
+
+  // G1b (O7/BOLA only): fetch-then-compare ownership — `if (row.ownerId !== req.user.id) deny`.
+  // The deterministic witness verifier (ADR-074), clears the same advisory as G1 (callAssertsOwnership),
+  // sound both ways. Runs on every IfStatement, so it must be in `visit`, not `inspectCall`.
+  if (ifAssertsOwnership(node)) out.ownerAsserted = true;
 
   // try/catch — try-effects are compensable by catch-effects (SBIR §2.2)
   if (node.type === 'TryStatement') {
@@ -1111,8 +1902,7 @@ function visit(node, out, ctx) {
       out.guardSignals.deniesWithStatus = true;
     else if (n === 'HttpException' || n === 'HttpError')
       for (const a of node.arguments)
-        if (a.type === 'NumericLiteral' && (a.value === 401 || a.value === 403))
-          out.guardSignals.deniesWithStatus = true;
+        if (isDenyStatusArg(a)) out.guardSignals.deniesWithStatus = true;
     // any error/response CONSTRUCTED with an unauthorized/forbidden code or a 401/403
     // status — `new DubApiError({ code: "unauthorized" })`, `new Response(_, { status:
     // 403 })`. A general REST/Next idiom, so a resolved auth wrapper reads as a denial.
@@ -1143,10 +1933,26 @@ function visit(node, out, ctx) {
       callee.property?.type === 'Identifier' &&
       TX_WRAPPERS.has(callee.property.name)
     ) {
+      // Client-provenance (the "prion" bind): an interactive transaction hands its callback a
+      // transactional client — `prisma.$transaction(async (tx) => { tx.order.create(...) })`. The
+      // param `tx` IS a db client, but wears a name the /prisma|client|db/ heuristic can't see, so
+      // every write inside used to VANISH (audit blind spot #3: the dominant Prisma idiom compiled
+      // to SURFACE). We propagate the receiver's db-identity onto the callback param name for the
+      // scope of the transaction — templated by contact, not by name. Scoped to txCtx, so the alias
+      // never leaks past the transaction body.
+      const cbParams = node.arguments
+        .filter(
+          (a) =>
+            a?.type === 'ArrowFunctionExpression' || a?.type === 'FunctionExpression',
+        )
+        .flatMap((fn) => fn.params ?? [])
+        .filter((p) => p?.type === 'Identifier')
+        .map((p) => p.name);
       const txCtx = {
         ...ctx,
         tx: node.loc?.start.line ?? 0,
         isolation: isolationLiteralOf(node) ?? 'default',
+        dbAliases: new Set([...(ctx.dbAliases ?? []), ...cbParams]),
       };
       for (const arg of node.arguments) visit(arg, out, txCtx);
       return;
@@ -1362,6 +2168,29 @@ function inspectCall(node, out, ctx) {
     }
   }
 
+  // ---- TypeORM: `repo.save(dto)` / `this.userRepo.update(...)` / `manager.remove(...)`. Fires
+  // ONLY when the receiver is a known repository (ctx.repoTables — injected/typed repo field or a
+  // local getRepository(Entity) var), so a generic `.save()`/`.update()` never trips it. The table
+  // is the entity the repo is typed to; a repo with no resolvable entity still yields a db_write
+  // with an unknown table (enough for O1 guard checks and to lift the handler off SURFACE).
+  if (TYPEORM_WRITE[methodLower] !== undefined && ctx.repoTables) {
+    const recv =
+      callee.object.type === 'Identifier' || callee.object.type === 'MemberExpression'
+        ? clientBaseName(callee.object)
+        : null;
+    if (recv && ctx.repoTables.has(recv)) {
+      const table = ctx.repoTables.get(recv);
+      pushEffect(out, ctx, {
+        effectType: 'db_write',
+        op: TYPEORM_WRITE[methodLower],
+        table: table || null,
+        ...(valueTainted(node.arguments[0], ctx) ? { tainted: true } : {}),
+        line,
+      });
+      return;
+    }
+  }
+
   // ---- prisma: prisma.user.findMany() → table "user". Literal values in
   // `data:`/`where:` are harvested like SQL SET/WHERE literals — they are the
   // raw material StateMachineInference reads (lowercased, same trade-off)
@@ -1376,7 +2205,7 @@ function inspectCall(node, out, ctx) {
       !obj.computed &&
       obj.property.type === 'Identifier' &&
       client &&
-      /prisma|client|db/i.test(client)
+      (/prisma|client|db/i.test(client) || ctx.dbAliases?.has(client))
     ) {
       const op = PRISMA_OPS[methodLower];
       const data = prismaLiteralsOf(node.arguments[0], 'data');
@@ -1451,6 +2280,32 @@ function inspectCall(node, out, ctx) {
     return;
   }
 
+  // ---- innate immunity: known vendor-SDK effects (stripe.charges.create, transporter.sendMail…)
+  // that carry no http-client skin. Checked AFTER every DB handler has returned, so an ORM call
+  // is never misread as an SDK effect. See EFFECT_SDK_PATHS.
+  const sdkEffect = knownExternalEffect(callee, methodLower, node);
+  if (sdkEffect) {
+    pushEffect(out, ctx, { effectType: 'http_call', ...sdkEffect, line });
+    return;
+  }
+  // Import-provenance: a call whose ROOT binding was labeled an effect client (imported from a
+  // payment/mail/cloud/queue package, or built from one). Recognized by origin, not method name —
+  // this is what catches the bare `.send()` tail (sgMail.send, producer.send). A read-shaped
+  // method stays GET (not observable); config/wiring methods emit nothing.
+  if (
+    rootName &&
+    ctx.effectClients?.has(rootName) &&
+    !SDK_IGNORE_METHOD.has(methodLower)
+  ) {
+    pushEffect(out, ctx, {
+      effectType: 'http_call',
+      target: `sdk:${rootName}.${methodLower}`,
+      httpMethod: SDK_READ_METHOD.test(methodLower) ? 'GET' : 'POST',
+      line,
+    });
+    return;
+  }
+
   // ---- HTTP clients: axios.get(...), got.post(...) — the member IS the method
   if (rootName && HTTP_CLIENTS.has(rootName.toLowerCase())) {
     const httpMethod = /^(get|post|put|patch|delete|head)$/.test(methodLower)
@@ -1480,6 +2335,33 @@ function inspectCall(node, out, ctx) {
         line,
       });
     }
+    return;
+  }
+
+  // ---- opaque write on a PROVEN persistence handle (ADR-068 — the effect-bias inversion).
+  // Reached only AFTER every known ORM/SDK/HTTP/fs handler has declined. An UNKNOWN method called
+  // DIRECTLY on a database handle (`db.archiveAll(...)`) can't be read — but the safe direction is
+  // INVERTED here vs everywhere else: a missed write is a HIDDEN HOLE (an unguarded custom write
+  // goes invisible), while an over-flagged read is only a surfaceable false positive. So treat it
+  // as a write. Marked `opaque` with a null table, so it fires ONLY the guard obligation (O1) and
+  // NEVER fabricates column/atomicity precision (O2/O3 skip a table-less write). Gated hard to
+  // avoid a flood: the receiver must be a handle IDENTIFIER (builder continuations sit on a CALL
+  // receiver, ORM verbs are handled above), and the method must be neither a known read nor
+  // plumbing. Provenance-based (dbHandles), never a name test — so this can only RAISE a finding.
+  if (
+    ctx.dbHandles &&
+    callee.object.type === 'Identifier' &&
+    ctx.dbHandles.has(callee.object.name) &&
+    !DB_KNOWN_READ.has(methodLower) &&
+    !DB_NON_EFFECT.has(methodLower)
+  ) {
+    pushEffect(out, ctx, {
+      effectType: 'db_write',
+      op: 'unknown',
+      table: null,
+      opaque: true,
+      line,
+    });
   }
 }
 
@@ -1491,6 +2373,10 @@ function pushEffect(out, ctx, effect) {
   }
   if (ctx?.tryId != null) effect.tryId = ctx.tryId;
   if (ctx?.catchOf != null) effect.catchOf = ctx.catchOf;
+  // guard-dominance (C2): a mutation reached while no guard has run on this path. Temporary — promoted
+  // to `bypassesGuard` in scanFunction only if this body also HAS a guard (else it is left unchanged).
+  if (ctx?.guarded !== true && MUTATING_EFFECTS.has(effect.effectType))
+    effect._unguardedPath = true;
   out.effects.push(effect);
 }
 
@@ -1572,11 +2458,8 @@ function isDenyOptions(arg) {
   for (const p of arg.properties) {
     if (p.type !== 'ObjectProperty' || p.key?.type !== 'Identifier') continue;
     if (p.key.name === 'status' || p.key.name === 'statusCode') {
-      if (
-        p.value?.type === 'NumericLiteral' &&
-        (p.value.value === 401 || p.value.value === 403)
-      )
-        return true;
+      // { status: 403 } OR { status: HttpStatus.FORBIDDEN } (named constant, ADR-073)
+      if (isDenyStatusArg(p.value)) return true;
     } else if (p.key.name === 'code') {
       if (
         p.value?.type === 'StringLiteral' &&
@@ -1627,8 +2510,19 @@ function statusIn4xx(node) {
   return false;
 }
 
+// A deny STATUS argument: the numeric 401/403, OR the named HTTP constant `X.FORBIDDEN` /
+// `X.UNAUTHORIZED` (http-status-codes' `StatusCodes.FORBIDDEN`, Nest's `HttpStatus.FORBIDDEN`, …).
+// The status NAME is a conserved denial signal regardless of spelling — recognizing it is honest
+// (FORBIDDEN is 403 by definition, not a fuzzy name), and closes a huge real gap: a guard that
+// throws `new HttpException(_, StatusCodes.FORBIDDEN)` (ghostfolio does this on 91 permission guards)
+// used to read asserted only because SPARDA saw the constant, not a literal 403 (ADR-073).
+const isDenyStatusArg = (a) =>
+  (a?.type === 'NumericLiteral' && (a.value === 401 || a.value === 403)) ||
+  (a?.type === 'MemberExpression' &&
+    a.property?.type === 'Identifier' &&
+    (a.property.name === 'FORBIDDEN' || a.property.name === 'UNAUTHORIZED'));
+
 function deniedStatusOf(node) {
-  const isDeny = (v) => v === 401 || v === 403;
   // NextResponse.json(_, { status: 401 }) / res.json(_, { status: 403 }) — the deny is
   // in the init object, not a .status() chain. A first-class Next/Web-Response idiom.
   if (
@@ -1638,13 +2532,12 @@ function deniedStatusOf(node) {
     node.arguments.some(isDenyOptions)
   )
     return true;
-  // res.sendStatus(401) / res.status(401)... — a direct deny status
+  // res.sendStatus(401) / res.status(401)... — a direct deny status (numeric or named constant)
   if (
     node.type === 'CallExpression' &&
     node.callee?.type === 'MemberExpression' &&
     node.callee.property?.name === 'sendStatus' &&
-    node.arguments[0]?.type === 'NumericLiteral' &&
-    isDeny(node.arguments[0].value)
+    isDenyStatusArg(node.arguments[0])
   )
     return true;
   let cur = node;
@@ -1653,8 +2546,7 @@ function deniedStatusOf(node) {
       cur.type === 'CallExpression' &&
       cur.callee?.type === 'MemberExpression' &&
       cur.callee.property?.name === 'status' &&
-      cur.arguments[0]?.type === 'NumericLiteral' &&
-      isDeny(cur.arguments[0].value)
+      isDenyStatusArg(cur.arguments[0])
     )
       return true;
     cur =
@@ -1925,7 +2817,15 @@ function literalPairsOf(clause) {
   return pairs;
 }
 
-// middleware classifier: name smell OR observed 401/403 denial → guard
+// middleware classifier: name smell OR observed 401/403 denial → guard. `assertedGuard`
+// is an extractor's explicit "this chain step gates by name, unverified" flag (ADR-063,
+// the principal-injection param decorators `@GetUser`/`@Principal` whose bare names carry
+// no GUARD_NAME token) — honored here so a marked step reads as an ASSERTED guard without
+// widening GUARD_NAME globally (which would misclassify a plain `getUser` middleware).
 export function isGuardLike(name, scan) {
-  return GUARD_NAME.test(name ?? '') || Boolean(scan?.guardSignals.deniesWithStatus);
+  return (
+    GUARD_NAME.test(name ?? '') ||
+    Boolean(scan?.guardSignals?.deniesWithStatus) ||
+    Boolean(scan?.assertedGuard)
+  );
 }

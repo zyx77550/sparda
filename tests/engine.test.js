@@ -328,7 +328,7 @@ describe('engine — spine surface (createSpardaEngine)', () => {
     for (let i = 0; i < 3; i++)
       engine.observe('get_balance', { amount: 50 }, (t += 100), false, {});
     expect(engine.preCall('get_balance', {}).hit).toBe(true); // serveable...
-    engine.observe('do_transfer', { ok: true }, (t += 100), true, {}); // ...until a write moves it
+    engine.observe('do_transfer', { ok: true }, t + 100, true, {}); // ...until a write moves it
     expect(engine.preCall('get_balance', {}).hit).toBe(false); // ghost map purged the cached read
   });
 

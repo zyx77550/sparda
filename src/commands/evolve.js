@@ -82,7 +82,7 @@ export async function runEvolve(opts) {
       },
     );
   }
-  let exemplars = {};
+  let exemplars;
   try {
     exemplars = JSON.parse(fs.readFileSync(twinPath, 'utf8')).exemplars ?? {};
   } catch {

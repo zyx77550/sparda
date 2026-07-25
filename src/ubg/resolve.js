@@ -26,6 +26,9 @@ import {
   methodInClassChain,
   computeThisSymbols,
   resolveExportedFunction,
+  collectRepoFields,
+  collectReqDerived,
+  reqParamName,
 } from './extract.js';
 
 export const MAX_RESOLVE_DEPTH = 6;
@@ -33,6 +36,13 @@ export const MAX_RESOLVE_DEPTH = 6;
 // merge one scan's findings into another — the single copy of the contract
 // every follower shares.
 export function mergeScan(into, add) {
+  // Guard-dominance (C2) is a property of the ROUTE HANDLER's own body: a mutation that runs before
+  // the handler's auth check. A `bypassesGuard` computed inside a delegated/transitively-called body
+  // is that body's INTERNAL ordering (a service that mutates then runs a permission check) — not the
+  // route's auth gate, exactly as "effects merge; guards do not" (below). Strip it at the merge so a
+  // service's internal shape never flags the route. The handler's own effects live in `into` from
+  // the start and are never merged, so they keep their flag.
+  for (const e of add.effects) if (e.bypassesGuard) delete e.bypassesGuard;
   into.effects.push(...add.effects);
   into.returnShapes = [...(into.returnShapes ?? []), ...(add.returnShapes ?? [])];
   into.calls = [...(into.calls ?? []), ...(add.calls ?? [])];
@@ -117,6 +127,28 @@ function collectInstances(fnNode) {
   return map;
 }
 
+// Interprocedural taint seed (ADR-066): the callee params the caller proved request-derived.
+// For `helper(a, b)`, param i is tainted when arg i resolves to a request member in the
+// caller's scope (`reqParamName` non-null). Identifier params only — a destructured helper
+// signature is left to the callee's own body scan. MUST-analysis (only a proven-tainted arg
+// seeds), so it can only sharpen a finding, never fabricate one. Returns Map or null.
+function seedTaint(fn, args, callerReq) {
+  if (!fn?.params?.length || !args?.length) return null;
+  let seed = null;
+  fn.params.forEach((p, i) => {
+    const id = p.type === 'TSParameterProperty' ? p.parameter : p;
+    if (id?.type !== 'Identifier') return;
+    const arg = args[i];
+    if (!arg) return;
+    const marker = reqParamName(arg, callerReq, null);
+    if (marker != null) {
+      if (!seed) seed = new Map();
+      seed.set(id.name, marker);
+    }
+  });
+  return seed;
+}
+
 // One engine instance per extract run. `scannedFiles` and `helpers` are the
 // extractor's own arrays — the engine appends to them as it discovers files and
 // dead-path candidates, exactly like the code it replaced. Both memo caches
@@ -139,7 +171,10 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
   // resolved methods. `this.<m>()` dispatches from the INSTANTIATED class, so an
   // override (ActivityService.readByQuery) wins over the base method it shadows.
   function deepScan(fnNode, owningMod) {
-    const base = scanFunction(fnNode);
+    const base = scanFunction(fnNode, {
+      effectClients: owningMod?.effectClients,
+      dbHandles: owningMod?.dbHandles,
+    });
     const merged = {
       ...base,
       effects: [...base.effects],
@@ -153,9 +188,21 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
   // `seen` dedups sub-scans merged into THIS target; `stack` is the class-method
   // cycle guard and spans the whole recursion; `clsCtx` (top + declaring class) is
   // set while walking a class-method body so `this.` / `super.` calls resolve.
-  function followCalls(fnNode, mod, merged, seen, depth, clsCtx, stack) {
+  function followCalls(
+    fnNode,
+    mod,
+    merged,
+    seen,
+    depth,
+    clsCtx,
+    stack,
+    taintSeed = null,
+  ) {
     if (depth >= MAX_RESOLVE_DEPTH) return;
     const instances = collectInstances(fnNode);
+    // this body's request-derived vars, INCLUDING params the caller proved tainted
+    // (interprocedural taint, ADR-066) — used to seed a bare helper this body calls.
+    const callerReq = collectReqDerived(fnNode, taintSeed);
     walkCalls(fnNode, (node) => {
       const callee = node.callee;
       // bare imported/local function call: `helper(args)`. The resolver historically only
@@ -195,10 +242,19 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
             // `assertIntegrationEnvironmentScope` gating a public register → a false PROVEN).
             // A route's real gate is a chain step or a DIRECTLY-resolved verifier, not any
             // denying function somewhere in its transitive closure. Effects merge; guards do not.
-            const bare = scanFunction(fn);
+            // interprocedural taint (ADR-066): bind the helper's params the caller proved
+            // request-derived (`saveItem(req.body)` → `saveItem`'s first param is tainted),
+            // so a write inside the helper carries the taint. MUST-analysis, so it only
+            // sharpens a finding, never fabricates one.
+            const calleeSeed = seedTaint(fn, node.arguments, callerReq);
+            const bare = scanFunction(fn, {
+              effectClients: fnMod?.effectClients,
+              dbHandles: fnMod?.dbHandles,
+              reqDerivedSeed: calleeSeed,
+            });
             bare.guardSignals = { deniesWithStatus: false };
             mergeScan(merged, bare);
-            followCalls(fn, fnMod, merged, seen, depth + 1, null, stack);
+            followCalls(fn, fnMod, merged, seen, depth + 1, null, stack, calleeSeed);
           }
         }
         return;
@@ -311,7 +367,13 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
         sourceLine: fn.line,
         fn: fn.node,
       });
-      mergeScan(merged, scanFunction(fn.node));
+      mergeScan(
+        merged,
+        scanFunction(fn.node, {
+          effectClients: targetMod?.effectClients,
+          dbHandles: targetMod?.dbHandles,
+        }),
+      );
       followCalls(fn.node, targetMod, merged, seen, depth + 1, null, stack);
     });
   }
@@ -362,7 +424,13 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
     if (cached) return cached;
     if (stack.has(key)) return null; // reference cycle — contribute nothing, don't cache
     stack.add(key);
-    const base = scanFunction(hit.fn, { thisSymbols });
+    const base = scanFunction(hit.fn, {
+      thisSymbols,
+      effectClients: hit.mod?.effectClients,
+      dbHandles: hit.mod?.dbHandles,
+      // the method's own class supplies the injected/typed repository fields (TypeORM)
+      repoFields: collectRepoFields(hit.cls ?? topCls),
+    });
     const bundle = {
       ...base,
       key,
@@ -410,7 +478,12 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
   // service → repository → kysely, wiring often inherited), which is why the walk
   // is recursive, bounded, and memoized (E-027: twenty took 34s without the memo).
   function handlerScan(method, di, mod, cls) {
-    const base = scanFunction(method); // the handler body itself
+    // the handler body itself
+    const base = scanFunction(method, {
+      effectClients: mod?.effectClients,
+      dbHandles: mod?.dbHandles,
+      repoFields: collectRepoFields(cls),
+    });
     const merged = {
       ...base,
       effects: [...base.effects],

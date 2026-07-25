@@ -139,7 +139,7 @@ async function run() {
     );
   }
 
-  let token = null;
+  let token;
   {
     const before = DB.zak.credits;
     const r = await fetch(`${B}/invoke`, {

@@ -305,10 +305,40 @@ def scan_function(fn):
         "validatesInput": False,
         "async": isinstance(fn, ast.AsyncFunctionDef),
     }
-    ctx = {"tx": None, "iso": "default", "tryId": None, "catchOf": None}
+    # var -> model table, from `u = User(...)` — so `db.session.add(u)` (the dominant
+    # Flask-SQLAlchemy write) resolves to a real table instead of an untable-able blind write.
+    var_models = {}
+    for n in ast.walk(fn):
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Name)
+                and n.value.func.id[:1].isupper()):
+            var_models[n.targets[0].id] = n.value.func.id.lower()
+    ctx = {"tx": None, "iso": "default", "tryId": None, "catchOf": None,
+           "var_models": var_models}
     for stmt in fn.body:
         _visit(stmt, out, ctx)
     return out
+
+
+def query_model_of(node):
+    """Flask-SQLAlchemy Query API: `Model.query.filter_by(...).delete()` /
+    `User.query.get(id)` → 'model' — the capitalized Name that `.query` hangs off,
+    however deep the chain (filter/filter_by/order_by/… are all calls)."""
+    cur = node
+    while cur is not None:
+        if (isinstance(cur, ast.Attribute) and cur.attr == "query"
+                and isinstance(cur.value, ast.Name)
+                and cur.value.id[:1].isupper()):
+            return cur.value.id.lower()
+        if isinstance(cur, ast.Attribute):
+            cur = cur.value
+        elif isinstance(cur, ast.Call):
+            cur = cur.func.value if isinstance(cur.func, ast.Attribute) else None
+        else:
+            cur = None
+    return None
 
 
 def _visit(node, out, ctx):
@@ -434,6 +464,16 @@ def inspect_call(node, out, ctx):
     # The receiver is matched on the full dotted chain, so `self.db.add(…)`
     # inside a service class reads like `db.add(…)` at module level.
     recv = dotted_name(func.value)
+    # Flask-SQLAlchemy Query API: Model.query.filter_by(...).delete() / .update() — a write on
+    # the model the chain roots at. (A bare Model.query.get()/all() is a read, handled as select.)
+    if method in ("delete", "update"):
+        qm = query_model_of(func.value)
+        if qm:
+            push_effect(out, ctx, {
+                "effectType": "db_write", "op": method, "table": qm,
+                "line": line, "driver": root or "unknown",
+            })
+            return
     if method == "query" and node.args and isinstance(node.args[0], ast.Name):
         push_effect(out, ctx, {
             "effectType": "db_read", "op": "select",
@@ -443,8 +483,18 @@ def inspect_call(node, out, ctx):
         return
     if (method in ("add", "add_all", "merge") and recv
             and re.search(r"session|db", recv, re.I)):
+        # resolve the model: db.session.add(u) where `u = User(...)`, or the inline
+        # db.session.add(User(...)). An unresolved add stays table-less (still a write).
+        table = None
+        if node.args:
+            a = node.args[0]
+            if isinstance(a, ast.Name):
+                table = ctx.get("var_models", {}).get(a.id)
+            elif (isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+                    and a.func.id[:1].isupper()):
+                table = a.func.id.lower()
         push_effect(out, ctx, {
-            "effectType": "db_write", "op": "insert", "table": None,
+            "effectType": "db_write", "op": "insert", "table": table,
             "line": line, "driver": root,
         })
         return
@@ -873,6 +923,10 @@ class UbgExtractor:
                             for t in self.dep_targets_of(kw.value):
                                 self.global_middlewares.append(
                                     {"target": t, "file": abs_file})
+                elif cname == "Flask":
+                    # Flask app: `app = Flask(__name__)`. Routes hang off @app.route /
+                    # @app.get/@app.post — same decorator-on-function shape as FastAPI.
+                    app_vars.add(var)
                 elif cname == "APIRouter":
                     router_vars.add(var)
                     router_prefixes[var] = ""
@@ -882,6 +936,16 @@ class UbgExtractor:
                             router_prefixes[var] = lit(kw.value)
                         if kw.arg == "dependencies":
                             router_deps[var] = self.dep_targets_of(kw.value)
+                elif cname == "Blueprint":
+                    # Flask Blueprint: `bp = Blueprint('x', __name__, url_prefix='/y')`.
+                    # A blueprint is FastAPI's APIRouter by another name — the same
+                    # prefix + register-later model, so it reuses the router machinery.
+                    router_vars.add(var)
+                    router_prefixes[var] = ""
+                    router_deps[var] = []
+                    for kw in call.keywords:
+                        if kw.arg == "url_prefix" and isinstance(lit(kw.value), str):
+                            router_prefixes[var] = lit(kw.value)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions[node.name] = node
 
@@ -926,18 +990,20 @@ class UbgExtractor:
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 self.collect_mount(node.value, abs_file, prefix, import_map,
                                    router_vars, router_prefixes, depth)
+                self.collect_cbv(node.value, abs_file, prefix, modctx, rel_file,
+                                 router_vars, router_prefixes)
                 continue
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             found = self.route_decorator_of(node, app_vars, router_vars)
             if not found:
                 continue
-            dec, obj_name, method = found
+            dec, obj_name, methods = found
             raw_path = lit(dec.args[0]) if dec.args else None
             if not isinstance(raw_path, str):
                 self.skipped.append({
                     "reason": "dynamic path on %s (non-literal first arg)"
-                              % method.upper(),
+                              % "/".join(m.upper() for m in methods),
                     "file": rel_file, "line": node.lineno,
                 })
                 continue
@@ -954,6 +1020,28 @@ class UbgExtractor:
                 continue
 
             chain = []
+            # Flask auth decorators — @login_required / @jwt_required() / @requires_auth —
+            # gate the handler exactly like a resolved FastAPI dependency that denies. A
+            # decorator whose NAME is an auth gate is a VERIFIED guard (the framework enforces
+            # the 401), so a mutation behind it is not a false UNGUARDED_MUTATION.
+            for d in node.decorator_list:
+                dname = (d.func.attr if isinstance(d, ast.Call)
+                         and isinstance(d.func, ast.Attribute)
+                         else d.func.id if isinstance(d, ast.Call)
+                         and isinstance(d.func, ast.Name)
+                         else d.attr if isinstance(d, ast.Attribute)
+                         else d.id if isinstance(d, ast.Name) else "")
+                if re.search(r'login_required|jwt_required|requires?_auth'
+                             r'|auth_required|require_login|token_required'
+                             r'|permission_required', dname or "", re.I):
+                    chain.append({
+                        "name": dname, "role": "middleware", "sourceFile": rel_file,
+                        "sourceLine": node.lineno,
+                        "scan": {"effects": [], "returnShapes": [], "calls": [],
+                                 "async": False, "validatesInput": False,
+                                 "guardSignals": {"deniesWithStatus": True}},
+                    })
+                    break
             dep_names = list(router_deps.get(obj_name, []))
             for kw in dec.keywords:
                 if kw.arg == "dependencies":
@@ -971,7 +1059,9 @@ class UbgExtractor:
                 else:
                     self.skipped.append({
                         "reason": "dependency '%s' not resolved on %s %s"
-                                  % (dep_name, method.upper(), full_path),
+                                  % (dep_name,
+                                     "/".join(m.upper() for m in methods),
+                                     full_path),
                         "file": rel_file, "line": node.lineno,
                     })
             # DI bindings: `svc: UserService = Depends(get_user_service)` /
@@ -1003,31 +1093,172 @@ class UbgExtractor:
                 "sourceLine": node.lineno, "scan": handler_scan,
             })
 
-            self.routes.append({
-                "method": method,
-                "path": full_path,
-                "sourceFile": rel_file,
-                "sourceLine": node.lineno,
-                "params": params,
-                "chain": chain,
-                "description": (ast.get_docstring(node) or "")[:400],
-            })
+            # one entrypoint per HTTP method (a Flask `@app.route(methods=[…])` can
+            # declare several; FastAPI/@app.get yields exactly one)
+            for method in methods:
+                self.routes.append({
+                    "method": method,
+                    "path": full_path,
+                    "sourceFile": rel_file,
+                    "sourceLine": node.lineno,
+                    "params": params,
+                    "chain": chain,
+                    "description": (ast.get_docstring(node) or "")[:400],
+                })
 
     def route_decorator_of(self, fn, app_vars, router_vars):
+        # Returns (decorator, owner_var, [methods]). Matches BOTH:
+        #   @app.get / @router.post / @app.delete   (FastAPI + Flask 2.0 shorthand)
+        #   @app.route("/x", methods=["GET","POST"]) (Flask — methods in a kwarg, default GET)
         for dec in fn.decorator_list:
-            if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) \
-                    and dec.func.attr in HTTP_VERBS \
-                    and isinstance(dec.func.value, ast.Name) \
+            if not (isinstance(dec, ast.Call)
+                    and isinstance(dec.func, ast.Attribute)
+                    and isinstance(dec.func.value, ast.Name)
                     and (dec.func.value.id in app_vars
-                         or dec.func.value.id in router_vars):
-                return dec, dec.func.value.id, dec.func.attr
+                         or dec.func.value.id in router_vars)):
+                continue
+            attr = dec.func.attr
+            if attr in HTTP_VERBS:
+                return dec, dec.func.value.id, [attr]
+            if attr == "route":
+                methods = ["get"]
+                for kw in dec.keywords:
+                    if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                        got = [lit(e).lower() for e in kw.value.elts
+                               if isinstance(lit(e), str)
+                               and lit(e).lower() in HTTP_VERBS]
+                        if got:
+                            methods = got
+                return dec, dec.func.value.id, methods
         return None
+
+    def collect_cbv(self, call, abs_file, prefix, modctx, rel_file,
+                    router_vars, router_prefixes):
+        """Flask class-based views: a MethodView registered via
+        `app.add_url_rule('/x', view_func=Cls.as_view('n'), methods=[…])`, or a
+        Flask-RESTful `api.add_resource(Cls, '/x')`. Each HTTP-verb method on the
+        class (or up its bases) becomes a route, scanned like any handler — so the
+        DELETE/POST inside a MethodView is no longer an invisible mutation surface."""
+        if not (isinstance(call.func, ast.Attribute) and call.args):
+            return
+        attr = call.func.attr
+        if attr not in ("add_url_rule", "add_resource"):
+            return
+        owner = call.func.value
+        owner_name = owner.id if isinstance(owner, ast.Name) else None
+        local_prefix = (router_prefixes.get(owner_name, "")
+                        if owner_name in router_vars else "")
+        cbv_name, raw_path, restrict = None, None, None
+        if attr == "add_url_rule":
+            raw_path = lit(call.args[0]) if call.args else None
+            for kw in call.keywords:
+                if (kw.arg == "view_func" and isinstance(kw.value, ast.Call)
+                        and isinstance(kw.value.func, ast.Attribute)
+                        and kw.value.func.attr == "as_view"
+                        and isinstance(kw.value.func.value, ast.Name)):
+                    cbv_name = kw.value.func.value.id
+                elif kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                    restrict = {lit(e).lower() for e in kw.value.elts
+                                if isinstance(lit(e), str)}
+        else:  # add_resource(Cls, "/path")
+            if isinstance(call.args[0], ast.Name):
+                cbv_name = call.args[0].id
+            raw_path = lit(call.args[1]) if len(call.args) > 1 else None
+        if not cbv_name or not isinstance(raw_path, str):
+            return
+        hit = self.resolve_class(modctx, cbv_name)
+        if not hit:
+            return
+        cls, cmod = hit
+        full_path = (prefix + local_prefix + raw_path).replace("//", "/")
+        if not full_path.startswith("/"):
+            full_path = "/" + full_path
+        # class-level guards: MethodView `decorators = [...]` / Flask-RESTful
+        # `method_decorators = [...]` apply to every verb method.
+        class_guard = self.cbv_class_guard(cls, rel_file)
+        for verb in HTTP_VERBS:
+            if restrict is not None and verb not in restrict:
+                continue
+            m = self.method_in_class_chain(cls, cmod, verb)
+            if not m:
+                continue
+            fn, fmod = m
+            mrel = self.rel(fmod["file"])
+            chain = []
+            for g in (class_guard + self.auth_guard_steps(fn, mrel)):
+                chain.append(g)
+            chain.append({
+                "name": "%s.%s" % (cbv_name, verb), "role": "handler",
+                "sourceFile": mrel, "sourceLine": fn.lineno,
+                "scan": self.deep_scan(fn, fmod),
+            })
+            self.routes.append({
+                "method": verb, "path": full_path,
+                "sourceFile": mrel, "sourceLine": fn.lineno,
+                "params": self.params_of(fn, full_path),
+                "chain": chain,
+                "description": (ast.get_docstring(fn) or "")[:400],
+            })
+
+    def auth_guard_steps(self, fn, rel_file):
+        """@login_required / @jwt_required / @requires_auth on a handler → a verified guard step."""
+        steps = []
+        for d in getattr(fn, "decorator_list", []):
+            dname = (d.func.attr if isinstance(d, ast.Call)
+                     and isinstance(d.func, ast.Attribute)
+                     else d.func.id if isinstance(d, ast.Call)
+                     and isinstance(d.func, ast.Name)
+                     else d.attr if isinstance(d, ast.Attribute)
+                     else d.id if isinstance(d, ast.Name) else "")
+            if re.search(r'login_required|jwt_required|requires?_auth|auth_required'
+                         r'|require_login|token_required|permission_required',
+                         dname or "", re.I):
+                steps.append(self._guard_step(dname, rel_file, fn.lineno))
+                break
+        return steps
+
+    def cbv_class_guard(self, cls, rel_file):
+        """MethodView `decorators = [login_required]` / Flask-RESTful
+        `method_decorators = [jwt_required]` — a class-level guard over every method."""
+        for stmt in cls.body:
+            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and stmt.targets[0].id in ("decorators", "method_decorators")
+                    and isinstance(stmt.value, (ast.List, ast.Tuple))):
+                for e in stmt.value.elts:
+                    nm = (e.func.id if isinstance(e, ast.Call)
+                          and isinstance(e.func, ast.Name)
+                          else e.func.attr if isinstance(e, ast.Call)
+                          and isinstance(e.func, ast.Attribute)
+                          else e.id if isinstance(e, ast.Name)
+                          else e.attr if isinstance(e, ast.Attribute) else "")
+                    if re.search(r'login_required|jwt_required|requires?_auth'
+                                 r'|auth_required|require_login|token_required'
+                                 r'|permission_required', nm or "", re.I):
+                        return [self._guard_step(nm, rel_file, cls.lineno)]
+        return []
+
+    @staticmethod
+    def _guard_step(name, rel_file, line):
+        return {
+            "name": name, "role": "middleware", "sourceFile": rel_file,
+            "sourceLine": line,
+            "scan": {"effects": [], "returnShapes": [], "calls": [],
+                     "async": False, "validatesInput": False,
+                     "guardSignals": {"deniesWithStatus": True}},
+        }
 
     def collect_mount(self, call, abs_file, prefix, import_map, router_vars,
                       router_prefixes, depth=0):
+        # FastAPI `app.include_router(r, prefix=…)` and Flask
+        # `app.register_blueprint(bp, url_prefix=…)` are the same act — mount a
+        # sub-router under a prefix. `register_blueprint` names its prefix `url_prefix`.
         if not (isinstance(call.func, ast.Attribute)
-                and call.func.attr == "include_router" and call.args):
+                and call.func.attr in ("include_router", "register_blueprint")
+                and call.args):
             return
+        prefix_kw = "url_prefix" if call.func.attr == "register_blueprint" \
+            else "prefix"
         arg0 = call.args[0]
         router_name = None
         if isinstance(arg0, ast.Name):
@@ -1038,7 +1269,7 @@ class UbgExtractor:
             return
         mount_prefix = ""
         for kw in call.keywords:
-            if kw.arg == "prefix" and isinstance(lit(kw.value), str):
+            if kw.arg == prefix_kw and isinstance(lit(kw.value), str):
                 mount_prefix = lit(kw.value)
         resolved = import_map.get(router_name)
         cum = (prefix + mount_prefix).replace("//", "/")
