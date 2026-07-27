@@ -26,6 +26,19 @@ detect ─► extract (facts) ─► translate ─► link ─► optimize (8 pa
   proof + SARIF), `mirror.js` (execute the graph over HTTP), `openapi-emit.js`
   (graph → OpenAPI 3.1), `verify.js` (prove the compiler laws), and the flight
   engine (`src/flight/`: record/replay + `heal.js` closed-loop gate).
+- **The premise verifier** (`premise.js`, `oracle-static.js`) sits OUTSIDE that list on
+  purpose. Every consumer above reasons over the graph, so every one is blind to a route
+  that is not in it (SOUNDNESS Direction 3). The verifier checks the compiler's SUBJECT
+  against a source of truth that is not the compiler: the app booted and reporting its
+  real route table (`src/probe/`, opt-in — it executes the target's code), or the route
+  table the framework's own file conventions imply (boot-free, so it runs unasked). A
+  gap enters the blindspot ledger at CRITICAL risk and yields the `PREMISE_GAP` verdict.
+  **`oracle-static.js` may not import an extractor** — an oracle that reuses the
+  analyser's walk is a mirror, and confirms bugs instead of finding them (ADR-082).
+  Every command that grades a graph — `apocalypse` (the CI gate), `badge` and `dossier`
+  (the public artifacts), `review` (the PR gate), `prove` — goes through the single
+  `premiseFor` call; `enforce` and `heal` do not, because their verdict is about a delta,
+  not about the app (ADR-083).
 
 The MCP runtime below is the *interactive* output of the same understanding.
 
@@ -195,7 +208,11 @@ a marked `post-commit` git hook running `sparda-mcp sync --quiet`.
 | `src/commands/grammar.js` | grammar command — infers sequence and parameter relationships (R3.3) |
 | `src/commands/evolve.js` | evolve command — Darwinian trials of candidate circuits against the twin (R3.4) |
 | **`src/ubg/`** | the behavior compiler — extractors, translator, linker, 8 passes, serializer, `apocalypse.js`, `mirror.js`, `openapi.js`/`openapi-emit.js`, `verify.js` |
+| `src/ubg/premise.js` | the premise verifier — diffs the compiled entrypoints against an oracle that is not the analyser; `PROBEABLE` (runtime, opt-in) vs `CONVENTION_ROUTED` (boot-free, unasked). **`premiseFor` + `withPremiseGaps` are the ONE call every verdict-emitting command makes** (ADR-083) |
+| `src/ubg/oracle-static.js` | the boot-free oracle — the route table Next / Medusa / Strapi / Nest conventions imply. Imports no extractor, by law |
+| `src/ubg/blindspots.js` | the ledger — every surface SPARDA could not bring into the graph, ranked by risk; `blindHigh` bars `PROVEN` |
+| `src/probe/` | the runtime oracle — boots the app, reports the framework's real route table (`probe.js`), diffs it (`reconcile.js`) |
 | **`src/flight/`** | Timeless engine — `box.js` (record/replay taps), `replayer.js`, `heal.js` (closed-loop gate) |
 | **`src/commands/{ubg,apocalypse,timeless,mirror,openapi,verify,heal}.js`** | the compiler-command CLIs (passes over `ubg.json`) |
 | `templates/*.txt` | the routers, placeholder-rendered (never edited in target apps) |
-| `tests/*.test.js` + `tests/fixtures/` | the whole suite — 389 Vitest + router self-test (see TESTING.md) |
+| `tests/*.test.js` + `tests/fixtures/` | the whole suite — 1085 Vitest + router self-test + 77 mutants (see TESTING.md) |

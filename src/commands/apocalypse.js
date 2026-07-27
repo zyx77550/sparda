@@ -18,7 +18,8 @@ import {
   verdictState,
   buildProofObjects,
 } from '../ubg/apocalypse.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 // version travels with the proof so an audit knows which prover produced it
@@ -69,13 +70,22 @@ export async function runApocalypse(opts) {
   }
 
   const findings = [...staticFindings, ...diffFindings];
+  // THE PREMISE, before the proof. This is the CI gate — the command whose exit code
+  // decides whether a tree ships — so it is the last place that may certify an app whose
+  // route table nobody checked. `premiseFor` keeps the opt-in boundary: the runtime
+  // oracle needs `--probe`, the boot-free convention oracle always runs.
+  const premise = await premiseFor(canonical, report, {
+    cwd: opts.cwd,
+    probe: opts.probe,
+  });
   // the honesty companion: where does the proof stop? (see `sparda blindspots`)
-  const blind = surveyBlindspots(canonical, report);
+  const blind = surveyBlindspots(canonical, withPremiseGaps(report, premise));
   // coverage feeds the verdict: a clean app that resolved almost nothing is SURFACE, not PROVEN;
   // and any high-risk blind spot pulls a bare PROVEN down to PARTIAL (E-047, the giant-test rung)
   const verdict = verdictOf(findings, canonical, {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
+    premiseGaps: premise.available ? premise.gaps.length : 0,
   });
 
   if (opts.sarif) {
@@ -136,6 +146,21 @@ export async function runApocalypse(opts) {
       if (opts.verbose && report.skipped?.length)
         for (const s of report.skipped)
           console.log(`      skipped: ${s.reason}${s.file ? ` (${s.file})` : ''}`);
+    } else if (verdict.premiseUnverified) {
+      // The one negative backed by a source outside SPARDA. It is stated BEFORE the
+      // clean/risky branches on purpose: findings about a subject we did not have are
+      // not the headline, the missing subject is.
+      const witness =
+        premise.oracle === 'convention'
+          ? "the framework's own file conventions"
+          : 'the running app';
+      console.log(
+        `✗ PREMISE NOT VERIFIED — ${premise.gaps.length} route(s) ${witness} serve were NEVER seen by the compiler. Nothing below is a claim about this tree: the proof's subject is incomplete, so no verdict is issued.`,
+      );
+      for (const g of premise.gaps.slice(0, 8))
+        console.log(`      ✗ ${g.method} ${g.path}`);
+      if (premise.gaps.length > 8)
+        console.log(`      … and ${premise.gaps.length - 8} more`);
     } else if (verdict.clean) {
       console.log(
         `✓ PROVEN — ${obligations} obligation(s) discharged, zero violations. No declared guard, invariant, transaction or aggregate boundary can be broken by this tree.`,
@@ -148,16 +173,22 @@ export async function runApocalypse(opts) {
     }
     // Honesty companion: where the proof stops. A green verdict over a graph riddled
     // with blind spots is not omniscience — say so, on the same screen as the verdict.
+    if (premise.available)
+      console.log(
+        premise.oracle === 'convention'
+          ? `  ⚖ premise checked against the framework's file conventions: ${premise.probed} route(s) implied, ${premise.gaps.length} gap(s)`
+          : `  ⚖ premise checked against the running app: ${premise.probed} route(s) probed, ${premise.gaps.length} gap(s)`,
+      );
     if (blind.surface > 0) {
       const hi = blind.byRisk.critical + blind.byRisk.high;
       console.log(
-        `  ◐ blind spots: ${blind.surface} (${hi} high+, ${blind.byRisk.medium} medium, ${blind.byRisk.low} low) · coverage ${(blind.coverage.ratio * 100).toFixed(0)}% — run \`sparda blindspots\` for the map`,
+        `  ◐ blind spots: ${blind.surface} (${hi} high+, ${blind.byRisk.medium} medium, ${blind.byRisk.low} low) · coverage ${coveragePct(blind.coverage.ratio)} — run \`sparda blindspots\` for the map`,
       );
     }
   }
 
   if (!verdict.safe) process.exitCode = 1; // CI gates on this
-  return { verdict, findings, obligations, blindspots: blind };
+  return { verdict, findings, obligations, blindspots: blind, premise };
 }
 
 // SARIF 2.1.0 — GitHub code scanning eats this directly

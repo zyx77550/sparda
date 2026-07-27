@@ -19,7 +19,8 @@ import { execFileSync } from 'node:child_process';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph, cmp } from '../ubg/schema.js';
 import { checkGraph, diffGraphs, verdictOf } from '../ubg/apocalypse.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
 
 const ICONS = { critical: '✗', high: '✗', medium: '⚠', info: '·' };
 const err = (message, hint) => Object.assign(new Error(message), { code: 'USER', hint });
@@ -33,7 +34,12 @@ const entrypointsOf = (graph) =>
 // ---------------------------------------------------------------------------
 // Pure core — two canonical graphs in, a review out. No git, no disk, no LLM.
 // ---------------------------------------------------------------------------
-export function reviewGraphs(baseGraph, candidateGraph) {
+export function reviewGraphs(
+  baseGraph,
+  candidateGraph,
+  candidateReport = null,
+  premise = null,
+) {
   // protections this deploy REMOVED (guards, invariants, entrypoints, blast radius)
   const removed = diffGraphs(baseGraph, candidateGraph).findings;
 
@@ -62,7 +68,16 @@ export function reviewGraphs(baseGraph, candidateGraph) {
   // how much of the changed app SPARDA could actually see — and whether this PR moved
   // that boundary. A green review over a graph the PR made 20% blinder is not the same
   // as a green review at full sight; the reviewer must be able to tell them apart.
-  const candBlind = surveyBlindspots(candidateGraph);
+  // The REPORT is what carries the skipped surface — unparseable files, declared
+  // UnknownHandlers, premise gaps. Reviewing the graph alone made every one of those
+  // invisible here, so a PR that turned a whole file unparseable, or that added a route
+  // SPARDA cannot bind, read exactly like a PR that changed nothing. The candidate's
+  // report is now plumbed in; the base is still graph-only, which is honest — the base's
+  // blind spots are not this PR's subject, only the direction of travel is.
+  const candBlind = surveyBlindspots(
+    candidateGraph,
+    candidateReport ? withPremiseGaps(candidateReport, premise) : undefined,
+  );
   const candCov = candBlind.coverage.ratio;
   const baseCov = surveyBlindspots(baseGraph).coverage.ratio;
 
@@ -70,6 +85,7 @@ export function reviewGraphs(baseGraph, candidateGraph) {
     verdict: verdictOf(findings, candidateGraph, {
       coverage: candCov,
       blindHigh: candBlind.byRisk.critical + candBlind.byRisk.high,
+      premiseGaps: premise?.available ? premise.gaps.length : 0,
     }),
     obligations,
     findings,
@@ -77,7 +93,11 @@ export function reviewGraphs(baseGraph, candidateGraph) {
     coverage: {
       now: candCov,
       base: baseCov,
-      delta: Math.round((candCov - baseCov) * 1000) / 1000,
+      // either side null (0/0 — no measurement) → the delta does not exist
+      delta:
+        candCov == null || baseCov == null
+          ? null
+          : Math.round((candCov - baseCov) * 1000) / 1000,
     },
   };
 }
@@ -93,12 +113,20 @@ export async function runReview(opts) {
   const cwd = opts.cwd;
   const base = resolveBase(cwd, opts.base);
 
-  const candidate = canonicalizeGraph(
-    compileUBG(cwd, { write: false, openapi: opts.openapi }).graph,
-  );
+  const compiled = compileUBG(cwd, { write: false, openapi: opts.openapi });
+  const candidate = canonicalizeGraph(compiled.graph);
   const baseGraph = compileAtRef(cwd, base, opts);
 
-  const review = { base, ...reviewGraphs(baseGraph, candidate) };
+  // the PR gate is a gate: it may not pass a diff whose subject SPARDA never had
+  const premise = await premiseFor(candidate, compiled.report, {
+    cwd,
+    probe: opts.probe,
+  });
+
+  const review = {
+    base,
+    ...reviewGraphs(baseGraph, candidate, compiled.report, premise),
+  };
 
   if (opts.json) console.log(JSON.stringify(review, null, 2));
   else if (opts.markdown) console.log(renderMarkdown(review));
@@ -185,7 +213,7 @@ function renderHuman(r) {
           ? ` (▼ ${(d * 100).toFixed(0)}% — harder to see)`
           : '';
     console.log(
-      `  · coverage: ${(r.coverage.now * 100).toFixed(0)}% of observed behavior resolved${move}`,
+      `  · coverage: ${coveragePct(r.coverage.now)} of observed behavior resolved${move}`,
     );
   }
 
@@ -220,7 +248,7 @@ function renderMarkdown(r) {
       : `${v.safe ? '⚠ **RISKY**' : '✗ **NOT PROVEN**'} — ${c.critical} critical, ${c.high} high, ${c.medium} medium, ${c.info} info.`;
   const lines = [`## 🔍 SPARDA semantic review (vs \`${r.base}\`)`, '', head, ''];
   if (r.coverage) {
-    const pct = (r.coverage.now * 100).toFixed(0);
+    const pct = coveragePct(r.coverage.now);
     const d = r.coverage.delta;
     const move =
       d > 0.005
@@ -228,7 +256,7 @@ function renderMarkdown(r) {
         : d < -0.005
           ? ` (▼ ${(d * 100).toFixed(0)}% vs base — this PR made the app harder to see)`
           : '';
-    lines.push(`**Coverage:** ${pct}% of observed behavior resolved${move}`, '');
+    lines.push(`**Coverage:** ${pct} of observed behavior resolved${move}`, '');
   }
   if (endpoints.added.length || endpoints.removed.length) {
     lines.push('### Endpoint surface');

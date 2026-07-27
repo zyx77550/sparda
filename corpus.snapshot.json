@@ -1,0 +1,162 @@
+{
+  "dub": {
+    "verdict": "NOT_PROVEN",
+    "routes": 593,
+    "premiseOracle": "convention",
+    "premiseProbed": 591,
+    "premiseGaps": 0,
+    "findings": 75,
+    "advisories": 52,
+    "findingsByRule": {
+      "AGGREGATE_MEMBER_BYPASS": 1,
+      "IRREVERSIBLE_OBSERVABLE": 5,
+      "NON_ATOMIC_AGGREGATE_WRITE": 25,
+      "OBJECT_SCOPE_UNPROVEN": 43,
+      "UNGUARDED_MUTATION": 5,
+      "UNVALIDATED_CONSTRAINED_WRITE": 48
+    },
+    "dbWrites": 295,
+    "dbReads": 552,
+    "guards": 516,
+    "guardsVerified": 516,
+    "coverage": 97.9,
+    "_pinned": {
+      "commit": "bbc533e",
+      "date": "2026-07-26"
+    }
+  },
+  "novu": {
+    "verdict": "PARTIAL",
+    "routes": 451,
+    "premiseOracle": "convention",
+    "premiseProbed": 365,
+    "premiseGaps": 0,
+    "findings": 0,
+    "advisories": 25,
+    "findingsByRule": {
+      "IRREVERSIBLE_OBSERVABLE": 16,
+      "UNGUARDED_MUTATION": 9
+    },
+    "dbWrites": 52,
+    "dbReads": 792,
+    "guards": 782,
+    "guardsVerified": 411,
+    "coverage": 14.8,
+    "_pinned": {
+      "commit": "00e7b5c",
+      "date": "2026-07-27"
+    }
+  },
+  "cal.com": {
+    "verdict": "NOT_PROVEN",
+    "routes": 175,
+    "premiseOracle": "convention",
+    "premiseProbed": 1,
+    "premiseGaps": 0,
+    "findings": 12,
+    "advisories": 4,
+    "findingsByRule": {
+      "AGGREGATE_MEMBER_BYPASS": 3,
+      "IRREVERSIBLE_OBSERVABLE": 2,
+      "UNGUARDED_MUTATION": 2,
+      "UNVALIDATED_CONSTRAINED_WRITE": 9
+    },
+    "dbWrites": 36,
+    "dbReads": 99,
+    "guards": 436,
+    "guardsVerified": 252,
+    "coverage": 93.6,
+    "_pinned": {
+      "commit": "3894f37",
+      "date": "2026-07-22"
+    }
+  },
+  "twenty": {
+    "verdict": "NOT_PROVEN",
+    "routes": 147,
+    "premiseOracle": "convention",
+    "premiseProbed": 122,
+    "premiseGaps": 0,
+    "findings": 2,
+    "advisories": 12,
+    "findingsByRule": {
+      "IRREVERSIBLE_OBSERVABLE": 14
+    },
+    "dbWrites": 266,
+    "dbReads": 28,
+    "guards": 441,
+    "guardsVerified": 157,
+    "coverage": 81.6,
+    "_pinned": {
+      "commit": "e631c986",
+      "date": "2026-07-27"
+    }
+  },
+  "immich": {
+    "verdict": "PARTIAL",
+    "routes": 281,
+    "premiseOracle": "convention",
+    "premiseProbed": 235,
+    "premiseGaps": 0,
+    "findings": 0,
+    "advisories": 7,
+    "findingsByRule": {
+      "IRREVERSIBLE_OBSERVABLE": 2,
+      "UNGUARDED_MUTATION": 5
+    },
+    "dbWrites": 452,
+    "dbReads": 239,
+    "guards": 459,
+    "guardsVerified": 459,
+    "coverage": 55.9,
+    "_pinned": {
+      "commit": "3606144",
+      "date": "2026-07-26"
+    }
+  },
+  "nocodb": {
+    "verdict": "PREMISE_GAP",
+    "routes": 358,
+    "premiseOracle": "convention",
+    "premiseProbed": 78,
+    "premiseGaps": 1,
+    "findings": 14,
+    "advisories": 0,
+    "findingsByRule": {
+      "IRREVERSIBLE_OBSERVABLE": 14
+    },
+    "dbWrites": 64,
+    "dbReads": 5,
+    "guards": 899,
+    "guardsVerified": 9,
+    "coverage": 40.3,
+    "_pinned": {
+      "commit": "64bf196",
+      "date": "2026-07-24"
+    }
+  },
+  "ghostfolio": {
+    "verdict": "RISKY",
+    "routes": 115,
+    "premiseOracle": "convention",
+    "premiseProbed": 115,
+    "premiseGaps": 0,
+    "findings": 1,
+    "advisories": 5,
+    "findingsByRule": {
+      "AGGREGATE_MEMBER_BYPASS": 2,
+      "OBJECT_SCOPE_UNPROVEN": 2,
+      "UNGUARDED_MUTATION": 1,
+      "UNVALIDATED_CONSTRAINED_WRITE": 1
+    },
+    "dbWrites": 43,
+    "dbReads": 37,
+    "guards": 193,
+    "guardsVerified": 98,
+    "coverage": 76,
+    "_pinned": {
+      "commit": "ce35588",
+      "date": "2026-07-26"
+    }
+  }
+}

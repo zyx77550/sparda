@@ -9,18 +9,29 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, badgeFor } from '../ubg/apocalypse.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
 
 export async function runBadge(opts) {
   const { graph, report } = compileUBG(opts.cwd, { write: false });
   const canonical = canonicalizeGraph(graph);
   const { findings } = checkGraph(canonical);
-  const blind = surveyBlindspots(canonical, report);
+  // A badge is the artifact that leaves the repo. It may not read green over an app
+  // whose route table was never checked — that is the one place a false claim travels
+  // furthest and is hardest to retract.
+  const premise = await premiseFor(canonical, report, {
+    cwd: opts.cwd,
+    probe: opts.probe,
+  });
+  const blind = surveyBlindspots(canonical, withPremiseGaps(report, premise));
   const verdict = verdictOf(findings, canonical, {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
+    premiseGaps: premise.available ? premise.gaps.length : 0,
   });
-  const cov = Math.round(blind.coverage.ratio * 100);
+  // null = measured-but-unknown (0/0): the JSON keeps the null, the console says the word
+  const cov =
+    blind.coverage.ratio == null ? null : Math.round(blind.coverage.ratio * 100);
   const { state, message, color } = badgeFor(verdict, { coverage: blind.coverage.ratio });
 
   const svg = renderBadge('SPARDA', message, color);
@@ -52,7 +63,7 @@ export async function runBadge(opts) {
   const shields = `https://img.shields.io/badge/SPARDA-${encodeURIComponent(message)}-${color.slice(1)}`;
 
   console.log(
-    `\n✓ Badge written: ${relSvg}  (${state} · ${report.routes} routes · ${cov}% coverage)`,
+    `\n✓ Badge written: ${relSvg}  (${state} · ${report.routes} routes · ${coveragePct(blind.coverage.ratio)} coverage)`,
   );
   console.log(`\nPaste into your README:\n`);
   console.log(`  ![SPARDA](./${relSvg})`);

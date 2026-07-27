@@ -13,11 +13,11 @@ description: >-
 
 A SPARDA server is driven by a compiled **Unified Behavior Graph (UBG)** — the graph SPARDA's compiler produces from the host application's states, transitions, permissions, and side-effects, serialized under the **SBIR** specification. Instead of exposing raw, disconnected endpoints, SPARDA compiles the app into a deterministic behavioral model. The local **SPARDA Runtime** dynamically executes this graph inside the live host process, powering the MCP interface, the Twin simulation clone, and the Immune system offline.
 
-> This skill covers the **runtime** (driving a live MCP server) — the live half of SPARDA's trust layer: *"AI writes. SPARDA proves."* The same graph also powers dev-time proof commands you run in the app's repo — `sparda review` (the behavior diff of a PR), `apocalypse` (prove the deploy), `timeless` (record/replay a request), `heal` (prove a fix), `mirror` (serve the graph), `ubg` (compile), `verify` (prove the compiler's laws). Those are CLI, not MCP tools; see the project README.
+> This skill covers the **runtime** (driving a live MCP server) — the live half of SPARDA's trust layer: _"AI writes. SPARDA proves."_ The same graph also powers dev-time proof commands you run in the app's repo — `sparda review` (the behavior diff of a PR), `apocalypse` (prove the deploy), `timeless` (record/replay a request), `heal` (prove a fix), `mirror` (serve the graph), `ubg` (compile), `verify` (prove the compiler's laws). Those are CLI, not MCP tools; see the project README.
 
 ## Rule 0 — call `sparda_get_context` first, every session
 
-Before anything else, call **`sparda_get_context`** (no params). It returns the *live* state of the SPARDA Behavior Graph:
+Before anything else, call **`sparda_get_context`** (no params). It returns the _live_ state of the SPARDA Behavior Graph:
 
 - the active routes/tools, workflows, and type-propagated schemas;
 - `runtime` — current stats (calls, errors, quarantine states, Twin mode active);
@@ -35,19 +35,45 @@ Read it to orient yourself inside the graph. `sparda_info` gives a lighter summa
   parameter schema was only partially inferred — pass arguments carefully.
 - **Meta-tools** — `sparda_get_context`, `sparda_info`,
   `sparda_list_disabled_tools`, `sparda_confirm`.
+- **The proof tool** — `sparda_prove`. Call it **after you edit a route, before you
+  commit** — see _Prove your own edit_ below. It's the one check you can't do to
+  yourself by re-reading your code.
 - **Composite tools** — labelled `[Labs circuit ×N]`, `readOnly`. One call runs a
-  whole proven multi-step chain (see *Crystallized circuits* below).
+  whole proven multi-step chain (see _Crystallized circuits_ below).
 
 Only **enabled** tools appear. Write tools are hidden until the user opts in, so a
-missing write is a config state, not an error — see *Writing safely*.
+missing write is a config state, not an error — see _Writing safely_.
+
+## Prove your own edit — call `sparda_prove` before you commit
+
+This is the tool an LLM needs most and can least fake. After you edit a route,
+**call `sparda_prove`** — it recompiles the app to its behavior graph and discharges
+the same static obligations as `sparda apocalypse` (unguarded mutation, non-atomic
+aggregate write, unvalidated constrained write), then returns a deterministic verdict.
+
+- **Focus it.** Pass `route` with the method+path you just touched (e.g.
+  `{ "route": "DELETE /orders" }`) to narrow the finding list. The **verdict still
+  reflects the whole app** — a filter never buys you a greener light.
+- **Read the verdict honestly.** `PROVEN` / `PARTIAL` are safe to commit. `SURFACE`
+  and `NO_PROOF` mean SPARDA _couldn't resolve enough to prove it_ — that is
+  "unknown", **never** a pass. The word is the exact one the CLI and badge emit; it
+  physically cannot over-claim.
+- **The regression check is the point.** If a baseline was saved
+  (`sparda apocalypse --save-baseline` on a known-good state), any finding with
+  `regression: true` means _your edit_ removed a guard, dropped a route, or grew the
+  blast radius vs the last proven state. Fix those before committing — this is the
+  check you cannot perform by re-reading your own diff.
+- Clients that list MCP prompts also see **`prove-my-edit`**, the built-in workflow
+  that walks these steps.
 
 ## Exploit the intelligence layer (this is the "full potential")
 
 **1. Response-recycling flywheel — make repeated reads free.**
-When the *same* read tool returns a byte-identical result for the *same* arguments
+When the _same_ read tool returns a byte-identical result for the _same_ arguments
 **3 times within 30 seconds**, SPARDA serves the next identical call straight from
 RAM (`servedByFlywheel: true`) **without touching the host app**. So:
-- Don't fear repeating stable GETs — repetition is what *activates* the cache.
+
+- Don't fear repeating stable GETs — repetition is what _activates_ the cache.
 - Don't bolt your own client-side cache on top; you'd hide the signal that lets
   SPARDA recycle, and you'd lose freshness control.
 - Watch `recycling.flywheel.servedFromMemory` climb in context — that's free work.
@@ -55,7 +81,7 @@ RAM (`servedByFlywheel: true`) **without touching the host app**. So:
 
 **2. Circuit-breaker / quarantine — stop hammering a sick backend.**
 After **3 consecutive 5xx** on a tool, SPARDA quarantines it: subsequent calls
-return **HTTP 503** with `reason` and `retryInMs` *instead of* hitting the failing
+return **HTTP 503** with `reason` and `retryInMs` _instead of_ hitting the failing
 host. Honor `retryInMs` — do not retry-loop. Check `runtime.quarantine` in context
 before depending on a tool. After a cooldown (~60s) the tool half-opens for one
 probe; one more 5xx re-quarantines it.
@@ -68,7 +94,7 @@ single **composite tool** for that chain and announces it mid-session via
 call and it's marked read-only. (Writes are never absorbed into a circuit.)
 
 **4. Adaptive immunity — read the diagnosis before retrying.**
-Repeated, unfamiliar failures trigger a *one-shot* LLM diagnosis that SPARDA caches
+Repeated, unfamiliar failures trigger a _one-shot_ LLM diagnosis that SPARDA caches
 as an "antibody" (keyed by `source|tool|status`). Recurrences reuse the cached
 diagnosis at zero cost. When an error event carries a diagnosis, **read it** and
 adapt — don't blindly retry the same call.
@@ -78,11 +104,13 @@ an `immune` event in `/mcp/events`. Treat it as a hint to back off or warn the u
 
 **6. Twin Simulation Mode — practice safely on a clone.**
 When `/mcp/stats` or `sparda_get_context.runtime` contains `"twin": true`, you are connected to a safe, in-memory mock clone of the application.
+
 - All GET reads return learned exemplars (observed response shapes and mock values).
 - All write tools return simulated `202` echoes but do not write to database or external APIs.
 - Use this twin mode to practice multi-step workflows, debug tool sequences, and test your plans without touching the live production backend.
 
 **7. Grammar & Evolution — discover optimal workflows.**
+
 - You can query or contribute to the app's grammar (`.sparda/grammar.json`). The grammar maps valid sequences of tool calls (edges).
 - Running `sparda evolve` mutates and runs candidate chains against the twin. The successful evolved sequences are suggested as mid-session workflows.
 
@@ -151,7 +179,8 @@ Writes are **disabled by default**. The protocol is not optional:
 - **Learn exemplars** → Start your live app and run `sparda twin --learn` to fetch actual response data and construct `.sparda/twin.json` locally.
 
 ---
-*This skill ships with `sparda-mcp` and is regenerated from SPARDA's capability
+
+_This skill ships with `sparda-mcp` and is regenerated from SPARDA's capability
 surface each release, so it tracks new tools and behaviors. The **live, per-project**
 tool list, stats, and workflows always come from `sparda_get_context` at runtime —
-trust it over any static list.*
+trust it over any static list._

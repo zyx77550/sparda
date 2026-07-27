@@ -1,0 +1,13 @@
+{
+  "kind": "collectionType",
+  "collectionName": "orders",
+  "info": {
+    "singularName": "order",
+    "pluralName": "orders",
+    "displayName": "Article"
+  },
+  "attributes": {
+    "title": { "type": "string", "required": true },
+    "body": { "type": "text" }
+  }
+}

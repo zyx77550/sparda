@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y sparda-mcp gate --hook",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

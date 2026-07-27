@@ -63,6 +63,8 @@ export function extractFastAPI(cwd, entryFile, pythonCmd = 'python') {
     globalMiddlewares,
     helpers: payload.helpers ?? [],
     skipped,
+    // the Python extractor emits the same declaration channel (ADR-079)
+    unknownHandlers: payload.unknownHandlers ?? [],
     scannedFiles: payload.scannedFiles ?? [],
   };
 }

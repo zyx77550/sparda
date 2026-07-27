@@ -1,0 +1,137 @@
+[
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "a657723e1ce998e64f1b38c1eb6994e55adb3bd6",
+    "parent_commit": "2911168e4eae555517f28c58201c0e68dc95784f",
+    "subject": "fix: add session and permission checks to webhook settings page (#2876",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "806fd8edd0afde1021c2284866be8b3c23367c90",
+    "parent_commit": "ee973c6661526134c627c4374bcae11d6cff4284",
+    "subject": "fix: prevent IDOR in PBAC updateRole and deleteRole tRPC endpoints (#2",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "7b8272ea20a721040bc0369e7c1186d18659f97e",
+    "parent_commit": "9a927206bd59a35290e7696760809440fb8b0e45",
+    "subject": "refactor: move auth components and hooks from packages/features to app",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "12e42427e2b6e27e085aa859fa5dec1bf7caf50c",
+    "parent_commit": "ad137fbf9c643709c6a5bc5c2cfd3be55332c77c",
+    "subject": "fix(auth): show splash screen during auth check to prevent login flash",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "9ea71d2ba5fa7e5c16a2ce268f366ad4570e9f3a",
+    "parent_commit": "3a8fe8c7af8e655390d16cfe6e3e9ae27894a408",
+    "subject": "refactor: migrate MembershipRole usages to PBAC permission checks (#26",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "208a9eaa80245acc6cdd69acb8640054fbfb2970",
+    "parent_commit": "9e0ba5045e949de93ebad2d172389e3bf105af70",
+    "subject": "chore(auth): add error logging for saml-idp silent failures (#26484)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "920320d49b45bc746908f61a0d95cd9fea60ba42",
+    "parent_commit": "66b398b4edb475daf834357b83dc244f9232a95e",
+    "subject": "fix(auth): fix SAML tenant extraction and validation (#26482)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "897c9d65f045262b35f2efe9de788d301a072475",
+    "parent_commit": "c1e5e0ae664bb4f736abb6339ed312f69fa748e7",
+    "subject": "fix(auth): enhance SAML login handling by introducing userId field and",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "5fe54fd3f2be5d4df8f4f71a070ee82ad76d431f",
+    "parent_commit": "1c6f5d9ec0c407be7aefcc7b49bed64300544e10",
+    "subject": "fix(schedules): add missing await on async permission check (#26218)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "9ae238175595cd53fefda3fe4cf2da149ac8be1e",
+    "parent_commit": "a37805439b22d10c420a03e4083f2cf925c87705",
+    "subject": "fix(auth): validate IdP authority before SAML account linking (#26005)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "1182460d5c0733d126e77528daeb6fabc5d3ecc5",
+    "parent_commit": "aedc0f5a030bf8b4837ec143fc60d7c1de8db562",
+    "subject": "chore: add permission checks to invite member and list team members ha",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "68b93385eb2903fc50dee8c2422d6dbfad069b61",
+    "parent_commit": "e2aa6361d5b1430a553b2794b1c0f44c72cca93c",
+    "subject": "refactor: platform billing controller auth guards (#25559)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "724204843aeeb96cb417ceb4b2a6c789d7c7c5e6",
+    "parent_commit": "f136b7145fc9de028624c76a69d9f785661166b3",
+    "subject": "fix: Add PBAC permission checks for insights access (#25381)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "2a7c6590a3d2b20f28faa4be8f8c02c58d412995",
+    "parent_commit": "7d2a06ddb610e9c770f7320981be8631208cd995",
+    "subject": "feat: add permission for editUsers + implement UI (#25402)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "calcom/cal.com",
+    "fix_commit": "fd390f9d432d19c97bff360904a90fbcf75b64ae",
+    "parent_commit": "eae779b81cd97d05948fc1d86e3e73a8940df3fc",
+    "subject": "fix: add authorization checks to booking reassignment endpoints (#2505",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  }
+]

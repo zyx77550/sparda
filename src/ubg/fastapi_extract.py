@@ -20,7 +20,10 @@ MAX_CALLS = 30
 # per (file, qualname), cycle guard by stack set, mergeScan merge semantics,
 # deterministic ordering. Divergence from resolve.js is a bug, not a judgment call.
 MAX_RESOLVE_DEPTH = 6
-HTTP_VERBS = ("get", "post", "put", "patch", "delete")
+# Every verb FastAPI and Flask expose as a decorator. options/head/trace were
+# missing, so a route declared with one of them was invisible — the Python twin of
+# the ghost-verb class (E-067).
+HTTP_VERBS = ("get", "post", "put", "patch", "delete", "options", "head", "trace")
 HTTP_CLIENTS = ("requests", "httpx", "aiohttp")
 SUPABASE_OPS = ("select", "insert", "update", "upsert", "delete")
 FS_WRITE = ("remove", "unlink", "rmtree", "rename", "makedirs", "mkdir",
@@ -605,6 +608,8 @@ class UbgExtractor:
         self.helpers = []
         self.global_middlewares = []
         self.skipped = []
+        # the registration invariant (ADR-079): a route seen but unbindable is DECLARED
+        self.unknown_handlers = []
         self.scanned_files = []
         self.visited = set()
         self.mounts = []
@@ -869,12 +874,23 @@ class UbgExtractor:
             "helpers": self.helpers,
             "globalMiddlewares": self.global_middlewares,
             "skipped": self.skipped,
+            "unknownHandlers": self.unknown_handlers,
             "scannedFiles": self.scanned_files,
         }
 
     def parse_file(self, abs_file, prefix, depth):
         key = abs_file + "::" + prefix
-        if depth > 2 or key in self.visited or not os.path.exists(abs_file):
+        if key in self.visited or not os.path.exists(abs_file):
+            return
+        if depth > 2:
+            # resource limits never abandon silently: the unexplored router becomes a
+            # declared high-risk blind spot instead of a quietly-inflated coverage
+            self.skipped.append({
+                "reason": "mount depth limit (2) reached — router at "
+                + (prefix or "/") + " left unscanned",
+                "file": self.rel(abs_file),
+                "risk": "high",
+            })
             return
         self.visited.add(key)
         try:
@@ -1001,9 +1017,22 @@ class UbgExtractor:
             dec, obj_name, methods = found
             raw_path = lit(dec.args[0]) if dec.args else None
             if not isinstance(raw_path, str):
+                # The decorator IS a registration — the framework will serve this
+                # route — we simply cannot read its URL. The registration invariant
+                # (ADR-079) says declare it, at a risk that bars PROVEN, rather than
+                # let a real endpoint leave no trace.
                 self.skipped.append({
-                    "reason": "dynamic path on %s (non-literal first arg)"
+                    "reason": "dynamic path on %s (non-literal first arg) — the route "
+                              "exists and its URL cannot be bound"
                               % "/".join(m.upper() for m in methods),
+                    "file": rel_file, "line": node.lineno, "risk": "high",
+                })
+                self.unknown_handlers.append({
+                    "kind": "UnknownHandler",
+                    "via": "dynamic-decorator-path:%s" % "/".join(methods),
+                    # the handler's own name: it is the only stable identity a route
+                    # without a readable URL still has
+                    "target": node.name,
                     "file": rel_file, "line": node.lineno,
                 })
                 continue

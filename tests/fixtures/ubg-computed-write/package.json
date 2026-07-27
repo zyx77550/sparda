@@ -1,0 +1,2 @@
+{ "name": "ubg-computed-write-fixture", "private": true, "main": "src/app.js",
+  "dependencies": { "express": "^4.21.0", "@prisma/client": "^5.20.0", "zod": "^3.23.0", "express-jwt": "^8.4.1" } }

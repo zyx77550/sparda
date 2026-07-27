@@ -1,0 +1,39 @@
+{
+  "_doc": "DEFAULT-DENY. Only paths listed in `public` are ever copied HQ→public. A file NOT matched here stays private automatically — adding a new doc/feature never leaks until someone explicitly lists it. Globs: `**` = any depth, `*` = within a segment. Edit deliberately; every line is a decision to open-source that path.",
+  "_private_by_design": [
+    "ROADMAP.md — round plan / strategy",
+    "CLAUDE.md — internal session entry point",
+    "CHANGELOG.md — revisit later (may reference internal milestones)",
+    "README.md — HQ readme stays private; the scrubbed public one ships via the tools/publish/public/ override",
+    "docs/COMPETITION.md, docs/DECISIONS.md (business ADRs), docs/HANDOFF.md — the moat",
+    "docs/README.md, docs/EXPLAINER.md, docs/SPARDA-EXPLIQUE.md — revisit per-file later",
+    "docs/sessions/**, docs/problème*.md — process + internal comms",
+    "tools/** — the valve itself (allowlist + secret strategy) stays HQ-only"
+  ],
+  "public": [
+    "assets/**",
+    "src/**",
+    "templates/**",
+    "tests/**",
+    "demo-app/**",
+    "docs/ARCHITECTURE.md",
+    "docs/TESTING.md",
+    "docs/SECURITY.md",
+    "docs/ERRORS.md",
+    "package.json",
+    "package-lock.json",
+    ".github/**",
+    ".gitignore",
+    ".gitattributes",
+    ".npmignore",
+    "eslint.config.js",
+    ".prettierrc.json",
+    ".prettierignore",
+    "vitest.config.js",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "server.json",
+    "action.yml"
+  ]
+}

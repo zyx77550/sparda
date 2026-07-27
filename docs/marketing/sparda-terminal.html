@@ -1,0 +1,284 @@
+<title>SPARDA — the real thing, in a terminal</title>
+<style>
+  :root {
+    --bg: #0a0b10;
+    --term: #0e0f16;
+    --line: #23252f;
+    --text: #d7dae3;
+    --dim: #7c8090;
+    --green: #6ee7a8;
+    --red: #ff6b6b;
+    --amber: #e7c26a;
+    --violet: #c084fc;
+    --cyan: #67e8f9;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+      monospace;
+    --sans: "SF Pro Display", "Segoe UI", Inter, system-ui, sans-serif;
+  }
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: #05060a;
+    overflow: hidden;
+  }
+  #fit {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+  }
+  #stage {
+    width: 1280px;
+    height: 720px;
+    position: relative;
+    background:
+      radial-gradient(1100px 700px at 80% -15%, #1a1030aa, transparent 60%),
+      radial-gradient(900px 600px at 5% 120%, #06202688, transparent 55%),
+      var(--bg);
+    font-family: var(--mono);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+  }
+  .cap {
+    font-family: var(--sans);
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    color: var(--dim);
+    height: 20px;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .cap b {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .term {
+    width: 900px;
+    height: 468px;
+    background: var(--term);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 40px 100px -30px #000;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .bar {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 12.5px;
+  }
+  .d {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+  .d1 {
+    background: #ff5f57;
+  }
+  .d2 {
+    background: #febc2e;
+  }
+  .d3 {
+    background: #28c840;
+  }
+  .bt {
+    margin-left: 10px;
+    letter-spacing: 0.03em;
+  }
+  .body {
+    padding: 18px 22px;
+    font-size: 15px;
+    line-height: 1.75;
+    white-space: pre-wrap;
+    overflow: hidden;
+    flex: 1;
+  }
+  .body .row {
+    display: block;
+    opacity: 0;
+  }
+  .body .row.show {
+    opacity: 1;
+  }
+  .prompt {
+    color: var(--cyan);
+  }
+  .pathp {
+    color: var(--violet);
+  }
+  .cmd {
+    color: var(--text);
+  }
+  .comment {
+    color: var(--dim);
+  }
+  .add {
+    color: var(--green);
+  }
+  .del {
+    color: var(--red);
+  }
+  .muted {
+    color: var(--dim);
+  }
+  .bad {
+    color: var(--red);
+  }
+  .ok {
+    color: var(--green);
+  }
+  .amber {
+    color: var(--amber);
+  }
+  .b {
+    font-weight: 700;
+  }
+  .cur {
+    display: inline-block;
+    width: 9px;
+    height: 17px;
+    background: var(--cyan);
+    vertical-align: -3px;
+    animation: bl 1s steps(1) infinite;
+  }
+  .foot {
+    height: 22px;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--dim);
+    opacity: 0;
+    transition: opacity 0.6s;
+  }
+  .foot .p {
+    font-weight: 700;
+    background: linear-gradient(92deg, var(--violet), var(--cyan));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  @keyframes bl {
+    50% {
+      opacity: 0;
+    }
+  }
+</style>
+
+<div id="fit">
+  <div id="stage">
+    <div class="cap" id="cap">Your AI agent just edited a route.</div>
+    <div class="term">
+      <div class="bar">
+        <span class="d d1"></span><span class="d d2"></span><span class="d d3"></span>
+        <span class="bt">my-app — zsh</span>
+      </div>
+      <div class="body" id="body"></div>
+    </div>
+    <div class="foot" id="foot">
+      Real output from <b style="color: var(--text)">sparda review</b> — deterministic,
+      re-derivable. <span class="p">AI writes. SPARDA proves.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  const stage = document.getElementById("stage");
+  const fit = () =>
+    (stage.style.transform = "scale(" + Math.min(innerWidth / 1280, innerHeight / 720) + ")");
+  addEventListener("resize", fit);
+  fit();
+
+  const body = document.getElementById("body");
+  const cap = document.getElementById("cap");
+  const foot = document.getElementById("foot");
+
+  // The real session. Output lines are the ACTUAL text sparda review prints.
+  const H = (s) => s;
+  const script = [
+    { t: 0, cap: "Your AI agent just edited a route." },
+    { t: 300, row: `<span class="comment"># the agent changed routes/users.js</span>` },
+    { t: 800, row: `<span class="prompt">~/my-app</span> <span class="pathp">git</span> <span class="cmd">diff</span>`, type: true },
+    { t: 1500, row: `<span class="muted">  app.delete('/users/:id',</span> <span class="del">auth,</span> <span class="muted">async (req, res) =&gt; {</span>` },
+    { t: 1750, row: `<span class="del">- </span><span class="muted">the auth guard is gone</span>` },
+    { t: 2600, cap: "Tests pass. The linter is happy. Would you catch it?" },
+    { t: 3300, row: `` },
+    { t: 3500, row: `<span class="prompt">~/my-app</span> <span class="pathp">sparda</span> <span class="cmd">review --base HEAD</span>`, type: true, slow: true },
+    { t: 5200, cap: "SPARDA compiles the behavior and proves the diff." },
+    { t: 5600, row: `<span class="b">🔍 SPARDA semantic review</span> <span class="muted">(vs HEAD)</span>` },
+    { t: 6000, row: `` },
+    { t: 6100, row: `<span class="bad b">✗ NOT PROVEN</span> <span class="muted">— 2 critical, 0 high, 0 medium, 0 info.</span>` },
+    { t: 6500, row: `` },
+    { t: 6600, row: `<span class="muted">Protections removed / risks introduced</span>` },
+    { t: 7100, row: `<span class="bad">✗ [critical] <span class="b">GUARD_REMOVED</span></span> <span class="muted">— DELETE /users/:id was guarded</span>` },
+    { t: 7250, row: `<span class="muted">   in the baseline and is now reachable without any guard.</span>` },
+    { t: 8000, row: `<span class="bad">✗ [critical] <span class="b">UNGUARDED_MUTATION</span></span> <span class="muted">— mutates user with</span>` },
+    { t: 8150, row: `<span class="muted">   no guard anywhere on the path.</span>` },
+    { t: 8900, row: `` },
+    { t: 9000, row: `<span class="muted">Derived from the code + schema — a counterexample, not a heuristic.</span>` },
+    { t: 9800, cap: "Caught before the merge.", ok: true },
+    { t: 10200, foot: true },
+  ];
+
+  let cursorRow = null;
+  function addRow(html, typed, slow) {
+    const el = document.createElement("span");
+    el.className = "row show";
+    body.appendChild(el);
+    if (cursorRow) {
+      const c = cursorRow.querySelector(".cur");
+      if (c) c.remove();
+      cursorRow = null;
+    }
+    if (!typed) {
+      el.innerHTML = html + "\n";
+      return;
+    }
+    // typewriter for command lines: reveal the plain text char by char
+    const tmp = document.createElement("span");
+    tmp.innerHTML = html;
+    const prefixHTML = html.substring(0, html.lastIndexOf('class="cmd">') + 12);
+    const cmdText = tmp.querySelector(".cmd") ? tmp.querySelector(".cmd").textContent : "";
+    let i = 0;
+    const speed = slow ? 55 : 32;
+    const tick = () => {
+      el.innerHTML =
+        prefixHTML + cmdText.slice(0, i) + '</span><span class="cur"></span>';
+      cursorRow = el;
+      i++;
+      if (i <= cmdText.length) setTimeout(tick, speed);
+      else {
+        el.innerHTML = html + "\n";
+      }
+    };
+    tick();
+  }
+
+  function run() {
+    body.innerHTML = "";
+    cap.style.opacity = "0";
+    foot.style.opacity = "0";
+    for (const s of script) {
+      setTimeout(() => {
+        if (s.cap !== undefined) {
+          cap.innerHTML = s.cap;
+          cap.style.color = s.ok ? "var(--green)" : "var(--dim)";
+          cap.style.opacity = "1";
+        }
+        if (s.row !== undefined) addRow(s.row, s.type, s.slow);
+        if (s.foot) foot.style.opacity = "1";
+      }, s.t);
+    }
+  }
+  run();
+  window.__rerun = run;
+</script>

@@ -102,6 +102,13 @@ export async function runRemove(opts) {
   if (removeHook(opts.cwd)) console.log('✓ Uninstalled post-commit sentinel hook');
   if (uninstallClaudeHook(opts.cwd).changed)
     console.log('✓ Removed the SPARDA gate from Claude Code PostToolUse');
+  // hard rule #4: enforcement edits (ADR-076) are injections too — revert them BEFORE
+  // .sparda/ (which holds their manifest) is deleted, so remove leaves a byte-clean tree
+  if (fs.existsSync(path.join(opts.cwd, '.sparda', 'enforce.json'))) {
+    const { revertEnforce } = await import('./enforce.js');
+    revertEnforce(opts.cwd, {});
+    console.log('✓ Reverted sparda enforce edits');
+  }
   fs.rmSync(manifestPath);
   fs.rmSync(path.join(opts.cwd, '.sparda'), { recursive: true, force: true });
   console.log('✓ Deleted sparda.json and .sparda/');

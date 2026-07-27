@@ -1,0 +1,128 @@
+[
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "38725ac274d764031b52f6f35f7951aa9b3bb2a8",
+    "parent_commit": "dcfb81436439080f682f739173f9430d0527a36f",
+    "subject": "feat: Revamp auth verification setup (#15696)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "42aa9bf7ec8cf8dede96ce4da13e12e3ef319e90",
+    "parent_commit": "0c5d46b2c3260fdf436c6eec25873aec22db7a36",
+    "subject": "chore(auth-google, auth): verify OAuth id_token signatures via JWKS (#",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "a46961ed421dc69fe991891d02b0f1c66f6180ab",
+    "parent_commit": "0a082becbf785c71fa16ae80697f4a616d166ec1",
+    "subject": "fix(core-flows, auth, types, medusa): bind password reset tokens to a ",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "139d5f9d636dba61cdaec8319358b59f2aef3836",
+    "parent_commit": "55931cfe1e0994bde24eadbd51a1337d1cb9bc10",
+    "subject": "feat(js-sdk): add MFA auth helpers (#15441)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "0697de72f2e59e9674e8b6489febf72587e3feef",
+    "parent_commit": "e0b8251bbd04a400dffa635e990e3e587f9f2986",
+    "subject": "feat(auth): add MFA API routes (#15423)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "074a3ea05f2b86ce72a5e668a7616768e81293dd",
+    "parent_commit": "6538db9251bbfeade549f7fbfdc2bb355f8ececb",
+    "subject": "fix(medusa): resolve user_id from user linked to secret key on draft o",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "344248b8a48e23a32c6a2c4e58f839a81ec0d91d",
+    "parent_commit": "1b5e5739b1d553d230b5602092f4c809479cf572",
+    "subject": "docs: add missing section on custom validation for admin custom auth (",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "1bfde8dc5727380fd56168ec9caa951888f66759",
+    "parent_commit": "d6d7d14a6a090e515701a65a46a5de03ff07f22d",
+    "subject": "feat(rbac): role-based access control module (#14310)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "08ce70a368b478a602a458f6fdd1bd83d718efa0",
+    "parent_commit": "3616003145682f0e2097902f50dd337aa5ce34e3",
+    "subject": "docs-util: add exceptions for routes with custom auth middleware (#117",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "4250c292eba886ddc88aa5621431392550eac0d3",
+    "parent_commit": "55ff7e4dcddc799fc907c3982ba95e68c78a98fb",
+    "subject": "docs: fix authentication callback descriptions to include all query pa",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "fde73dbfae1de746e473e294da186ea013b92523",
+    "parent_commit": "9490c265b2ded3849080d5e21862fb93e014ece8",
+    "subject": "feat(auth-google,auth-github): Allow passing a custom callbackUrl to …",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "a5263083fae89d6885b291b9cb06de8d74aec074",
+    "parent_commit": "582f52b31d822d2f0f3e7af334b5aba7cd12dd65",
+    "subject": "fix(framework): Ensure that CORS and Auth middleware is applied for ro",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "441004cc2146a64740554c91dd135c8c74a43d2b",
+    "parent_commit": "505768dd9fc364ffd6f5aa95e8725bca050a64a3",
+    "subject": "chore: Update auth flow (#9959)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "medusajs/medusa",
+    "fix_commit": "39a6780815cb0791063332cc273a3ef857cf84b3",
+    "parent_commit": "97b72f4662e6b1e3aa45ee1866f73012eb9e96a6",
+    "subject": "docs: add note about authentication opt out (#9298)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  }
+]

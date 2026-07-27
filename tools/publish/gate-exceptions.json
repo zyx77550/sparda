@@ -1,0 +1,18 @@
+[
+  {
+    "allow": "re-recording a replay would shadow it",
+    "why": "False positive match on 'shadow' verb in a comment"
+  },
+  {
+    "allow": "box-shadow",
+    "why": "False positive match on 'shadow' CSS property in dossier.js"
+  },
+  {
+    "allow": "Caught by a smoke test Gemini added",
+    "why": "Historical context in ERRORS.md mentioning the test author"
+  },
+  {
+    "allow": "this is the wall Gemini re-hit",
+    "why": "Historical context in ERRORS.md mentioning the test author"
+  }
+]

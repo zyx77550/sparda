@@ -1250,3 +1250,536 @@ byRisk.high` from the same `surveyBlindspots` it already computes — single sou
   under-approximates on NESTED (`const { user: { id } } = req.body`) and ARRAY destructuring (safe
   direction, documented). (c) Strapi's custom-vs-core route collision on the same method+path resolves
   to the custom route by file order (correct outcome, but by luck of ordering, not by design).
+
+## E-061 — declaration order ignored: a `use(auth)` declared AFTER a route was credited to it
+
+- **Symptom:** the extractor collected `app.use(fn)` middlewares as a positionless GLOBAL set and
+  translate credited them to EVERY route. Express reads setup top-to-bottom: a `use(auth)` at
+  line 50 never runs for a route declared at line 10 — crediting it fabricated protection out of
+  thin air (a false-PROVEN vector, SOUNDNESS Direction 2).
+- **Fix (robustness pass):** `flattenSetup` stamps every statement with its formal declaration
+  `order`; routes, global middlewares AND mounts carry it; a route inside a mounted router takes
+  effect at the MOUNT's position, so sequential scope is inherited through nesting at every depth
+  (the Y1 corollary). `middlewareAppliesTo` refuses credit when `mw.order > route.order`. Monotone
+  in the safe direction: the check can only WITHHOLD credit, never add it; an unstamped side
+  (Next/FastAPI middlewares) keeps the prior semantics. Tests: `tests/sequential-order.test.js`
+  (+ killing mutant: drop the order check → the pre-auth route regains the guard → bites).
+
+## E-062 — conditional branches flattened as certainty: an if-gated element read 100% active
+
+- **Symptom:** `flattenSetup` descended into `if`/`try`/loop blocks with no marker — an
+  `app.use(auth)` inside `if (ENABLE_AUTH)`, or a route inside a `switch` case, was analyzed as
+  unconditionally present. Uncertainty was silently converted into certainty.
+- **Fix:** every statement reached through a control-flow bifurcation (if/else branch, loop body,
+  switch case, catch handler, ternary branch, `&&`/`||` short-circuit operand — the Y2 corollary;
+  a `try` block and a `do-while` first pass ARE certain and stay unconditional) is marked
+  `conditional`. A conditional registration (route, mount, global middleware) STAYS analyzed —
+  findings must still fire, and withholding the guard would fabricate false criticals — but raises
+  a HIGH-risk `skipped-surface` blind spot, which bars the PROVEN verdict (blindHigh → PARTIAL at
+  best). Ternary/short-circuit registrations, previously INVISIBLE, are now also discovered
+  (recall gain) via synthetic statements. Tests: `tests/conditional-surface.test.js` (+ killing
+  mutant: un-mark if-branches → bites).
+
+## E-063 — dynamic registrations vanished silently (and `app[v]` could be MISREAD as a static verb)
+
+- **Symptom:** `app[v]('/x', h)` (computed property), `Reflect.apply(app.get, …)` and
+  `app.get.call(app, …)` fell through the walk without a trace — and worse, a computed member with
+  an Identifier property was read as if it were the static `.name` (a variable named `use` would
+  have been treated as `app.use`).
+- **Fix (Y3):** a registration on a known app/router var that static analysis cannot bind
+  (computed method, `Reflect.apply`, `.apply`/`.call` indirection) emits a structured
+  `UnknownHandler` object (`report.unknownHandlers`) plus a HIGH-risk `skipped-surface` entry —
+  certainty degrades, the surface never lies. Tests: `tests/dynamic-registration.test.js`
+  (+ killing mutant: silence the computed-method branch → bites).
+
+## E-064 — the 0/0 anomaly: zero behaviors resolved out of zero seen read as 100% coverage
+
+- **Symptom:** `surveyBlindspots` returned `ratio: 1` when `resolved + blind === 0` — the ABSENCE
+  of a measurement displayed as a perfect score, feeding every surface (prove, badge, dossier,
+  MCP) a confident 100%.
+- **Fix:** `ratio: null` + `unknown: true` on a zero denominator; `verdictOf` distinguishes
+  `coverage === null` (measured-but-unknown → `coverageUnknown`, bars complete PROVEN, at best
+  PARTIAL) from `undefined` (not measured — heal's delta — old semantics kept). One shared
+  formatter `coveragePct()` so every display says "unknown" — null must never coerce to a number
+  (`null * 100 === 0` would have shipped a confident-looking 0%). Tests:
+  `tests/coverage-unknown.test.js` (+ killing mutant: restore `? 1` → bites).
+
+## E-065 — resource caps abandoned silently (mount depth, flatten depth/statement caps)
+
+- **Symptom:** `scanFile` returned void past mount depth 2 and `flattenSetup` stopped at
+  depth > 6 / 8000 statements — the dropped surface left NO trace, so the coverage ratio was
+  computed over a denominator that silently excluded it (inflated percentages).
+- **Fix:** every cap now surfaces: the unexplored mount becomes a HIGH-risk `skipped-surface`
+  entry naming the prefix; `flattenSetup` returns a `limit` reason its caller must report; the
+  Python extractor (`fastapi_extract.py`) gained the same depth-limit declaration. The blind
+  entries enter the coverage denominator, so truncation now LOWERS coverage instead of faking it.
+  Tests: `tests/limits-surface.test.js`.
+
+## E-066 — no time/memory ceiling: a pathological tree could hang or crash the analysis
+
+- **Symptom:** no wall-clock bound on extraction and no size bound on a single source file — a
+  generated mega-file or an endless mount tree degraded the host process instead of the verdict.
+- **Fix (P3):** `extractExpress` runs under a time budget (`budgetMs` option /
+  `SPARDA_BUDGET_MS`, default 120 s); exhaustion stops cleanly with ONE critical-risk
+  `skipped-surface` entry ("cannot claim PROVEN") — never a hang, never a crash. `parseModule`
+  refuses files over a 5 MB cap with an explicit error that flows to the skip report. An entry
+  file whose syntax is outside the modeled grammar remains a clean refusal to certify
+  (parse error surfaced + NO_PROOF — locked by test). Tests: `tests/analysis-budget.test.js`.
+
+## E-067 (Z1) — `app.all()` and `app.route().post()` were invisible → a FALSE PROVEN
+
+- **Found by:** an adversarial red-team pass (corpus `tests/fixtures/ubg-invisible-verbs`).
+- **Symptom:** `HTTP = new Set(['get','post','put','patch','delete'])` plus a bare
+  `if (!HTTP.has(method)) continue;` — no `skipped` entry. `app.all(path, …)` (which answers
+  EVERY verb) and the chainable `app.route(path).post(…)` (Express documentation) both dropped
+  silently. Measured: an app with one clean guarded route plus an unauthenticated
+  `prisma.note.deleteMany({})` behind `app.all('/admin/wipe')` read
+  **`✓ PROVEN · 1 route · coverage 100% · 0 blind spots · exit 0`**. The cardinal sin.
+- **Proof it was an oversight, not a scoping decision:** `src/commands/enforce.js:43` already
+  declared `HTTP_VERBS = new Set([… 'all'])`. One organ knew; the extractor did not.
+- **Fix:** `all` is EXPANDED into the modelled verbs (what Express actually does, and what keeps
+  `openapi-emit` and `mirror` exact — an `all` pseudo-verb would be invalid OpenAPI and would
+  never match a real request); `routeChainOf()` walks a Route chain to its `X.route(path)` base
+  and registers EVERY link, not just the outermost. Registration is factored into one
+  `registerRoute()` so all three entry paths share the conditional-branch honesty and the
+  handler-chain resolution. Tests: `tests/zero-day-verbs.test.js` + 2 killing mutants.
+
+## E-068 (Z2) — one line of aliasing (`const api = app`) erased routes → a FALSE PROVEN
+
+- **Symptom:** `collectAppVars` recognised an identifier only when its initialiser was literally
+  `express()` / `Router()`. Express does not care what the object is called, so
+  `const api = app; api.post('/admin/wipe', …)` vanished from the graph — silently, with
+  `coverage: 100%` and `skipped: []`.
+- **Fix:** aliases are followed (`const api = app`, `const r2 = router`, and the assignment form
+  `api = app`), to a FIXPOINT so alias chains and declare-after-use order both resolve. Bounded
+  by the number of names it can learn, so it always terminates. Tests:
+  `tests/zero-day-alias.test.js` + a killing mutant.
+
+## E-069 (Z3) — losing a whole FILE scored `medium`, so it never stopped the verdict
+
+- **Symptom:** the risk of a `skipped` entry defaulted to a mutating-verb regex over the skip's
+  TEXT. A parse error never contains a mutating verb, so a file that failed to parse — losing
+  every route it declared — scored `medium`, stayed out of `blindHigh`, and left the verdict a
+  bare **PROVEN at 66.7% coverage** with an unguarded `deleteMany` in the unparsed file. The
+  honesty machinery worked perfectly and the verdict ignored it.
+- **Fix:** `isFatalSkip()` in `blindspots.js` forces `high` for any skip that loses a whole file
+  (parse error, unreadable, size cap, encoding). The size of that hole is precisely what SPARDA
+  cannot know, so it is never a medium event. Tests: `tests/zero-day-effects.test.js` (Z3) +
+  a killing mutant.
+
+## E-070 (Z4) — a computed ORM member produced NO effect → a FALSE PROVEN
+
+- **Symptom:** two layers failed together. (1) `inspectCall` bailed out on any non-`Identifier`
+  property, so `prisma['note']['delete'+'Many']()` never reached an effect handler; and a
+  computed `prisma.note[OP]()` was read as a method literally named `OP`. (2) The ADR-068
+  opaque-write safety net — designed for exactly this ("a missed write is a hidden hole") —
+  required a DIRECT handle identifier as receiver, which `prisma.note[…]` is not. Net effect:
+  the write did not exist, so an unguarded mass delete looked like a harmless no-op route.
+- **Fix:** a computed member on a receiver ROOTED at a proven persistence handle emits an opaque
+  `db_write` (`opaqueDynamicWrite`), carrying `dynamicMember: true` so the ledger can say which
+  kind of blindness it is. Provenance-gated, so a computed call on a non-database object
+  fabricates nothing. Also: `collectDbHandles` now labels the CommonJS destructured require
+  (`const { PrismaClient } = require('@prisma/client')`) — without it the entire CJS world had no
+  proven handles, leaving every provenance-based net inert there. Tests:
+  `tests/zero-day-effects.test.js` (Z4) + a killing mutant.
+
+## E-071 (Z6) — a PATH-scoped middleware was credited to every route → a FALSE PROVEN
+
+- **Found by:** following the Z-series pattern past the reported list — the Express twin of a sin
+  already closed on the Next.js side (E-053 / E-NEXT-MW).
+- **Symptom:** `app.use('/api', expressjwt({…}))` runs only under `/api`, but the extractor
+  dropped the prefix and registered it as a GLOBAL middleware. Measured: an unguarded
+  `POST /admin/wipe` read **`PROVEN` with 1 VERIFIED guard** it never runs behind.
+- **Fix:** the mount prefix travels with the middleware (`pathPrefix`) and `middlewareAppliesTo`
+  enforces it with Express segment semantics — `/api` covers `/api` and `/api/**`, never
+  `/apikeys`. Withholding-only: it can remove a false PROVEN, never manufacture one. Tests:
+  `tests/zero-day-effects.test.js` (Z6) + a killing mutant.
+
+## E-072 (Z5) — reachability was O(routes²): three BFS copies over a flat adjacency list
+
+- **Symptom:** the route filter (`next.route === epId`) ran over a FLAT successor list, and a
+  global middleware's fan-out IS the route count — so one walk per entrypoint cost O(routes) at
+  the shared node. Measured edge visits: 100 routes → 10 250; 1 000 → 1 002 500;
+  4 000 → **16 010 000** — exactly routes². Worse, the same BFS existed in THREE hand-written
+  copies (`reach.js:reachFrom`, `apocalypse.js:reachOf`, `passes/type-propagation.js:bfs`) —
+  while `reach.js`'s own header claimed to be "the one traversal everything shares" — so the fix
+  could not be applied once, and any divergence between them would have been an invisible
+  soundness bug. `type-propagation` alone was 31.2% of pipeline CPU.
+- **Fix:** ONE traversal (`ubg/reach.js`), with successors partitioned BY ROUTE at index-build
+  time, so a hop reads only what the walking entrypoint can reach. Order is preserved exactly
+  (successors keep their edge-order rank and the two partitions are merged back by rank), so
+  every consumer's output is byte-identical — the index is a speed change, never a semantic one.
+  `Array#shift()` (O(n) per dequeue) replaced by a cursor, and `reachabilityOf` memoised per
+  graph TOPOLOGY (edges identity + length + node count — over-sensitive on purpose: a stale map
+  would hide a finding).
+- **Measured:** 16 010 000 → **14 000** edge visits at 4 000 routes (**1 144× fewer**, and now
+  strictly linear); `checkGraph` 141.9 ms → 59.4 ms; whole pipeline 3 248 ms → 2 440 ms.
+  Bench: `bench/scale-gen.mjs` + `bench/scale-run.mjs` (the witness prints both strategies).
+
+## E-073 (C3) — a terminal handler mounted at a PATH was never an endpoint
+
+- **Symptom:** `app.use('/admin/wipe', handler)` is, in Express, an endpoint answering
+  every verb at that path. SPARDA treated every pathed callable as a middleware, so the
+  endpoint never entered the graph at all — an unauthenticated `deleteMany` was simply
+  absent, and one clean decoy route carried the app toward a bare PROVEN. Worse, at
+  depth > 0 (inside a mounted router) the whole branch was gated behind `if (depth === 0)`
+  and dropped without a trace.
+- **Fix:** `handlePathedUse` decides the role by BEHAVIOUR — `callsNext()` asks whether
+  the function can hand control on (its third parameter is referenced anywhere in the
+  body). A terminal handler is expanded into routes on every modelled verb; a real
+  middleware keeps its prefix-scoped credit; an OPAQUE body decides nothing and is
+  declared as an `UnknownHandler`. Works at any depth, so the nested form is modelled too.
+  Two latent bugs surfaced while testing this and are fixed with it: `registerRoute` was
+  being called with six of its seven arguments from the pathed path (so `order` and the
+  conditional flag fell off), and `mountTargetFile` read a LOCAL function passed to
+  `app.use('/p', fn)` as an unresolved router mount, losing the callable entirely.
+  Tests: `tests/zero-day-pathed-handler.test.js` + 3 killing mutants.
+
+## E-074 — the dynamic spellings of a database write produced NO effect
+
+- **Symptom:** four shapes, each of which made a write vanish from the graph — so the
+  route around it looked like a harmless no-op and could carry a PROVEN:
+  `prisma?.note?.deleteMany({})` (optional member — a distinct Babel node type, never
+  matched), `prisma.note.deleteMany?.({})` (optional call — the visitor only dispatched on
+  `CallExpression`), `` prisma.$executeRaw`DELETE FROM "Note"` `` (a tagged template is not
+  a call node at all), and `(cond ? a : b).deleteMany({})` (a receiver with no nameable
+  root, so no handler could match it).
+- **Fix:** optional chaining is MODELLED, not declared — it is the same call whenever the
+  handle exists, a known semantics, and declaring an unknown there would have been a
+  cop-out. `taggedTemplateEffect` reads the template's static parts as SQL when the tag is
+  rooted at a proven persistence handle, falling back to an opaque write. `handleInSubtree`
+  finds a proven handle inside an unnameable receiver. All four are provenance-gated, so a
+  computed call on a plain object still fabricates nothing (pinned by a control case).
+  Tests: `tests/dynamic-effects.test.js` + 3 killing mutants.
+
+## E-075 — `app?.post(…)` / `app.post?.(…)`: the REGISTRATION itself vanished
+
+- **Symptom:** the same optional-chaining blindness on the registration side. Both routes
+  disappeared with no skipped entry.
+- **Fix:** `isCall()` / `isMember()` normalise the optional node types across the whole
+  registration dispatch, including the Route chain walk and the `.apply`/`.call` and
+  `Reflect.apply` detectors. Pinned in `tests/dynamic-effects.test.js`.
+
+## E-076 — a router-level guard was invisible, and making it visible needed intra-file order
+
+- **Symptom:** `router.use(requireAuth)` — the canonical way to protect a whole Express
+  sub-router — was dropped at depth > 0, so every route in that router read as unguarded.
+  A FALSE POSITIVE (the safe direction), but a loss all the same, and the audit flagged it.
+- **Fix (and its rail):** an unpathed `use` inside a mounted router is credited with the
+  router's mount prefix. That is a recall win on a GUARD, which is the dangerous direction:
+  every route in a mounted file shares that file's MOUNT rank, so the mount rank alone
+  cannot order them. Routes and middlewares now also carry `orderIn` — their position
+  WITHIN the file — and `middlewareAppliesTo` compares it when the mount ranks tie.
+  Without it, a `router.use(auth)` written at the bottom of a router file would have been
+  credited to the routes above it: a false PROVEN manufactured by the fix itself.
+  Fixture `ubg-router-use-order` pins both sides on one router (the route above the guard
+  must still flag); `tests/router-use-order.test.js` + a killing mutant.
+
+## E-077 — the ghost verbs, on the rest of the fleet (Nest / Next / OpenAPI / Python)
+
+- **Found by:** grading our own claims. E-067 (`app.all` invisible) was fixed on Express and
+  left standing everywhere else. Measured on HEAD in ten minutes: a NestJS controller with a
+  guarded decoy plus an unguarded `@All('wipe')` read
+  **`PROVEN · 1 route · coverage 100% · 0 blind spots`**. `@All` is a real `@nestjs/common`
+  decorator. The same vocabulary hole existed in four lowerings at once:
+  `nestjs.js` (`@All`/`@Options`/`@Head`), `nextjs.js` (`OPTIONS`/`HEAD` route exports),
+  `openapi.js` (`options`/`head`/`trace` operations), `fastapi_extract.py`
+  (`options`/`head`/`trace` decorators).
+- **Fix:** all four vocabularies completed. `@All` is EXPANDED into the verbs a request can
+  arrive on (the same decision as Express's `app.all` — it is not a verb, it is every verb),
+  and the Nest candidate pre-filter was widened too, or the file would never have been parsed.
+- **The consequence that had to ship with it:** modelling OPTIONS/HEAD/TRACE turns them into
+  entrypoints, and `mutating: method !== 'get'` would then have read every CORS pre-flight
+  handler as a mutation — flooding real apps with false criticals. Mutation is now decided by
+  the RFC 9110 safe-method set (`get`/`head`/`options`/`trace`), not by "not GET". A safe
+  method that genuinely writes still surfaces: O1 fires on the effect, not on the verb.
+- Tests: `tests/cross-framework-verbs.test.js` + 2 killing mutants.
+
+## E-078 — a Nest decorator path that is not a literal was MISPLACED, not lost
+
+- **Symptom:** `httpDecorator` read `args[0]?.type === 'StringLiteral' ? args[0].value : ''`.
+  So `@Get(ROUTES.detail)` silently became the empty path and the route was mounted at the
+  CONTROLLER PREFIX — a URL the app does not serve. Misplacement is worse than loss for this
+  engine: every guard, prefix and ownership judgement about that route is then about the
+  wrong URL, and nothing says so.
+- **Fix:** a first argument that EXISTS but is not a literal is distinguished from no argument
+  at all (which legitimately means "the prefix"). The route stays — its behaviour is real —
+  and the misplacement is declared through NestJS's new `unknownHandlers` channel plus a
+  high-risk blind spot, so it cannot sit under a PROVEN. This is the registration invariant
+  (ADR-079) reaching its second framework.
+- Tests: `tests/cross-framework-verbs.test.js` + a killing mutant.
+
+## E-079 — nothing ever checked the PREMISE (only the proof)
+
+- **Symptom, stated as a class rather than a bug:** every honesty organ SPARDA has —
+  guard dominance, the type lock, the blind-spot ledger, `falsify` — reasons OVER THE GRAPH.
+  All of them are therefore blind to the same thing: a route that is not in the graph.
+  `falsify` cannot ablate the guard of a route that does not exist. The five false PROVEN
+  verdicts of E-067…E-071 were all absences, and **no instrument could have caught any of
+  them**, because every instrument took the route surface as given.
+- **Fix (`src/ubg/premise.js`):** the given is now checked, against an oracle that is not the
+  analyser — the app, booted, reporting the route table the framework really built.
+  `src/probe/` already had that oracle and had always captured `app.all` (the runtime knew
+  what the static eye did not); it fed route GENERATION and never the verdict. Now
+  `verifyPremise` diffs it against the compiled entrypoints, and any gap:
+  1. enters the blind-spot ledger at CRITICAL risk (so it counts in coverage and ranks in the
+     map like every other unseen surface — one channel, no special case);
+  2. sets `premiseUnverified`, which yields the new `PREMISE_GAP` verdict state — not PROVEN,
+     and not PROVEN (PARTIAL) either, because both claim something about an app whose surface
+     we demonstrably did not have;
+  3. fails the CI gate (`safe`), because a green over unanalysed routes is the exact failure
+     this audit removed.
+- **Three honesty rails:** the oracle is OPT-IN (`--probe`) since it executes the target's
+  code; an oracle that could not run leaves the verdict untouched (SPARDA never demands what
+  it could not measure); and an EMPTY probe is reported as *unavailable*, never as "no gaps" —
+  otherwise a broken oracle would silently confirm every proof. Each rail has a killing mutant.
+- **Measured:** on a bootable app whose route table is materialised from data at startup,
+  static analysis sees 2 routes, the framework builds 4, and the verifier reports exactly the
+  2 unreachable-by-AST admin routes. `prove --probe` then reads `PREMISE NOT VERIFIED` and
+  exits 1. Tests: `tests/premise-gate.test.js` (8, including a real boot).
+
+## E-080 — the registration invariant stopped at Express: six lowerings had no seal
+
+- **Symptom:** ADR-079's rule ("modelled or declared, no silent third option") and ADR-080's
+  certificate both swept Express only. On the other six lowerings a real endpoint could still
+  leave no trace at all — no route, no skip, no unknown handler — and the app read certifiable.
+- **Six concrete paths, one per lowering.** Next stopped its walk at a directory whose URL it
+  cannot express (`[...slug]`, `@slot`, `(..)x`) and lost the whole subtree behind a
+  directory-level skip carrying NO risk — below `blindHigh`, so still PROVEN-able; measured on
+  `nextjs-basic`, where `app/api/docs/[...slug]/route.js` serves GET and appeared nowhere. Next
+  also swallowed an unparseable `middleware.ts` — the app's only global gate. Medusa dropped
+  `export const POST = registry.handler`: the verb IS exported, so Medusa serves the route, but
+  the body did not resolve and the code just `continue`d. Strapi resolved a route table entry
+  to a controller action that does not exist and modelled the route as if it had read it.
+  OpenAPI skipped any path-item member outside its verb list, discarding published surface in a
+  lowering whose entire premise is that the spec IS the declaration. FastAPI dropped a decorator
+  whose path is not a literal.
+- **Fix:** each of the six now emits an `UnknownHandler` plus a HIGH-risk skipped entry, so the
+  declaration reaches the verdict gate rather than a log line. Next deliberately does NOT
+  synthesize a URL for an unrouted subtree: SPARDA does not know the path, and inventing one
+  would misplace every guard judgement about the route.
+- **Sealed by two new files.** `tests/no-silent-loss-fleet.test.js` re-enumerates the declared
+  surface of each lowering with an INDEPENDENT implementation (its own file walk, its own AST
+  or spec read) and demands the extractor account for every item; it opens every file itself, so
+  a controller the extractor's candidate pre-filter never selected surfaces as a lost route.
+  `tests/registration-invariant-fleet.test.js` pins a named fixture per lowering and asserts
+  end to end that the app can no longer read PROVEN.
+
+## E-081 — `app/dist/route.ts` was invisible on all three channels at once
+
+- **Symptom:** the Next extractor filtered directories named `dist` / `build` while walking
+  `app/`. Under `app/`, a directory name is a URL SEGMENT and nothing else — Next serves
+  `app/dist/route.ts` at `/dist`. The endpoint produced no route, no skipped entry and no
+  unknown handler: it did not exist for SPARDA, and the verdict was computed as if the app
+  had one route fewer.
+- **Why the invariant did not catch it:** the invariant is about registrations SPARDA SEES.
+  This file was never opened, so there was nothing to declare. That is the whole reason a
+  premise oracle has to be independent of the analyser (E-082).
+- **Fix:** the exclusion list for the `app/` walk keeps only what could never be a routed
+  segment (`node_modules`, `.git`, `.next`, `.sparda`). Found by the boot-free oracle, which
+  is exactly what it is for.
+
+## E-082 — four lowerings could not have their premise checked at all
+
+- **Symptom:** `verifyPremise` (E-079) boots the app. Next, Medusa, Strapi and Nest cannot be
+  booted from a static checkout, so they returned `available:false` — their premise was never
+  checked, and the strongest honesty organ in the system covered three lowerings out of seven.
+- **What made it fixable:** for three of the four the route table is a FUNCTION OF THE
+  FILESYSTEM. That is the framework's contract, not a heuristic, so the directory tree is a
+  genuine second source of truth — no boot, no dependencies, no execution of the target's code.
+  Nest is decorator-routed, so its oracle re-derives the table with its own walk over EVERY
+  file, which the extractor's candidate pre-filter cannot narrow.
+- **Fix (`src/ubg/oracle-static.js`):** a boot-free oracle for the four. Because it costs
+  nothing and executes nothing, it runs UNASKED — the runtime oracle stays opt-in. It found
+  E-081 on its first corpus sweep, and it reports Next's Pages Router (`pages/api/**`, still
+  fully served by Next 14, with no SPARDA lowering) as a measured premise gap instead of a
+  silence.
+- **The rule that keeps it usable:** conservatism. A false gap takes the verdict away from a
+  healthy app, so every ambiguous convention — Strapi's pluralised core routers, Next's
+  parallel slots, a computed controller prefix — is LEFT OUT rather than guessed at. Measured:
+  27 convention-routed fixtures, 26 of them healthy, exactly 1 gap — in the one
+  fixture built to have one.
+
+## E-083 — the premise verifier was wired into ONE of seven verdict-emitting commands
+
+- **Symptom:** ADR-081/082 built the organ that stops SPARDA certifying an app it did not
+  fully see, and shipped it inside `prove` only. Measured on the merged tree: of the seven
+  commands that emit a verdict, **six did not ask for it** — including `apocalypse`, whose
+  exit code is the CI deploy gate and which the README pitches first, and `badge`, the
+  artifact users paste into a public README.
+- **Why this is worse than not shipping it.** A guarantee that holds on one command out of
+  seven is not a partial guarantee, it is a false one: the docs, the ADR and the release
+  notes all said "SPARDA no longer certifies what it has not seen", and that sentence was
+  true of `prove` and false of the gate that actually blocks a deploy.
+- **Fix:** one shared entry point, `premiseFor(graph, report, {cwd, probe})` +
+  `withPremiseGaps(report, premise)` in `premise.js`, called by `apocalypse`, `badge`,
+  `dossier`, `review` and `prove`. Duplicating the four-line wiring per command is how one
+  of them silently drifts; there is now a single code path. The opt-in boundary is
+  preserved inside the helper: the runtime oracle still needs `--probe`, the boot-free
+  convention oracle still runs unasked.
+- **Deliberately NOT wired:** `enforce` and `heal`. Their verdict is about a DELTA — "did
+  synthesizing this guard introduce anything", "did this replay regress" — not about the
+  app. Feeding a premise gap in would make them refuse to act on any app that has one,
+  which is backwards. `prove` remains the authority on the app-level word.
+- **Sealed by a STRUCTURAL test,** not a list: `tests/premise-wired-everywhere.test.js`
+  scans `src/commands/` and fails if any module that grades a compiled graph does not call
+  `premiseFor`, with an explicit two-name allowlist. Pinning today's five commands would
+  only re-prove the fix; pinning the rule is what stops the eighth command repeating it.
+
+## E-084 — the public badge rendered a premise gap as "0 findings"
+
+- **Symptom:** `badgeFor` had no `PREMISE_GAP` branch, so the state fell through to the
+  default `${critical + high} findings`. An app whose route table was never verified —
+  the strongest negative SPARDA can state — produced a badge reading **"0 findings"**, on
+  the one artifact designed to leave the repository and be believed by strangers.
+- **Fix:** an explicit branch, `premise not verified`. The colour was already correct
+  (grey, "we could not measure"), which is what hid the bug: the badge looked plausible.
+- **Killing mutant** restores the fall-through.
+
+## E-085 — `sparda review` graded the graph and never read the report
+
+- **Symptom:** `reviewGraphs` called `surveyBlindspots(candidateGraph)` with **no report**,
+  so the entire skipped-surface channel — unparseable files, declared `UnknownHandler`s,
+  premise gaps — was invisible to the PR gate. A pull request that made a whole file
+  unparseable, or that added a route SPARDA cannot bind, reviewed exactly like a PR that
+  changed nothing.
+- **Found while wiring E-083**, not by looking for it: plumbing the premise through
+  required plumbing the report, and the report was not there at all.
+- **Fix:** the candidate's report is passed through and folded with any premise gaps. The
+  BASE side stays graph-only, deliberately — the base's blind spots are not this PR's
+  subject, only the direction of travel is.
+
+## E-086 — the premise rule was scoped to a directory, and two more graders were unwired
+
+- **Symptom:** the structural test sealing E-083 scanned `src/commands/` — because the
+  audit that produced it had counted "seven commands". Widening the scan to the whole
+  repository found **two graders nobody had counted**, both unwired for exactly as long as
+  the rule could not see them:
+  - `src/server/stdio.js` → `proveApp`, the `sparda_prove` MCP tool. This is the consumer
+    that acts on the verdict word WITHOUT reading the code: an editing agent asks, gets
+    `PROVEN`, and commits. It shares `verdictState` with the CLI verbatim (that invariant
+    held), but it never asked for the premise, so it could hand an agent a word the CLI
+    itself would have refused to print.
+  - `bench/repro.mjs`, which writes a verdict into `bench/route-proof.json` — a committed
+    evidence file the README points at as the reproducible proof.
+  - and `scripts/corpus-oracle.mjs`, the known hole this session set out to close: the only
+    place SPARDA states a verdict over code it did not write.
+- **Root cause, same shape as E-083 one level up:** the fix for "a guarantee wired into one
+  consumer" was sealed by a rule that only looked where that bug had been found. A rule
+  scoped to one directory has the same defect as a guarantee scoped to one command.
+- **Fix:** the scan covers `src/`, `scripts/`, `bench/`, `tools/`, and identifies a grader by
+  the IMPORT (a module that imports `verdictOf`/`badgeFor` from `apocalypse.js` and calls
+  it), so `apocalypse.js` is not mistaken for a consumer of itself and no future grader is
+  excluded by name. Exemptions carry a reason and are machine-checked: a module exempted for
+  stating no verdict word fails the suite the moment it starts stating one.
+- **Killing mutants** (2) remove the premise from the MCP tool and from the corpus oracle.
+
+## E-087 — a Nest route written with backticks was invisible to the compiler
+
+- **Symptom:** `@Post(`/auth/google/genTokenByCode`)` in nocodb — a substitution-free
+  template literal — never reached the graph, while its siblings written with quotes did.
+  The route sets a refresh token and an auth cookie; it is a login endpoint.
+- **Found BY the premise oracle**, on the first corpus run that had one: `oracle-static.js`
+  reads a no-substitution `TemplateLiteral` (line ~357, `expressions.length === 0` →
+  `quasis.join('')`) because the framework definitely serves that path; `nestjs.js` has no
+  `TemplateLiteral` handling at all, so it dropped it. This is exactly the ADR-082
+  independence rule paying for itself — an oracle that reused the extractor's walk would
+  have reproduced the omission on both sides of the diff and confirmed the bug.
+- **Arithmetic that confirms the cause:** nocodb has 16 backtick decorator paths; 15 carry
+  `${…}` substitutions, which the oracle deliberately leaves out (conservatism), and the
+  16th is this one — matching the single gap reported, exactly.
+- **Status: OPEN, deliberately.** The fix belongs in `nestjs.js` (accept a substitution-free
+  `TemplateLiteral` wherever a `StringLiteral` is accepted) and is monotone in the safe
+  direction — it can only ADD surface. It is not in this change because it moves corpus
+  numbers a second time: shipping it here would blend an extractor precision change into the
+  premise-wiring measurement, which is the "movement not understood" failure re-baselining
+  exists to prevent. Next brick, with its own fixture, test and killing mutant.
+
+## E-088 — the corpus baseline recorded metrics but not the tree they were measured on
+
+- **Symptom:** every one of the 7 giants drifted on the first re-run, and the drift was
+  **uninterpretable** — the snapshot pinned no corpus commit, so "dub 579 → 593 routes"
+  could equally be SPARDA improving or dub landing 14 routes. An uninterpretable drift gets
+  re-baselined by reflex, which is precisely how a regression becomes the new normal.
+- **Worse:** the `nocodb` entry pointed at the monorepo ROOT, which stopped detecting
+  upstream (`suggestAppDirs` now points at `packages/nocodb`). The one entry carrying the
+  repository's only `PROVEN` on real code had become an `ERROR` row, and the tree that
+  `PROVEN` was measured on is not recoverable — no commit was ever recorded.
+- **Fix:** each entry carries `_pinned: {commit, date}`. It is NOT diffed (a giant landing a
+  PR is not SPARDA drifting) but IS printed beside every delta, so drift can be ATTRIBUTED
+  before it is believed. `tests/corpus-snapshot.test.js` requires it on every entry.
+- **Lesson:** a regression net whose two inputs both move must record both, or it measures
+  nothing and reassures anyway.
+## E-089 — a composite decorator was judged by its NAME, so 340 proven guards read `asserted`
+
+- **Symptom, measured on novu:** 1003 guard steps, **71 verified (7 %)**. The 932 unverified
+  were exactly four decorator names. The largest, `@RequireAuthentication()` ×340, is
+  NestJS's official composition API:
+
+  ```ts
+  export function RequireAuthentication() {
+    return applyDecorators(UseGuards(CommunityUserAuthGuard), ApiBearerAuth(…));
+  }
+  ```
+
+  SPARDA matched the name against the auth regex, recorded an ASSERTED guard, and stopped:
+  `guardScan` resolves a CLASS, and this symbol is a FUNCTION. The `canActivate` two hops
+  away — which extends `@nestjs/passport`'s `AuthGuard` **and** throws
+  `UnauthorizedException` — was never opened. The proof chain existed end to end; the
+  first link was unwalkable.
+- **The A/B that named the cause.** Same framework, immich: **459/459 verified**. immich
+  registers its guard globally (`{ provide: APP_GUARD, useClass: AuthGuard }`), which
+  `detectGlobalDenyGuard` already handles. novu applies its guard **per controller**, so no
+  global path existed and the decorator path was blocked. One framework, two idioms, a 7 %
+  vs 100 % proof rate.
+- **Fix (ADR-084):** resolve the decorator NAME to its declaration and read what it applies
+  — `applyDecorators(UseGuards(X))` → X, then the existing class resolution proves X.
+- **Two traps inside the fix, both found by measurement not by reasoning:**
+  1. a constituent is imported by the module that DECLARED the composite, never by the
+     controller that used it. Resolving `CommunityUserAuthGuard` against the controller's
+     import map finds nothing, and the expansion degenerates into a rename: the first
+     working version produced 340 guards and **0** proofs.
+  2. a monorepo import lands on a BARREL (`export * from './decorators'`) which declares
+     nothing and records no named import. Following `starReexports` is the difference
+     between reading a workspace package's decorators and seeing none of them.
+- **Result:** novu 1003 guards / 71 verified → **782 / 411**. immich byte-identical
+  (459/459) — the non-regression witness.
+
+## E-090 — `SetMetadata` counted as protection it never provided
+
+- **Symptom:** `@RequirePermissions(...)` is `SetMetadata(PERMISSIONS_KEY, perms)` — a tag a
+  guard reads ELSEWHERE. Its name matched the same auth-ish regex, so 221 novu routes
+  carried a "guard" that gates nothing on its own.
+- **Fix:** the same resolution — read the definition, see that every branch is `SetMetadata`
+  and none applies a guard, stop counting it. Removing invented protection is SOUNDNESS
+  Direction 2 in the safe direction: it can only ADD findings, never hide one.
+- **THE TRAP, and it nearly shipped.** A blanket "SetMetadata is not a guard" rule
+  **deletes immich's entire auth model**. `@Authenticated = () => applyDecorators(
+  SetMetadata('authRoute', true))` is the dominant Nest idiom: the tag is the route's OPT-IN
+  to an app-wide guard that reads it. Under the blanket rule, 253 verified guards vanish and
+  253 unguarded routes are invented out of nothing. Caught by
+  `tests/nest-global-guard.test.js` going red — a test written for a different feature two
+  sessions earlier.
+- **The rule that is actually correct:** drop a metadata-only decorator **only when the app
+  registers no global guard proven to deny**. Where one exists, the tag IS protection.
+- A second near-miss in the same function: `sawGuardSource` was set on any
+  `applyDecorators` call rather than on finding a `UseGuards` inside it, so a metadata-only
+  composite resolved to "no guards AND not metadata" and vanished from the chain entirely.
+  A composite that resolves to nothing now keeps its original asserted reading — resolution
+  may add understanding, never delete a gate.
+## E-091 — nocodb's whole ACL layer was trusted on the strength of its name
+
+- **Found by ADR-084's resolution, not by looking for it.** `@Acl()` is nocodb's access
+  control on every route. It is a hand-rolled decorator: a factory returning an INLINE
+  arrow that calls `SetMetadata(...)` seven times and `UseInterceptors(AclMiddleware)`
+  by direct invocation — never through `applyDecorators`, so the resolver reaches the
+  arrow and stops.
+- **Before:** the name matched the auth-ish regex and the decorator counted as an asserted
+  guard, silently. **After:** the unreadable branch is DECLARED at high risk, naming the
+  decorator. The claim moves from "trusted because it is called Acl" to "this is nocodb's
+  ACL layer and SPARDA cannot read it" — which is the whole point of the product.
+- Cost: nocodb coverage 40.4 → 40.3 (the declaration enters the ledger, hence the coverage
+  denominator). Its verdict was already PREMISE_GAP and does not move.
+- **Not fixed here.** Reading a decorator that applies its effects by direct invocation
+  inside an arrow is a distinct shape from `applyDecorators`, and it must ship with its own
+  fixture and mutant rather than being bolted onto this one.

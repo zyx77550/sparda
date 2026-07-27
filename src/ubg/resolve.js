@@ -29,6 +29,7 @@ import {
   collectRepoFields,
   collectReqDerived,
   reqParamName,
+  callBindsOwnershipWitness,
 } from './extract.js';
 
 export const MAX_RESOLVE_DEPTH = 6;
@@ -230,6 +231,13 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
           }
         }
         if (fn) {
+          // ADR-074 V2 — interprocedural ownership witness: the compare+deny lives in
+          // THIS resolved helper, the identity binding at THIS call site (`assertOwner(
+          // row.ownerId, req.user.id)`). Checked per call site — the `seen` dedup below
+          // is per helper, and a later call with the right bindings must still count.
+          // Advisory-only (O7), never a guard: `bare.guardSignals` stays stripped below.
+          if (!merged.ownerAsserted && callBindsOwnershipWitness(node, fn))
+            merged.ownerAsserted = true;
           const key = `bare:${fnMod._file ?? ''}#${name}`;
           if (!seen.has(key)) {
             seen.add(key);

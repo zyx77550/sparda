@@ -1,5 +1,6 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "version": "0.69.0",
   "maintainers": [
     "zyx77550"
   ]

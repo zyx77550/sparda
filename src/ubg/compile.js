@@ -22,7 +22,7 @@ import { serializeGraph, sourceHashOf, writeGraph } from './serialize.js';
 
 export function compileUBG(
   cwd,
-  { write = true, out = null, optimizePasses = true, openapi = null } = {},
+  { write = true, out = null, optimizePasses = true, openapi = null, budgetMs } = {},
 ) {
   clearModuleCache(); // each compile run parses fresh — no stale-file ghosts
 
@@ -30,7 +30,7 @@ export function compileUBG(
   // that carries a spec enters the graph (Go, Java, Rails, .NET, whatever)
   const stack = openapi ? { framework: 'openapi', entryFile: openapi } : detectStack(cwd);
   const extractors = {
-    express: () => extractExpress(cwd, stack.entryFile),
+    express: () => extractExpress(cwd, stack.entryFile, { budgetMs }),
     nestjs: () => extractNest(cwd, stack.entryFile),
     medusa: () => extractMedusa(cwd, stack.entryFile),
     strapi: () => extractStrapi(cwd, stack.entryFile),
@@ -86,7 +86,31 @@ export function compileUBG(
     ...(prisma.tables.length ? { prismaTables: prisma.tables.length } : {}),
     link: linkReport,
     passes: passReports,
-    skipped: [...extracted.skipped, ...sql.skipped, ...prisma.skipped],
+    skipped: [
+      ...extracted.skipped,
+      ...sql.skipped,
+      ...prisma.skipped,
+      // A GUESSED entry point is a premise problem, not a parsing one: if the search
+      // picked the wrong file, every route, guard and verdict below is about another
+      // program. Measured on the parse-server repository, where the fallback chose a
+      // benchmark harness. The doubt is declared at high risk so it bars PROVEN, and
+      // the rejected candidates are named so a human can settle it in one look.
+      ...(stack.entryCandidates?.length > 1
+        ? [
+            {
+              reason: `entry point GUESSED: ${stack.entryFile} was chosen among ${stack.entryCandidates.length} files that create an Express app (${stack.entryCandidates.slice(0, 4).join(', ')}${stack.entryCandidates.length > 4 ? ', …' : ''}) — if it is the wrong one, everything below describes a different program`,
+              file: stack.entryFile,
+              risk: 'high',
+            },
+          ]
+        : []),
+    ],
+    // registrations SPARDA saw but could not bind statically (computed verbs,
+    // Reflect.apply, …) — each already carries a high-risk skipped twin, this is
+    // the structured object for tooling
+    ...(extracted.unknownHandlers?.length
+      ? { unknownHandlers: extracted.unknownHandlers }
+      : {}),
     counts: countGraph(graph),
   };
 

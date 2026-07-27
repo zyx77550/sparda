@@ -1,0 +1,137 @@
+[
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "113cdff2ae044616ad0b31e29f84ac8d35047ead",
+    "parent_commit": "97cdb5710da1fdc2ff07d9ad1d8539b3de84b2b2",
+    "subject": "fix(root): resolve high better-auth stored XSS + 9 more advisories fix",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "171f254d15191f6a1026b2cea006c4d3fa679a91",
+    "parent_commit": "8eb96fb4d94a11bbe808ffd42909e803b806ec90",
+    "subject": "fix(api-service): mark MCP connections error on auth failure fixes NV-",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "9c73a352b9711dff6601833619b534512de682b9",
+    "parent_commit": "463e834704382403013dbde59ff729aac8b9c03f",
+    "subject": "fix(novu): allow exiting connect LLM auth picker and OAuth screens (fi",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "15306c8e999e4d9f773355aee41a70d3dc28ac52",
+    "parent_commit": "2c204e6290b0fcbab92c026b10d6312085928d38",
+    "subject": "docs(docs): update authentication and organizations docs fixes DOC-390",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "31eec8269aa6e39d68dc6f4df1350cde9661c4f6",
+    "parent_commit": "6d2b023d3eedb31a6a03a03d7c3daad714d400e7",
+    "subject": "docs(docs): add authentication page and REST API overview fixes DOC-37",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "8422391b0ac0e3ee0ff06798365ae94316b36440",
+    "parent_commit": "3f1e4dbaefb345829f730ca2dcb6c763d6a81131",
+    "subject": "feat(dashboard): improve agent onboarding setup UX and CLI auth fixes ",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "5a8903d72b6c4f230ead7efd76ad3c64a96f1fd3",
+    "parent_commit": "143b4c92415a572d04ee321d60353c45e456b767",
+    "subject": "feat(novu,dashboard,shared): connect --login and dashboard onboarding ",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "6d71139e9fb1143a12c0f80e006aa064b70a3bd4",
+    "parent_commit": "2906cd830bce46863f10886d962c3baadba1f8fd",
+    "subject": "fix(novu): fallback to dashboard auth when keyless demo limits are hit",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "c3ece9feb9e5ff977d945a760e8476e232d74a75",
+    "parent_commit": "a72edaaeaa8cf128d7688b3e67029deb73433e9c",
+    "subject": "fix(dashboard): poll Clerk until externalOrgId sync on CLI auth page (",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "c78b6f30302e14ba824eaf0ac125ce17895a7ad6",
+    "parent_commit": "d410a2921f1f2ecf99021e00a2f294ea0688aa45",
+    "subject": "fix(api): remove conversational agents flag guard from agents controll",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "fd79ac309f7fa086253e39f20928dd6977b440fc",
+    "parent_commit": "46c085e8a2c9cf208e4f71491095093b531f563d",
+    "subject": "feat(root): replace CLI loopback auth with device sessions fixes NV-78",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "a95db0dc4039f190d24563a72e1e5177287a98f2",
+    "parent_commit": "54d58cf03319d62e91c805bdc14032d818868465",
+    "subject": "feat(worker, api-service): add AWS Claude managed runtime with API key",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "e92a90b3408439d97aa5385e016315f26d6564ac",
+    "parent_commit": "72241391d14b83f0df946f0fb77a7b6ebb2f6ab1",
+    "subject": "feat(api-service): integrate novu-app MCP auth mode (GitHub first) fix",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "13caf67ef5817c4de0c8a62177c1a9be1f2d91af",
+    "parent_commit": "a6155aa442c6d4d376f5a922e7a3d0086769f961",
+    "subject": "fix(api-service, worker): guard against null/undefined runtime crashes",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "novuhq/novu",
+    "fix_commit": "7e472a307888c79b5f93396d4e5af5a94bca847f",
+    "parent_commit": "94f0d8626a5917b63974459823252b1b2299efe6",
+    "subject": "feat(api-service, dashboard): Better auth integration DRAFT (#9711)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  }
+]

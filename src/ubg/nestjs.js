@@ -56,17 +56,26 @@ const EXCLUDE = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.spa
 // a bespoke @RestController/@Endpoint framework (n8n, routing-controllers, home-made)
 // exactly like Nest, with zero per-framework config. The next app that invents its own
 // decorator name is still HTTP underneath, so it is still seen.
-const VERB_DECORATOR = /^(?:http)?(get|post|put|patch|delete)(?:mapping)?$/i;
+// `@All('wipe')` is a real @nestjs/common decorator answering EVERY verb. Modelling it
+// as one pseudo-route (or, as before, not at all) hid an entire unguarded endpoint while
+// the app read PROVEN — the Nest twin of E-067. Expanded like Express's `app.all`, into
+// the verbs a request can actually arrive on.
+const NEST_ALL_EXPANSION = ['get', 'post', 'put', 'patch', 'delete'];
+const VERB_DECORATOR =
+  /^(?:http)?(get|post|put|patch|delete|options|head|all)(?:mapping)?$/i;
 // cheap file pre-filter: a route decorator or a controller/resolver brand must appear
 // textually before we pay for a full parse (keeps the twenty-scale monorepo fast).
 const CANDIDATE_RE =
-  /@(?:Controller|RestController|JsonController|Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete)(?:Mapping)?)\b/;
+  /@(?:Controller|RestController|JsonController|Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete|Options|Head|All)(?:Mapping)?)\b/;
 
-// → { routes, globalMiddlewares, helpers, skipped, scannedFiles } (extractExpress shape)
+// → { routes, globalMiddlewares, helpers, skipped, unknownHandlers, scannedFiles }
 export function extractNest(cwd, entryDir) {
   const routes = [];
   const helpers = [];
   const skipped = [];
+  // The registration invariant (ADR-079), ported from Express: a route SPARDA sees
+  // but cannot bind is DECLARED, never dropped or — worse — guessed.
+  const unknownHandlers = [];
   const scannedFiles = [];
   // the interprocedural engine (ADR-054): follows this.<prop>.<m>() through the
   // constructor-type DI graph — bounded, cycle-guarded, memoized per compile.
@@ -78,6 +87,71 @@ export function extractNest(cwd, entryDir) {
   // verified (immich: 253 guards, 0 verified). Prove it ONCE here — resolve its canActivate
   // through DI to a real deny — and every auth-named guard on the app earns `verified`.
   const globalGuardDenies = detectGlobalDenyGuard(root, engine);
+  // one resolution per decorator DEFINITION, not per use — novu applies the same four
+  // composites across 451 routes
+  const compositeCache = new Map();
+  const declaredComposites = new Set();
+
+  // A composite decorator (ADR-084) stands for the guards it applies. Replace it with
+  // them, drop it when it turns out to be metadata, and declare any branch left unread.
+  function expandComposites(names, mod, rel) {
+    const out = [];
+    const push = (name, srcMod) => {
+      if (!out.some((g) => g.name === name)) out.push({ name, mod: srcMod });
+    };
+    for (const name of names) {
+      const c = resolveCompositeDecorator(name, mod, compositeCache);
+      if (!c) {
+        push(name, mod); // a guard class, or opaque — unchanged behaviour
+        continue;
+      }
+      // A constituent is imported by the module that DECLARED the composite, never by the
+      // controller that used it: `CommunityUserAuthGuard` is in auth.decorator.ts's import
+      // map, and resolving it against the controller's finds nothing. Carrying the origin
+      // module is what turns the expansion from a rename into a proof.
+      for (const g of c.guards) push(g, c.mod ?? mod);
+      const where = c.file ? relOf(cwd, c.file) : rel;
+      if (c.unread.length && !declaredComposites.has(`u:${name}`)) {
+        declaredComposites.add(`u:${name}`);
+        // Crediting the branch we READ is a true statement about that configuration; the
+        // sibling we could not read is a configuration we are not entitled to claim. High
+        // risk, so no app reaches PROVEN on the strength of a branch nobody opened.
+        skipped.push({
+          reason: `@${name}() applies decorators through a branch SPARDA could not read (${c.unread.join(', ')}) — the guards credited here are the ones its readable branch applies, and another configuration may apply different ones`,
+          file: where,
+          risk: 'high',
+        });
+      }
+      // A metadata-only decorator gates nothing BY ITSELF — but that is only half the
+      // question, and getting the other half wrong is how this change nearly deleted
+      // immich's entire auth model. `@Authenticated = () => applyDecorators(SetMetadata(…))`
+      // is the dominant Nest idiom: the tag is the route's OPT-IN to an app-wide guard that
+      // reads it. Where that global guard exists and provably denies, the tag is real
+      // protection and dropping it would invent 253 unguarded routes out of nothing.
+      // So the drop is conditional on there being no such guard to read the key.
+      if (c.metadataOnly && !globalGuardDenies) {
+        if (!declaredComposites.has(`m:${name}`)) {
+          declaredComposites.add(`m:${name}`);
+          // NOT a blind spot — a resolved fact. Recorded at low risk so the ledger shows
+          // WHY a name that reads like a gate stopped counting as one.
+          skipped.push({
+            reason: `@${name}() only calls SetMetadata and this app registers no global guard proven to deny — it is a metadata tag, not protection, so it no longer counts as a guard`,
+            file: where,
+            risk: 'low',
+          });
+        }
+      } else if (c.metadataOnly) {
+        push(name, mod); // the tag opts the route into a PROVEN global guard — real protection
+      } else if (!c.guards.length) {
+        // Resolved, but it yielded no guard and is not provably metadata — an unusual
+        // shape. Keeping the original name preserves today's asserted reading; letting it
+        // fall through would DELETE a gate on the strength of a resolution that concluded
+        // nothing, which is the one direction this module may never move.
+        push(name, mod);
+      }
+    }
+    return out;
+  }
 
   for (const file of walk(root)) {
     // Fast reject: only files that mention `@Controller` can define a route. A big
@@ -127,13 +201,17 @@ export function extractNest(cwd, entryDir) {
           const http = httpDecorator(m.decorators) ?? graphqlOp(m.decorators, m.key.name);
           if (!http) continue;
           const fullPath = joinPath(prefix, http.path);
-          const guards = [...classGuards, ...useGuards(m.decorators)];
+          const guards = expandComposites(
+            [...classGuards, ...useGuards(m.decorators)],
+            mod,
+            rel,
+          );
           // Principal-injection param decorators (@AuthWorkspace/@AuthUser on twenty's
           // resolvers) are the auth idiom that lives on the METHOD PARAMETERS, invisible
           // to useGuards — deduped against the named guards so one route never counts the
           // same auth twice.
           const principalGuards = paramAuthGuards(m, mod).filter(
-            (n) => !guards.includes(n),
+            (n) => !guards.some((g) => g.name === n),
           );
 
           // Prove a guard, don't just trust its name: resolve @UseGuards(X)'s canActivate
@@ -143,9 +221,9 @@ export function extractNest(cwd, entryDir) {
           // on an app with a PROVEN global auth guard is gated by it; a principal-injection
           // decorator with no global proof stays an ASSERTED guard (name-only, never
           // verified). `allowAssert` is on only for the param decorators.
-          const guardStepScan = (name, allowAssert) =>
-            guardScan(name, mod, engine) ??
-            (nestPassportGuard(name, mod)
+          const guardStepScan = (name, srcMod, allowAssert) =>
+            guardScan(name, srcMod, engine) ??
+            (nestPassportGuard(name, srcMod)
               ? GLOBAL_GUARD_SCAN // catalog-verified: @nestjs/passport AuthGuard provably 401s
               : globalGuardDenies &&
                   (GUARD_DECORATOR.test(name) || nameLooksLikePrincipal(name))
@@ -159,8 +237,8 @@ export function extractNest(cwd, entryDir) {
           const scan = engine.handlerScan(m, di, mod, cls);
 
           const chain = [
-            ...guards.map((name) => {
-              const scan = guardStepScan(name, false);
+            ...guards.map(({ name, mod: srcMod }) => {
+              const scan = guardStepScan(name, srcMod, false);
               return {
                 name,
                 sourceFile: rel,
@@ -175,7 +253,7 @@ export function extractNest(cwd, entryDir) {
               sourceFile: rel,
               sourceLine: m.loc?.start.line ?? 0,
               fn: null,
-              scan: guardStepScan(name, true),
+              scan: guardStepScan(name, mod, true),
               role: 'middleware',
             })),
             {
@@ -188,16 +266,42 @@ export function extractNest(cwd, entryDir) {
             },
           ];
 
-          routes.push({
-            method: http.method,
-            path: fullPath,
-            sourceFile: rel,
-            sourceLine: m.loc?.start.line ?? 0,
-            params: pathParamsOf(fullPath),
-            chain,
-            description: '',
-            authOptOut: http.optOut === true, // temp — consumed by the posture pass
-          });
+          // `@All()` is not a verb, it is every verb — one route each, exactly like
+          // Express's `app.all`, so the guard obligation fires once per verb the path
+          // actually exposes instead of not at all.
+          // A decorator path that is not a string literal — `@Get(ROUTES.detail)` —
+          // used to silently become '', mounting the route at the controller prefix.
+          // That is worse than losing it: the route lands at a path the app does not
+          // serve, so any guard/prefix reasoning about it is about the wrong URL. The
+          // route stays (its behaviour is real) and the misplacement is declared.
+          if (http.pathDynamic) {
+            unknownHandlers.push({
+              kind: 'UnknownHandler',
+              via: `dynamic-decorator-path:${http.method}`,
+              target: `${cls.id?.name ?? 'controller'}.${m.key.name}`,
+              file: rel,
+              line: m.loc?.start.line,
+            });
+            skipped.push({
+              reason: `dynamic path on @${http.method.toUpperCase()}() in ${cls.id?.name ?? 'a controller'} — the route is real but its URL cannot be bound, so it is placed at the controller prefix`,
+              file: rel,
+              line: m.loc?.start.line,
+              risk: 'high',
+            });
+          }
+          const verbs = http.method === 'all' ? NEST_ALL_EXPANSION : [http.method];
+          for (const verb of verbs) {
+            routes.push({
+              method: verb,
+              path: fullPath,
+              sourceFile: rel,
+              sourceLine: m.loc?.start.line ?? 0,
+              params: pathParamsOf(fullPath),
+              chain,
+              description: '',
+              authOptOut: http.optOut === true, // temp — consumed by the posture pass
+            });
+          }
         }
       },
     });
@@ -208,7 +312,14 @@ export function extractNest(cwd, entryDir) {
   applyAuthPosture(routes);
 
   routes.sort((a, b) => cmp(a.path, b.path) || cmp(a.method, b.method));
-  return { routes, globalMiddlewares: [], helpers, skipped, scannedFiles };
+  return {
+    routes,
+    globalMiddlewares: [],
+    helpers,
+    skipped,
+    unknownHandlers,
+    scannedFiles,
+  };
 }
 
 // Guarded-by-default posture (ADR-055). If ANY route in the app declared an auth
@@ -284,9 +395,14 @@ function httpDecorator(decorators) {
         if (/^authenticate$/i.test(p.key.name) && isFalse) optOut = true;
       }
     }
+    const pathArg = args[0];
+    // a first argument that exists but is not a literal is a path we cannot read —
+    // distinct from no argument at all, which legitimately means "the prefix"
+    const pathDynamic = Boolean(pathArg) && pathArg.type !== 'StringLiteral';
     return {
       method: m[1].toLowerCase(),
-      path: args[0]?.type === 'StringLiteral' ? args[0].value : '',
+      path: pathArg?.type === 'StringLiteral' ? pathArg.value : '',
+      ...(pathDynamic ? { pathDynamic: true } : {}),
       optOut,
     };
   }
@@ -514,6 +630,184 @@ function returnsFalse(fnNode) {
   });
   return found;
 }
+
+// --- composite decorators: `applyDecorators(UseGuards(X), …)` (ADR-084) ---------------
+//
+// NestJS's OFFICIAL composition API. A house decorator is declared once and used
+// everywhere:
+//
+//   export function RequireAuthentication() {
+//     if (isEEAuthEnabled()) return EERequireAuthentication();          // ← branch A
+//     return applyDecorators(UseGuards(CommunityUserAuthGuard), …);     // ← branch B
+//   }
+//
+// SPARDA saw `@RequireAuthentication()`, matched it on NAME alone, and stopped: the
+// symbol resolves to a FUNCTION, and `guardScan` only knows how to resolve a CLASS. So
+// the guard read `asserted` — trusted because it is called Auth-something — and the real
+// `canActivate` two hops away was never opened. Measured on novu: 340 routes, every one
+// gated by a guard that provably 401s, none of them proven.
+//
+// Reading the definition also settles the OPPOSITE error. `RequirePermissions` is
+// `SetMetadata(PERMISSIONS_KEY, …)` — a metadata TAG some guard reads elsewhere, gating
+// nothing on its own. Its name matched the same regex, so 221 more novu routes carried a
+// "guard" that is not one. Dropping it is Direction 2 in the safe direction: removing
+// invented protection can only ADD findings, never hide one.
+//
+// The two failures are the same defect — judging a decorator by its name instead of its
+// definition (E-060) — and one resolution fixes both.
+const COMPOSITE_MAX_DEPTH = 3;
+
+// Every `return` that belongs to `fn` itself (a nested arrow's return is not fn's).
+function ownReturns(fn) {
+  const out = [];
+  const body = fn.body;
+  // `const X = () => applyDecorators(…)` — an expression-bodied arrow has no return node
+  if (body && body.type !== 'BlockStatement') return [body];
+  walkAst(body, (n) => {
+    if (n.type === 'ReturnStatement' && n.argument) out.push(n.argument);
+  });
+  return out;
+}
+
+// The declaration of `name` in `mod`, as a function-ish node — or null.
+function decoratorFactory(name, mod) {
+  let found = null;
+  walkAst(mod.ast?.program, (n) => {
+    if (found) return;
+    if (n.type === 'FunctionDeclaration' && n.id?.name === name) found = n;
+    if (
+      n.type === 'VariableDeclarator' &&
+      n.id?.type === 'Identifier' &&
+      n.id.name === name &&
+      (n.init?.type === 'ArrowFunctionExpression' ||
+        n.init?.type === 'FunctionExpression')
+    )
+      found = n.init;
+  });
+  return found;
+}
+
+/**
+ * Resolve a decorator NAME to what it actually applies.
+ *
+ * @returns null when `name` is not a readable decorator factory (a guard class, an opaque
+ *   import, a symbol with no local declaration) — the caller then keeps today's behaviour,
+ *   so this can only ever ADD understanding.
+ *   Otherwise `{ guards, metadataOnly, unread }`:
+ *     guards       constituent guard classes, UNION over every branch — a guard applied on
+ *                  only one branch is still a guard the app can apply.
+ *     metadataOnly every readable branch was `SetMetadata` and nothing else: not a guard.
+ *     unread       branches whose returned decorator could not be read. Crediting the
+ *                  proven branch while a sibling branch is unread is a claim about the
+ *                  configuration SPARDA READ, so the unread one is DECLARED at high risk
+ *                  and the app can no longer reach PROVEN on its strength alone.
+ */
+function resolveCompositeDecorator(name, mod, cache, depth = 0) {
+  if (depth > COMPOSITE_MAX_DEPTH) return null;
+  const file = mod.imports.get(name);
+  const key = `${file ?? mod.file ?? '?'}::${name}`;
+  if (cache?.has(key)) return cache.get(key);
+
+  const dmod = file ? parseModule(file) : mod;
+  const result = (() => {
+    if (dmod.error || !dmod.ast) return null;
+    const fn = decoratorFactory(name, dmod);
+    if (!fn) {
+      // A monorepo import lands on a BARREL (`libs/x/src/index.ts`, whose whole body is
+      // `export * from './decorators'`) — it declares nothing itself and records no named
+      // import, so the search stops one file short of every decorator in the package. On
+      // novu that is the entire `@novu/application-generic` surface. Follow the named
+      // re-export first, then the star ones, bounded by depth.
+      const named = dmod.imports.get(name);
+      if (named && named !== file)
+        return resolveCompositeDecorator(name, dmod, cache, depth + 1);
+      for (const star of dmod.starReexports ?? []) {
+        const smod = parseModule(star);
+        if (smod.error || !smod.ast) continue;
+        const hit = resolveCompositeDecorator(
+          name,
+          { ...smod, imports: smod.imports, file: star },
+          cache,
+          depth + 1,
+        );
+        if (hit) return hit;
+      }
+      return null; // a class guard, or a symbol we cannot see — not our business
+    }
+
+    const guards = [];
+    const unread = [];
+    let sawReadable = false;
+    let sawGuardSource = false;
+    for (const ret of ownReturns(fn)) {
+      if (ret.type !== 'CallExpression') {
+        unread.push(shortSrc(ret));
+        continue;
+      }
+      const callee = idName(ret.callee);
+      if (callee === 'applyDecorators') {
+        sawReadable = true;
+        for (const arg of ret.arguments) {
+          if (arg.type !== 'CallExpression' || idName(arg.callee) !== 'UseGuards')
+            continue;
+          // `sawGuardSource` means a branch APPLIED A GUARD, not that it called
+          // applyDecorators. Setting it on the call itself made every composite look
+          // guard-bearing, so `@Authenticated = () => applyDecorators(SetMetadata(…))`
+          // — immich's whole auth model — resolved to no guards AND not-metadata, and
+          // vanished from the chain entirely.
+          sawGuardSource = true;
+          for (const g of arg.arguments) {
+            const n = idName(g);
+            if (n && !guards.includes(n)) guards.push(n);
+          }
+        }
+        continue;
+      }
+      if (callee === 'UseGuards') {
+        sawReadable = true;
+        sawGuardSource = true;
+        for (const g of ret.arguments) {
+          const n = idName(g);
+          if (n && !guards.includes(n)) guards.push(n);
+        }
+        continue;
+      }
+      if (callee === 'SetMetadata') {
+        sawReadable = true; // read, and it gates nothing
+        continue;
+      }
+      // another factory in the same module — follow it once, bounded
+      const nested = resolveCompositeDecorator(callee, dmod, cache, depth + 1);
+      if (nested) {
+        sawReadable = true;
+        if (nested.guards.length) sawGuardSource = true;
+        for (const n of nested.guards) if (!guards.includes(n)) guards.push(n);
+        unread.push(...nested.unread);
+        continue;
+      }
+      unread.push(shortSrc(ret));
+    }
+    if (!sawReadable && !unread.length) return null;
+    return {
+      guards,
+      // `metadataOnly` is a POSITIVE finding — we read every branch and none applied a
+      // guard — so an unread branch disqualifies it: silence there is not evidence.
+      metadataOnly:
+        sawReadable && !sawGuardSource && guards.length === 0 && !unread.length,
+      unread,
+      file: file ?? null,
+      mod: dmod,
+    };
+  })();
+
+  cache?.set(key, result);
+  return result;
+}
+
+const shortSrc = (node) => {
+  const callee = node.type === 'CallExpression' ? idName(node.callee) : null;
+  return callee ? `${callee}()` : node.type;
+};
 
 // guards on a class or method: the classes named in `@UseGuards(A, B)` PLUS any
 // decorator that is itself named like an auth/permission gate.

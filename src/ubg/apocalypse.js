@@ -12,6 +12,7 @@
 // and DDL declare. It proves the absence of whole bug classes, not of bugs.
 
 import { cmp } from './schema.js';
+import { buildCfIndex, reachFrom } from './reach.js';
 
 const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, info: 3 };
 const CONSTRAINING = new Set(['check', 'not_null', 'unique']);
@@ -19,15 +20,14 @@ const CONSTRAINING = new Set(['check', 'not_null', 'unique']);
 // canonical serialized graph ({ nodes: [], edges: [] }) → indexed view
 export function indexGraph(graph) {
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
-  const cfOut = new Map();
+  // the route-partitioned control-flow index (ubg/reach.js) — a flat adjacency
+  // list makes every per-entrypoint walk O(routes) at a shared middleware
+  const cfOut = buildCfIndex(graph.edges);
   const mutOut = new Map();
   const gateTargets = new Set();
   const compensators = new Set(); // effects whose JOB is undoing another effect
   for (const e of graph.edges) {
-    if (e.kind === 'control_flow') {
-      if (!cfOut.has(e.from)) cfOut.set(e.from, []);
-      cfOut.get(e.from).push({ to: e.to, route: e.meta?.route ?? null });
-    } else if (e.kind === 'mutation') {
+    if (e.kind === 'mutation') {
       if (!mutOut.has(e.from)) mutOut.set(e.from, []);
       mutOut.get(e.from).push(e);
     } else if (e.kind === 'gate') {
@@ -105,21 +105,12 @@ export function buildProofObjects(graph) {
   return proofs;
 }
 
-export function reachOf(epId, cfOut) {
-  const seen = new Set();
-  const queue = [epId];
-  while (queue.length) {
-    const id = queue.shift();
-    if (seen.has(id)) continue;
-    seen.add(id);
-    for (const next of cfOut.get(id) ?? []) {
-      // a chain edge belongs to one route — never cross into a sibling chain
-      if (next.route === null || next.route === epId) queue.push(next.to);
-    }
-  }
-  seen.delete(epId);
-  return seen;
-}
+// The route-aware walk lives in ONE place (ubg/reach.js); this is the name the
+// prover and its readers (fingerprint, falsify, blindspots) import. It used to be
+// a second hand-written copy of the same BFS — three copies in total meant the
+// route-partitioned index could not be fixed once, and any divergence between
+// them would have been a soundness bug nobody could see.
+export const reachOf = reachFrom;
 
 const locOf = (node) => (node?.loc ? `${node.loc.file}:${node.loc.line}` : 'unknown');
 
@@ -133,10 +124,14 @@ const locOf = (node) => (node?.loc ? `${node.loc.file}:${node.loc.line}` : 'unkn
 // same safe direction as the coverage/blind-spot rungs — never masks a finding, never touches the
 // CI gate. Verified guards (incl. the ADR-069 auth-library catalog) keep a route PROVEN.
 const MUTATING_EFFECT = new Set(['db_write', 'http_call', 'fs_write']);
-function assertedOnlyMutations(graph) {
-  if (!graph) return 0;
+// The identified routes behind the count — exported for `sparda enforce` (ADR-076), which
+// needs the exact registration sites to synthesize a provable boundary check at. Same walk,
+// one source of truth: the count IS this list's length, so enforce can never target a route
+// the type-lock would not have counted.
+export function assertedOnlyMutationRoutes(graph) {
+  if (!graph) return [];
   const g = indexGraph(graph);
-  let count = 0;
+  const routes = [];
   for (const ep of g.entrypoints) {
     const reached = [...reachOf(ep.id, g.cfOut)].map((id) => g.nodes.get(id));
     const mutates = reached.some(
@@ -148,9 +143,13 @@ function assertedOnlyMutations(graph) {
     if (!mutates) continue;
     const guards = reached.filter((n) => n?.kind === 'guard');
     if (guards.length === 0) continue; // unguarded → a hard finding already, not "clean"
-    if (!guards.some((n) => n.meta.verified === true)) count++; // guarded, but by trust only
+    if (!guards.some((n) => n.meta.verified === true))
+      routes.push({ id: ep.id, label: ep.label, loc: ep.loc ?? null }); // guarded, but by trust only
   }
-  return count;
+  return routes;
+}
+function assertedOnlyMutations(graph) {
+  return assertedOnlyMutationRoutes(graph).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -739,7 +738,11 @@ const COVERAGE_FLOOR = 0.05;
 // finding, never changes the CI gate; a PARTIAL app is still clean, just qualified.
 const COVERAGE_COMPLETE = 0.6;
 
-export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
+export function verdictOf(
+  findings,
+  graph,
+  { coverage, blindHigh = 0, premiseGaps = 0 } = {},
+) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
   // Advisory findings (BOLA/IDOR, ADR-058) are absence-based and FP-prone: they point a
@@ -794,12 +797,30 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
   // ASSERTED-only guard. If any does, the app is proved-but-on-trust → PARTIAL, not PROVEN.
   // Only computed when the app is otherwise clean (so it can only SOFTEN PROVEN→PARTIAL).
   const assertedMutations = clean ? assertedOnlyMutations(graph) : 0;
+  // coverage === null is a MEASURED-BUT-UNKNOWN ratio (the 0/0 case, E-064) — distinct
+  // from undefined (not measured at all, e.g. heal's partial-graph delta, old semantics
+  // kept). An unknown coverage can never carry a complete PROVEN: unknown ≠ 100%.
+  const coverageUnknown = coverage === null;
   const partial =
     clean &&
     entrypoints > 0 &&
     ((coverage != null && coverage < COVERAGE_COMPLETE) ||
+      coverageUnknown ||
       blindHigh > 0 ||
       assertedMutations > 0);
+  // THE PREMISE GATE. Every other rung above softens a claim about what SPARDA
+  // ANALYSED. This one answers a prior question — was the analysis about the whole
+  // app? — and it is answered by an oracle that is not SPARDA: the running app's own
+  // route table (ubg/premise.js). A gap is not a blind spot inside the proof; it is
+  // measured evidence that the proof's subject was incomplete. So it does not soften
+  // the word, it forbids it: no PROVEN, not even PROVEN (PARTIAL), because both claim
+  // something about an app whose surface we demonstrably did not have.
+  //
+  // One-directional by construction: the oracle only ever reports gaps (routes we
+  // MISSED), never confirmations that would grant a verdict. Silence from the oracle
+  // (it could not boot the app) leaves premiseGaps at 0 and changes nothing — SPARDA
+  // never demands what it could not measure, and never rewards a failure to measure.
+  const premiseUnverified = premiseGaps > 0;
   // `safe` is the CI gate (block a risky deploy): a surface-only app has no
   // critical/high findings and is NOT risky, so it does not fail the gate — it just
   // isn't a positive proof. `clean` is the strong claim (PROVEN) and DOES require
@@ -813,7 +834,15 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
     guards: guards.length,
     guardsVerified,
     assertedMutations,
-    safe: provable && counts.critical === 0 && counts.high === 0,
+    coverageUnknown,
+    premiseGaps,
+    premiseUnverified,
+    // The CI gate. A premise gap belongs here and not only in the verdict word: an
+    // app whose route surface we demonstrably did not have cannot be called safe, and
+    // a green CI over it would reproduce the exact failure this whole audit removed —
+    // a reassuring signal covering unanalysed code. Costs existing callers nothing:
+    // premiseGaps defaults to 0, so only a run that ASKED for the oracle can trip it.
+    safe: provable && !premiseUnverified && counts.critical === 0 && counts.high === 0,
     clean,
     partial,
     complete: clean && !partial,
@@ -826,20 +855,25 @@ export function verdictOf(findings, graph, { coverage, blindHigh = 0 } = {}) {
 export function verdictState(verdict) {
   return !verdict.provable
     ? 'NO_PROOF'
-    : verdict.surfaceOnly
-      ? 'SURFACE'
-      : verdict.clean
-        ? verdict.partial
-          ? 'PARTIAL'
-          : 'PROVEN'
-        : verdict.safe
-          ? 'RISKY'
-          : 'NOT_PROVEN';
+    : verdict.premiseUnverified
+      ? 'PREMISE_GAP'
+      : verdict.surfaceOnly
+        ? 'SURFACE'
+        : verdict.clean
+          ? verdict.partial
+            ? 'PARTIAL'
+            : 'PROVEN'
+          : verdict.safe
+            ? 'RISKY'
+            : 'NOT_PROVEN';
 }
 
 // shields.io "flat" palette — the colour IS a claim, so it tracks the verdict exactly.
 const BADGE_COLOR = {
   PROVEN: '#4c1', // brightgreen — a complete proof
+  // grey, like the other "we could not measure" states: a premise gap is not a
+  // finding about the code, it is a statement about the analysis
+  PREMISE_GAP: '#9f9f9f',
   PARTIAL: '#dfb317', // yellow — proved, but not over the whole surface
   RISKY: '#fe7d37', // orange — no critical/high, but findings to review
   NOT_PROVEN: '#e05d44', // red — a real critical/high finding
@@ -852,20 +886,28 @@ const BADGE_COLOR = {
 // verdictState, so the PARTIAL anti-overclaim rung is automatic everywhere a badge appears.
 export function badgeFor(verdict, { coverage } = {}) {
   const state = verdictState(verdict);
-  const cov = coverage != null ? Math.round(coverage * 100) : null;
+  // coverage null = measured-but-unknown (the 0/0 case): the badge says the word,
+  // it never coerces the absence of a measurement into a number
+  const cov = coverage != null ? `${Math.round(coverage * 100)}%` : 'unknown';
   const c = verdict.counts ?? { critical: 0, high: 0, medium: 0, info: 0 };
   const message =
     state === 'PROVEN'
-      ? `proven · ${cov}%`
+      ? `proven · ${cov}`
       : state === 'PARTIAL'
-        ? `partial · ${cov}%`
-        : state === 'SURFACE'
-          ? `surface · ${cov}%`
-          : state === 'NO_PROOF'
-            ? 'no routes'
-            : state === 'RISKY'
-              ? `review · ${c.medium + c.info}`
-              : `${c.critical + c.high} findings`;
+        ? `partial · ${cov}`
+        : // A premise gap has no finding count to report — the point is that routes were
+          // never analysed at all. Falling through to the `N findings` branch printed
+          // "0 findings" on the badge of an app whose surface we demonstrably did not
+          // have, which is the most misleading string the public artifact could carry.
+          state === 'PREMISE_GAP'
+          ? 'premise not verified'
+          : state === 'SURFACE'
+            ? `surface · ${cov}`
+            : state === 'NO_PROOF'
+              ? 'no routes'
+              : state === 'RISKY'
+                ? `review · ${c.medium + c.info}`
+                : `${c.critical + c.high} findings`;
   return { state, message, color: BADGE_COLOR[state] };
 }
 

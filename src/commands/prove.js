@@ -8,20 +8,37 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, verdictState, badgeFor } from '../ubg/apocalypse.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { fingerprintGraph } from '../ubg/fingerprint.js';
 import { suggestAppDirs } from '../detect.js';
+import { readEnforceManifest } from './enforce.js';
 
 export async function runProve(opts) {
   const { graph, report } = compileUBG(opts.cwd, { write: false, openapi: opts.openapi });
   const canonical = canonicalizeGraph(graph);
 
   const { findings, obligations } = checkGraph(canonical);
-  const blind = surveyBlindspots(canonical, report);
+
+  // THE PREMISE CHECK. Before asking whether the proof holds, ask whether the proof was
+  // about the whole app. One shared call (`premiseFor`) so this command, the CI gate and
+  // the public artifacts can never disagree about whether the app was fully seen; it
+  // keeps the opt-in boundary — the runtime oracle executes the target's code and needs
+  // `--probe`, the boot-free convention oracle only reads directories and always runs.
+  const premise = await premiseFor(canonical, report, {
+    cwd: opts.cwd,
+    probe: opts.probe,
+  });
+
+  // A gap is a route the running app serves and the compiler never saw. It belongs in
+  // the blind-spot ledger at critical risk, so it lands in the coverage denominator and
+  // the ranked map like every other unseen surface — one channel, no special case.
+  const blind = surveyBlindspots(canonical, withPremiseGaps(report, premise));
   const verdict = verdictOf(findings, canonical, {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
+    premiseGaps: premise.available ? premise.gaps.length : 0,
   });
   const capsule = buildCapsule(canonical);
   const prints = fingerprintGraph(canonical);
@@ -36,6 +53,12 @@ export async function runProve(opts) {
       .slice(0, 16);
 
   const state = verdictState(verdict);
+  // The ENFORCED disclosure (ADR-076): when part of the proof rests on checks `sparda enforce`
+  // synthesized, say so — an enforced proof is auditable and must never read as a silent bare
+  // PROVEN. Disclosure only: the manifest can QUALIFY a PROVEN (strictly more information), it
+  // can never upgrade a verdict — soundness never depends on it (strip the injected check and
+  // the type-lock drops the app back to PARTIAL on its own).
+  const enforced = state === 'PROVEN' ? readEnforceManifest(opts.cwd) : null;
 
   const summary = {
     app: path.basename(path.resolve(opts.cwd)) || 'app',
@@ -47,6 +70,14 @@ export async function runProve(opts) {
     coverage: blind.coverage.ratio,
     blindSpots: blind.surface,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
+    premise: premise.available
+      ? {
+          verified: true,
+          oracle: premise.oracle,
+          probed: premise.probed,
+          gaps: premise.gaps.length,
+        }
+      : { verified: false, reason: premise.reason },
     findings: findings.map((f) => ({
       rule: f.rule,
       severity: f.severity,
@@ -56,6 +87,7 @@ export async function runProve(opts) {
     capsuleBytes: capsule.bytes,
     behaviors: new Set(prints.map((p) => p.behaviorHash).filter(Boolean)).size,
     seal,
+    ...(enforced ? { enforced: true, enforcedRoutes: enforced.routes } : {}),
   };
 
   if (opts.json) {
@@ -81,6 +113,7 @@ export async function runProve(opts) {
     RISKY: '⚠',
     SURFACE: '◐',
     NO_PROOF: '✗',
+    PREMISE_GAP: '✗',
   };
   const HEAD = {
     PROVEN: 'PROVEN',
@@ -89,15 +122,20 @@ export async function runProve(opts) {
     RISKY: 'RISKY',
     SURFACE: 'SURFACE ONLY',
     NO_PROOF: 'NO PROOF',
+    PREMISE_GAP: 'PREMISE NOT VERIFIED',
   };
 
-  const cov = `${(blind.coverage.ratio * 100).toFixed(0)}%`;
+  const cov = coveragePct(blind.coverage.ratio);
   console.log(`\nSPARDA · ${summary.app}`);
   console.log('─'.repeat(46));
-  console.log(`${ICON[state]} ${HEAD[state]}`);
+  console.log(`${ICON[state]} ${enforced ? 'PROVEN (ENFORCED)' : HEAD[state]}`);
 
   if (state === 'PROVEN') {
     console.log(`  ${obligations} obligations discharged · 0 violations`);
+    if (enforced)
+      console.log(
+        `  ⚙ ${enforced.routes.length} route(s) proven via a SPARDA-synthesized boundary check — \`sparda enforce --revert\` to undo`,
+      );
   } else if (state === 'PARTIAL') {
     // PARTIAL has three possible reasons (ADR-070): a mutation rests on an asserted-only guard
     // (deny not proven), high-risk blind spots, or incomplete coverage. Name the real one(s) —
@@ -109,10 +147,36 @@ export async function runProve(opts) {
       );
     if (summary.blindHigh > 0)
       reasons.push(`${summary.blindHigh} high-risk blind spot(s)`);
-    reasons.push(`${cov} of the surface resolved`);
+    if (verdict.coverageUnknown)
+      reasons.push(
+        `coverage is UNKNOWN (0 behaviors resolved out of 0 seen — no measurement, not a pass)`,
+      );
+    else reasons.push(`${cov} of the surface resolved`);
     console.log(
       `  ${obligations} obligations discharged · 0 violations — PARTIAL: ${reasons.join('; ')}. The unproven part is not asserted safe.`,
     );
+    if (verdict.assertedMutations > 0)
+      console.log(
+        `  ⚙ \`sparda enforce\` can synthesize the missing proof — a boundary check SPARDA verifies, reversible (PARTIAL → PROVEN (ENFORCED))`,
+      );
+  } else if (state === 'PREMISE_GAP') {
+    // The strongest negative SPARDA can state, and the only one backed by an oracle
+    // outside itself: the running app serves routes the analysis never saw, so no
+    // claim about the app — not even a qualified one — is available.
+    const witness =
+      premise.oracle === 'convention'
+        ? "the framework's file conventions serve"
+        : 'the running app serves';
+    const found =
+      premise.oracle === 'convention'
+        ? 'declared by the project layout, absent from the graph'
+        : 'found by the runtime probe only';
+    console.log(
+      `  ${premise.gaps.length} route(s) ${witness} were NEVER seen by the compiler — the proof's subject is incomplete, so no verdict is claimed`,
+    );
+    for (const g of premise.gaps.slice(0, 8))
+      console.log(`    ✗ ${g.method} ${g.path}   (${found})`);
+    if (premise.gaps.length > 8) console.log(`    … and ${premise.gaps.length - 8} more`);
   } else if (state === 'NO_PROOF') {
     console.log(
       `  0 routes resolved — nothing to prove (a parser-coverage gap, not a pass)`,
@@ -142,6 +206,12 @@ export async function runProve(opts) {
   console.log(
     `  ${report.routes} routes · ${verdict.guards} guards (${verdict.guardsVerified} verified) · coverage ${cov}`,
   );
+  if (premise.available)
+    console.log(
+      premise.oracle === 'convention'
+        ? `  ⚖ premise verified against the framework's file conventions: ${premise.probed} route(s) implied, ${premise.gaps.length} gap(s)`
+        : `  ⚖ premise verified against the running app: ${premise.probed} route(s) probed, ${premise.gaps.length} gap(s)`,
+    );
   if (blind.surface > 0)
     console.log(
       `  ◐ ${blind.surface} blind spots (${summary.blindHigh} high+) — run \`sparda blindspots\``,
@@ -165,13 +235,13 @@ function gate(verdict) {
 // badgeFor, so it can never disagree with the CLI or the committed SVG.
 function proveMarkdown({ verdict, report, findings, coverage, seal }) {
   const { message, color } = badgeFor(verdict, { coverage });
-  const cov = Math.round(coverage * 100);
+  const cov = coveragePct(coverage);
   const badge = `https://img.shields.io/badge/SPARDA-${encodeURIComponent(message)}-${color.slice(1)}`;
   const hard = findings.filter((f) => !f.advisory);
   const lines = [
     `### ![SPARDA](${badge}) &nbsp; behavior proof`,
     '',
-    `\`${report.routes} routes · ${verdict.guards} guards (${verdict.guardsVerified} verified) · coverage ${cov}%\``,
+    `\`${report.routes} routes · ${verdict.guards} guards (${verdict.guardsVerified} verified) · coverage ${cov}\``,
   ];
   if (hard.length) {
     lines.push('', '| severity | route | finding |', '|---|---|---|');

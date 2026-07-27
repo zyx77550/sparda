@@ -1,7 +1,8 @@
 # Testing
 
 ```bash
-npm test                         # full suite (vitest run)
+npm test                         # full suite (vitest run) — 1085 tests
+npm run mutation                 # the mutation harness — 77 mutants, all must die
 npx vitest run -t "quarantine"   # filter by test name
 SPARDA_CORPUS=/path/to/clones npm run corpus   # regression check vs real giants
 ```
@@ -12,6 +13,19 @@ catches the class of silent regression `npm test` can't (the tsconfig bug that t
 dub's guards 514 → 1). The giants aren't committed; point `SPARDA_CORPUS` at your
 clones. Apps not present are skipped, never failed; with no `SPARDA_CORPUS` it is a
 no-op. Re-baseline with `npm run corpus:update` ONLY when a metric change is intended.
+
+The **mutation harness** (`tests/mutation/run.mjs`, `npm run mutation`) is the answer to
+"is this test suite actually load-bearing?". Each mutant breaks ONE soundness-critical
+line and requires the named test to go red; a mutant that SURVIVES is a guarded line with
+no guardian. Zero dependencies — it edits the file, runs one test, and always restores,
+even on crash. **The rule: ship a soundness-critical line, ship a mutant with it.**
+
+Two traps it has already cost us. An interrupted run leaves the tree MUTATED, and a
+`git stash` cycle will happily preserve the damage — if the suite goes strange after a
+mutation run, `git diff` the targeted files before you believe a single failure. And a
+mutant whose `find` string no longer matches prints `⚠ target moved` and counts as
+survived, which is the correct default: a harness silently testing nothing is the exact
+failure it exists to prevent.
 
 Requirements: Node ≥ 18, Python ≥ 3.9 on PATH (`python3`/`python`/`py -3`
 auto-detected — see E-004). CI: `.github/workflows/` runs the suite with
@@ -36,6 +50,26 @@ auto-detected — see E-004). CI: `.github/workflows/` runs the suite with
 | 7h. CLI styling | plain passthrough when colors off (NO_COLOR/non-TTY), truecolor gradient, 256-color fallback, strip-ANSI = exact original text | pure, env-guarded |
 | 8. MCP stdio bridge | full JSON-RPC session against a spawned bridge + mock host: tools/list+call, prompts, write confirm path, proof-after-write, live error notifications **with cached antibody diagnosis**, `sparda_get_context`, **circuit detection + crystallization end-to-end** (`SPARDA_RECORD_SEQUENCES=1`: composite born via `tools/list_changed`, then executed) | child process, raw protocol |
 
+## The sealing certificates (SOUNDNESS Direction 3)
+
+Most tests pin a behaviour SPARDA HAS. These pin the ABSENCE of one — that no route the
+framework serves is dropped without a trace — and they cannot do it by asking the
+extractor, which would be a tautology. Each one re-enumerates the surface with a SECOND,
+independent implementation and demands the two agree.
+
+| File | What it sweeps |
+|---|---|
+| `no-silent-loss.test.js` | Express: an independent Babel walk with its own app/router-variable detection, over every Express fixture |
+| `no-silent-loss-fleet.test.js` | the other six lowerings, each with its own enumerator; it opens **every file itself**, so a controller the extractor's candidate pre-filter never selected shows up as a lost route |
+| `registration-invariant{,-fleet}.test.js` | a named fixture per lowering: the declaration exists AND the app can no longer read `PROVEN` |
+| `premise-gate.test.js` / `premise-convention.test.js` | the two oracles: real surface found, nothing invented across 26 healthy fixtures, empty enumeration reads `unavailable` |
+| `premise-wired-everywhere.test.js` | that the check REACHES every gate — it scans `src/commands/` and fails when a module grading a compiled graph does not call `premiseFor`. A rule, not a list: pinning today's commands only re-proves the fix |
+
+**Writing one is a discipline, not a pattern.** Never import the extractor you are
+checking. Always add an anti-vacuity guard (a fixture-count and surface-total floor) —
+a certificate that sweeps nothing passes, which is precisely the failure it exists to
+prevent — and give that guard its own killing mutant that blinds an enumerator.
+
 ## Conventions & traps
 
 - **Fixtures are restored byte-for-byte** — every test that touches a
@@ -56,8 +90,11 @@ auto-detected — see E-004). CI: `.github/workflows/` runs the suite with
 
 ## Adding coverage
 
-- New framework → add a minimal fixture project + parser section + an
-  injection/remove byte-for-byte test. That trio is the acceptance bar.
+- New framework → the acceptance bar is now **five** items, not three: a minimal fixture
+  project, a parser section, an injection/remove byte-for-byte test, **an enumerator in
+  `no-silent-loss-fleet.test.js`** (Direction 3 — the lowering is unsealed without it),
+  and **an explicit premise answer**: `PROBEABLE`, `CONVENTION_ROUTED`, or a written
+  "neither, and here is why" (see `SOUNDNESS.md` §discipline 4b).
 - New bridge behavior → extend section 8 (raw JSON-RPC `request()` helper);
   new router behavior → extend section 6 against a real server.
 - Every entry in `ERRORS.md` should be pinned by a test when feasible.

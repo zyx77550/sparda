@@ -1,0 +1,56 @@
+[
+  {
+    "repo": "directus/directus",
+    "fix_commit": "096a5e4daaca5e180a00e4bd8df214dd1bff0c34",
+    "parent_commit": "1641743a494a12ad01c517e64bf83595d89efba6",
+    "subject": "feat(api): replace ldapjs with ldapts for LDAP authentication (#26363)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "directus/directus",
+    "fix_commit": "e288a43a79613dada905da683f4919c6965ac804",
+    "parent_commit": "72f12f399684fea091015e58ad146039617cc588",
+    "subject": "Fix permission generation for Shares 📰 (#23716)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "directus/directus",
+    "fix_commit": "889fa22e79032927a0763dd92b4f40ae79d35e9b",
+    "parent_commit": "965d8182af7a22f42119eea9cee49f0a370ddf00",
+    "subject": "Fixed websocket authentication handling between websocket controllers ",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "directus/directus",
+    "fix_commit": "543b345695071c1de61a35004bd063fe59dba0c8",
+    "parent_commit": "10b8b3b2a4bb24ea9009df65256cabceaf2d8cec",
+    "subject": "Merge pull request from GHSA-7hmh-pfrp-vcx4",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "directus/directus",
+    "fix_commit": "77d73398f1be1501ee9196b9fd384666a0a9712b",
+    "parent_commit": "9f536270b9d8e9b8c0fa6fa1ab62635cbda0c6ad",
+    "subject": "Session Based Authentication (#21239)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "directus/directus",
+    "fix_commit": "c413788c672567e5b7bfda69bbd68d0af7008e77",
+    "parent_commit": "a6de008059a49ad5694f104393796e58b8720cc3",
+    "subject": "Apply workaround for update permission check for rules with relational",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  }
+]

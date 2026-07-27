@@ -1,0 +1,47 @@
+[
+  {
+    "repo": "immich-app/immich",
+    "fix_commit": "1ba0989e15181cf98affe4ae91ed0ac956bd8d47",
+    "parent_commit": "daed3f09667ad053f62ce98ab9aa166a0194df07",
+    "subject": "refactor: auth manager (#27638)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "immich-app/immich",
+    "fix_commit": "7d759edfcc9842b4ddfa411d5f0bad8ea185c8b2",
+    "parent_commit": "34974b036c5bc79f899c44c058b618412110362a",
+    "subject": "chore: add permission metadata to open-api document (#20373)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "immich-app/immich",
+    "fix_commit": "92384c28de047c1b697c3f48343e137e7756a078",
+    "parent_commit": "ab597155fa66664b582fe83bc558ecd1e78123a5",
+    "subject": "feat: sync auth user (#20067)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "immich-app/immich",
+    "fix_commit": "a2a9797fabbb840a3dc712852a08c010e2f5002f",
+    "parent_commit": "3d35e65f270724c7f3923a2052294670eecff9a8",
+    "subject": "refactor: auth medium tests (#19583)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "immich-app/immich",
+    "fix_commit": "c1150fe7e3cbf8fa2c2a7e41613dbeffac1cae9c",
+    "parent_commit": "ecb66fdb2c3aa0858dc92fadbff2946b3574c091",
+    "subject": "feat: lock auth session (#18322)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  }
+]

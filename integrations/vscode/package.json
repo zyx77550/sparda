@@ -1,0 +1,65 @@
+{
+  "name": "sparda",
+  "displayName": "SPARDA — prove AI-written code",
+  "description": "The trust layer for AI-written code. AI writes, SPARDA proves. Deterministic, offline behavior proofs + a live gate for AI edits, right in the editor.",
+  "version": "0.1.0",
+  "publisher": "residual-labs",
+  "license": "BUSL-1.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "ai-code-review",
+    "trust-layer",
+    "authorization",
+    "bola",
+    "claude-code"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zyx77550/sparda"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sparda.prove",
+        "title": "Prove workspace",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.apocalypse",
+        "title": "Apocalypse — findings to the Problems panel",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.gate.arm",
+        "title": "Gate — arm the baseline",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.installClaudeHook",
+        "title": "Install the gate into Claude Code",
+        "category": "SPARDA"
+      }
+    ],
+    "configuration": {
+      "title": "SPARDA",
+      "properties": {
+        "sparda.command": {
+          "type": "string",
+          "default": "npx --no-install sparda-mcp",
+          "description": "How to invoke the SPARDA CLI (e.g. a globally installed `sparda-mcp`, or `npx sparda-mcp`)."
+        }
+      }
+    }
+  }
+}

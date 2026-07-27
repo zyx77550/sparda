@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="352" viewBox="0 0 780 352" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="SPARDA review bot commenting the behavior diff on a pull request">
+  <!-- card -->
+  <rect x="1" y="1" width="778" height="350" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+  <!-- header -->
+  <circle cx="34" cy="36" r="17" fill="#1a7f37"/>
+  <text x="34" y="41" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="700">S</text>
+  <text x="62" y="33" fill="#1f2328" font-size="14.5" font-weight="700">sparda-review</text>
+  <rect x="226" y="22" width="34" height="17" rx="8.5" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="243" y="34" text-anchor="middle" fill="#656d76" font-size="11">bot</text>
+  <text x="272" y="33" fill="#656d76" font-size="13.5">reviewed the behavior of this pull request · now</text>
+  <line x1="20" y1="62" x2="760" y2="62" stroke="#d8dee4"/>
+
+  <!-- title -->
+  <circle cx="30" cy="90" r="7" fill="none" stroke="#1f2328" stroke-width="2"/>
+  <line x1="35" y1="95" x2="40" y2="100" stroke="#1f2328" stroke-width="2" stroke-linecap="round"/>
+  <text x="52" y="95" fill="#1f2328" font-size="15.5" font-weight="700">SPARDA — semantic review</text>
+  <text x="288" y="95" fill="#656d76" font-size="13.5">vs</text>
+  <rect x="306" y="82" width="44" height="18" rx="4" fill="#ddf4ff"/>
+  <text x="328" y="95" text-anchor="middle" fill="#0969da" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">main</text>
+
+  <!-- verdict pill -->
+  <rect x="20" y="112" width="286" height="26" rx="13" fill="#ffebe9"/>
+  <text x="34" y="129" fill="#cf222e" font-size="13" font-weight="700">✕ NOT PROVEN — 1 critical · 1 high</text>
+
+  <!-- findings -->
+  <text x="20" y="166" fill="#656d76" font-size="12" font-weight="700" letter-spacing="0.4">PROTECTIONS REMOVED / RISKS INTRODUCED</text>
+
+  <!-- finding 1: critical -->
+  <rect x="20" y="178" width="9" height="9" rx="2" fill="#cf222e"/>
+  <text x="38" y="187" fill="#1f2328" font-size="13.5"><tspan font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">GUARD_REMOVED</tspan><tspan fill="#57606a">  POST /pay is now reachable without any guard</tspan></text>
+  <rect x="686" y="176" width="74" height="18" rx="9" fill="#ffebe9"/>
+  <text x="723" y="189" text-anchor="middle" fill="#cf222e" font-size="11" font-weight="700">critical</text>
+
+  <!-- finding 2: high -->
+  <rect x="20" y="206" width="9" height="9" rx="2" fill="#bc4c00"/>
+  <text x="38" y="215" fill="#1f2328" font-size="13.5"><tspan font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">BLAST_RADIUS_GREW</tspan><tspan fill="#57606a">  POST /transfer now mutates the Billing aggregate</tspan></text>
+  <rect x="708" y="204" width="52" height="18" rx="9" fill="#fff1e5"/>
+  <text x="734" y="217" text-anchor="middle" fill="#bc4c00" font-size="11" font-weight="700">high</text>
+
+  <!-- endpoint surface -->
+  <text x="20" y="252" fill="#656d76" font-size="12" font-weight="700" letter-spacing="0.4">ENDPOINT SURFACE</text>
+  <rect x="20" y="262" width="38" height="18" rx="9" fill="#dafbe1"/>
+  <text x="39" y="275" text-anchor="middle" fill="#1a7f37" font-size="11" font-weight="700">NEW</text>
+  <text x="68" y="275" fill="#1f2328" font-size="13.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">POST /refund</text>
+
+  <line x1="20" y1="300" x2="760" y2="300" stroke="#d8dee4"/>
+  <text x="20" y="322" fill="#656d76" font-size="12.5">Derived from the code + schema by SPARDA — a counterexample, not a heuristic.</text>
+  <text x="20" y="340" fill="#8c959f" font-size="11.5">One sticky comment · updates on every push · comment-only by default (never blocks a merge)</text>
+</svg>

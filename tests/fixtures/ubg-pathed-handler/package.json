@@ -1,0 +1,2 @@
+{ "name": "ubg-pathed-handler-fixture", "private": true, "type": "module", "main": "src/app.js",
+  "dependencies": { "express": "^4.21.0", "@prisma/client": "^5.20.0" } }

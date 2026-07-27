@@ -575,7 +575,24 @@ function collectDbHandles(body) {
     if (node.type !== 'VariableDeclaration') continue;
     for (const d of node.declarations) {
       const init = d.init;
-      if (!init || d.id.type !== 'Identifier') continue;
+      if (!init) continue;
+      // CommonJS destructured require — `const { PrismaClient } = require('@prisma/client')`.
+      // The ESM twin is labelled above; without this the CJS half of the world had NO proven
+      // handles at all, leaving every provenance-based net (including the opaque-write one)
+      // inert there.
+      if (
+        d.id.type === 'ObjectPattern' &&
+        init.type === 'CallExpression' &&
+        init.callee.type === 'Identifier' &&
+        init.callee.name === 'require' &&
+        DB_PACKAGES.has(init.arguments[0]?.value)
+      ) {
+        for (const p of d.id.properties)
+          if (p.type === 'ObjectProperty' && p.value?.type === 'Identifier')
+            labeled.add(p.value.name);
+        continue;
+      }
+      if (d.id.type !== 'Identifier') continue;
       const requirePkg =
         init.type === 'CallExpression' &&
         init.callee.type === 'Identifier' &&
@@ -702,6 +719,11 @@ export function clearModuleCache() {
   workspaceRootOf.clear();
 }
 
+// Upper bound on a single source file. Real hand-written modules top out well under
+// 1 MB; past this line the file is generated output whose AST costs memory without
+// yielding routes — analysis refuses cleanly instead of degrading the whole run.
+const MAX_SOURCE_BYTES = 5 * 1024 * 1024;
+
 // absFile → { ast, functions: Map<name,{node,line,exported}>, imports: Map<local,abs>, error }
 export function parseModule(absFile) {
   if (moduleCache.has(absFile)) return moduleCache.get(absFile);
@@ -718,6 +740,14 @@ export function parseModule(absFile) {
 
   let src;
   try {
+    // memory guard: an auto-generated mega-file (bundles, fixtures dumped into src/)
+    // would balloon the AST far past any useful analysis. Refuse to parse it and say
+    // so — the error flows to the skip report, never a silent drop or an OOM crash.
+    const { size } = fs.statSync(absFile);
+    if (size > MAX_SOURCE_BYTES) {
+      facts.error = `file exceeds the ${Math.round(MAX_SOURCE_BYTES / 1024 / 1024)} MB analysis size cap (${Math.round(size / 1024 / 1024)} MB) — unmodelable`;
+      return facts;
+    }
     src = fs.readFileSync(absFile, 'utf8');
   } catch (err) {
     facts.error = `unreadable: ${err.message}`;
@@ -1605,14 +1635,17 @@ function callAssertsOwnership(node) {
 //     proves nothing and is rejected.
 // Advisory-only (feeds O7, never a hard rule), so it can never create a false PROVEN; at worst a
 // mis-clear drops an advisory that was already non-gating.
-function ifAssertsOwnership(node) {
-  if (node.type !== 'IfStatement') return false;
+function branchDenies(branch) {
   let denies = false;
-  walkNodes(node.consequent, (c) => {
+  walkNodes(branch, (c) => {
     if (c.type === 'ThrowStatement') denies = true;
     if (c.type === 'CallExpression' && deniedStatusOf(c)) denies = true;
   });
-  if (!denies) return false;
+  return denies;
+}
+export function ifAssertsOwnership(node) {
+  if (node.type !== 'IfStatement') return false;
+  if (!branchDenies(node.consequent)) return false;
   let owns = false;
   walkNodes(node.test, (b) => {
     if (b.type !== 'BinaryExpression' || !/^[=!]==?$/.test(b.operator)) return;
@@ -1621,6 +1654,65 @@ function ifAssertsOwnership(node) {
     // (`req.body.*`, `req.params.*`) is never identity, so a spoofable compare is rejected.
     if (valueIsIdentity(b.left) && b.right?.type === 'MemberExpression') owns = true;
     if (valueIsIdentity(b.right) && b.left?.type === 'MemberExpression') owns = true;
+  });
+  return owns;
+}
+
+// ADR-074 V2 — the INTERPROCEDURAL ownership witness: the compare+deny lives in a CALLED
+// helper (`assertOwner(row.ownerId, req.user.id)` / `assertOwner(row, req.user)`), so the
+// inline verifier above never sees it. The call-site principal-binding hop: classify each
+// argument at the CALL SITE (the caller's verified identity via `valueIsIdentity` — the same
+// honesty gate as inline, `req.body.*` is never identity — vs a fetched value), bind each
+// argument to the helper parameter it feeds, then require the HELPER BODY to deny behind a
+// compare of an identity-bound param against a fetched-bound param (bare, or a member off it —
+// `assertOwner(row, user)` comparing `row.ownerId !== user.id`). Recall needs the call site,
+// soundness needs the helper body — NEITHER alone clears:
+//   • no identity-classified argument (spoof: `assertOwner(row.ownerId, req.body.userId)`)
+//     → false, the advisory stays;
+//   • a helper that logs instead of denying, or denies without comparing the two bound
+//     params (`if (owned !== 'admin') throw`) → false, the advisory stays.
+// Feeds ONLY the O7 BOLA advisory (never a hard rule, never a guard — E-042 discipline), so a
+// mis-clear can only drop a non-gating advisory, never create a false PROVEN.
+function paramNamesOf(fnNode) {
+  return (fnNode?.params ?? []).map((p) => {
+    let id = p.type === 'TSParameterProperty' ? p.parameter : p;
+    if (id?.type === 'AssignmentPattern') id = id.left;
+    return id?.type === 'Identifier' ? id.name : null;
+  });
+}
+// does this expression read a param in `set` — the bare identifier or a member off it?
+function bindsParam(node, set) {
+  node = unwrapTS(node);
+  if (!node) return false;
+  if (node.type === 'Identifier') return set.has(node.name);
+  if (node.type !== 'MemberExpression') return false;
+  const root = rootIdentifier(node);
+  return root != null && set.has(root);
+}
+export function callBindsOwnershipWitness(callNode, fnNode) {
+  const args = callNode?.arguments ?? [];
+  const names = paramNamesOf(fnNode);
+  const identityParams = new Set();
+  const fetchedParams = new Set();
+  args.forEach((a, i) => {
+    const name = names[i];
+    if (!name) return;
+    const arg = unwrapTS(a);
+    if (valueIsIdentity(arg)) identityParams.add(name);
+    else if (arg?.type === 'MemberExpression' || arg?.type === 'Identifier')
+      fetchedParams.add(name);
+  });
+  if (!identityParams.size || !fetchedParams.size) return false;
+  let owns = false;
+  walkNodes(fnNode.body, (node) => {
+    if (node.type !== 'IfStatement' || !branchDenies(node.consequent)) return;
+    walkNodes(node.test, (b) => {
+      if (b.type !== 'BinaryExpression' || !/^[=!]==?$/.test(b.operator)) return;
+      if (bindsParam(b.left, identityParams) && bindsParam(b.right, fetchedParams))
+        owns = true;
+      if (bindsParam(b.right, identityParams) && bindsParam(b.left, fetchedParams))
+        owns = true;
+    });
   });
   return owns;
 }
@@ -1924,7 +2016,16 @@ function visit(node, out, ctx) {
     });
   }
 
-  if (node.type === 'CallExpression') {
+  // A TAGGED TEMPLATE is a call with template syntax: prisma.$executeRaw`DELETE …`
+  // runs SQL exactly like prisma.$executeRawUnsafe('DELETE …'), but it is not a
+  // CallExpression, so the whole effect used to disappear. Read the template's literal
+  // parts as SQL when the tag is rooted at a proven persistence handle; if the SQL is
+  // unreadable, fall back to the opaque-write net rather than dropping it.
+  if (node.type === 'TaggedTemplateExpression') {
+    taggedTemplateEffect(node, out, ctx);
+  }
+
+  if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
     // transaction scope: db.transaction(cb) / prisma.$transaction(...) — the
     // innermost scope wins; isolation only from a string literal, never guessed
     const callee = node.callee;
@@ -2057,7 +2158,30 @@ function inspectCall(node, out, ctx) {
     return;
   }
 
-  if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier') return;
+  // Optional chaining is the SAME call: `prisma?.note?.deleteMany()` deletes exactly
+  // what `prisma.note.deleteMany()` deletes whenever the handle exists, which it does
+  // in any app that boots. Babel gives it a distinct node type, and matching only the
+  // plain form made the write vanish from the graph entirely.
+  if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') {
+    // A receiver that is not a member at all — `(cond ? a : b).deleteMany()`,
+    // `getClient().wipe()` — cannot be named statically. If anything inside it is a
+    // proven persistence handle, the call is treated as a write rather than dropped.
+    opaqueDynamicWrite(node, out, ctx, callee, line);
+    return;
+  }
+  // A COMPUTED member — `prisma.note[OP]()`, `db['delete' + 'Many']()` — has no
+  // statically-known method name, so every name-driven ORM/SDK handler below is
+  // blind to it. Bailing out here (which is what the old `property.type !==
+  // 'Identifier'` guard did) meant the call produced NO effect at all: a mass
+  // delete on a proven database handle simply did not exist in the graph, and the
+  // route around it read as a harmless no-op (Z4). Dynamic calls fall through to
+  // the opaque-write net at the bottom, which is provenance-based and needs no
+  // method name.
+  const dynamicMember = callee.computed || callee.property.type !== 'Identifier';
+  if (dynamicMember) {
+    opaqueDynamicWrite(node, out, ctx, callee, line);
+    return;
+  }
   const method = callee.property.name;
   const methodLower = method.toLowerCase();
   const rootName = rootIdentifier(callee);
@@ -2199,9 +2323,13 @@ function inspectCall(node, out, ctx) {
     // `prisma.user.create(...)` OR the class-based `this.prisma.user.create(...)`
     // that NestJS services / Express controller classes use — `clientBaseName`
     // reads the client name off a bare Identifier or a `this.<field>`.
-    const client = obj.type === 'MemberExpression' ? clientBaseName(obj.object) : null;
+    // optional chaining is the same access: `prisma?.user?.create(…)` writes exactly
+    // what `prisma.user.create(…)` writes whenever the handle exists
+    const objIsMember =
+      obj?.type === 'MemberExpression' || obj?.type === 'OptionalMemberExpression';
+    const client = objIsMember ? clientBaseName(obj.object) : null;
     if (
-      obj.type === 'MemberExpression' &&
+      objIsMember &&
       !obj.computed &&
       obj.property.type === 'Identifier' &&
       client &&
@@ -2348,10 +2476,18 @@ function inspectCall(node, out, ctx) {
   // avoid a flood: the receiver must be a handle IDENTIFIER (builder continuations sit on a CALL
   // receiver, ORM verbs are handled above), and the method must be neither a known read nor
   // plumbing. Provenance-based (dbHandles), never a name test — so this can only RAISE a finding.
-  if (
+  // The receiver is a handle when it IS one (`db.archiveAll()`) or when the handle is
+  // unreachable by name but present in the receiver expression — `(a ? db : db).wipe()`,
+  // `(await getDb()).wipe()`. The second form used to fall through to nothing at all.
+  const handleReceiver =
     ctx.dbHandles &&
-    callee.object.type === 'Identifier' &&
-    ctx.dbHandles.has(callee.object.name) &&
+    (callee.object.type === 'Identifier' && ctx.dbHandles.has(callee.object.name)
+      ? callee.object.name
+      : callee.object.type !== 'Identifier'
+        ? handleInSubtree(callee.object, ctx.dbHandles)
+        : null);
+  if (
+    handleReceiver &&
     !DB_KNOWN_READ.has(methodLower) &&
     !DB_NON_EFFECT.has(methodLower)
   ) {
@@ -2363,6 +2499,83 @@ function inspectCall(node, out, ctx) {
       line,
     });
   }
+}
+
+// The dynamic sibling of the ADR-068 opaque-write net. A call whose METHOD cannot be
+// read statically, made on a receiver rooted at a PROVEN persistence handle, is treated
+// as a write — the same effect-bias inversion, for the same reason: a missed write is a
+// hidden hole (an unguarded mass delete goes invisible), while an over-classified read is
+// only a surfaceable false positive. Rooted, not direct: `prisma.note[OP]()` reaches the
+// handle through the model member, which is exactly the dominant ORM shape.
+//
+// Bounded by provenance (dbHandles is built from imports/constructors, never from names)
+// and by the rarity of computed calls, so it cannot flood. Write-only in effect: it can
+// RAISE the guard obligation, never discharge one, never fabricate a PROVEN.
+function opaqueDynamicWrite(node, out, ctx, callee, line) {
+  if (!ctx?.dbHandles) return;
+  const root = rootIdentifier(callee) ?? handleInSubtree(callee, ctx.dbHandles);
+  if (!root || !ctx.dbHandles.has(root)) return;
+  pushEffect(out, ctx, {
+    effectType: 'db_write',
+    op: 'unknown',
+    table: null,
+    opaque: true,
+    dynamicMember: true,
+    line,
+  });
+}
+
+// A receiver with no nameable root — `(cond ? a : b).deleteMany()`, `(await get()).wipe()`.
+// If a PROVEN persistence handle appears anywhere inside it, the call runs on a database,
+// and the effect-bias inversion says treat it as a write rather than lose it. Bounded walk.
+function handleInSubtree(node, handles, budget = { n: 400 }) {
+  if (!node || typeof node !== 'object' || budget.n-- <= 0) return null;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = handleInSubtree(n, handles, budget);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node.type === 'Identifier' && handles.has(node.name)) return node.name;
+  for (const k of Object.keys(node)) {
+    if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+    const v = node[k];
+    if (v && typeof v === 'object') {
+      const hit = handleInSubtree(v, handles, budget);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+// prisma.$executeRaw`DELETE FROM "Note"` — a call wearing template syntax. Reads the
+// template's STATIC parts as SQL (interpolations are holes, which is exactly what the
+// SQL parser already tolerates); if the statement cannot be classified, the call still
+// becomes an opaque write, because a raw-SQL tag on a proven handle is never a no-op.
+function taggedTemplateEffect(node, out, ctx) {
+  if (!ctx?.dbHandles) return;
+  const tag = node.tag;
+  const root =
+    tag?.type === 'Identifier'
+      ? tag.name
+      : (rootIdentifier(tag) ?? handleInSubtree(tag, ctx.dbHandles));
+  if (!root || !ctx.dbHandles.has(root)) return;
+  const line = node.loc?.start.line ?? 0;
+  const sql = (node.quasi?.quasis ?? []).map((q) => q.value?.cooked ?? '').join(' ? ');
+  const parsed = sql ? parseSqlCall(sql) : null;
+  if (parsed) {
+    pushEffect(out, ctx, { ...parsed, line, driver: root });
+    return;
+  }
+  pushEffect(out, ctx, {
+    effectType: 'db_write',
+    op: 'unknown',
+    table: null,
+    opaque: true,
+    dynamicMember: true,
+    line,
+  });
 }
 
 function pushEffect(out, ctx, effect) {
@@ -2644,7 +2857,7 @@ function literalArg(arg) {
 
 function rootIdentifier(memberExpr) {
   let cur = memberExpr;
-  while (cur.type === 'MemberExpression') {
+  while (cur?.type === 'MemberExpression' || cur?.type === 'OptionalMemberExpression') {
     // `this.foo.bar()` — the effective root is the class field `foo`, so
     // class-based access (NestJS services, controller classes) is read like a
     // bare `foo.bar()`. Without this, everything rooted at `this` is invisible.
@@ -2652,7 +2865,7 @@ function rootIdentifier(memberExpr) {
       return cur.property.type === 'Identifier' ? cur.property.name : null;
     cur = cur.object;
   }
-  return cur.type === 'Identifier' ? cur.name : null;
+  return cur?.type === 'Identifier' ? cur.name : null;
 }
 
 // the name a member/identifier refers to, unwrapping `this.<field>` → `<field>`.

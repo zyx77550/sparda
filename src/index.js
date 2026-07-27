@@ -33,6 +33,9 @@ const opts = {
   installClaude: flags.has('--install-claude'),
   uninstallClaude: flags.has('--uninstall-claude'),
   markdown: flags.has('--markdown'),
+  apply: flags.has('--apply'),
+  revert: flags.has('--revert'),
+  principal: getOpt('principal', null),
   port: getOpt('port', null),
   out: getOpt('out', null),
   base: getOpt('base', null),
@@ -50,6 +53,8 @@ const opts = {
 // reads opts.cwd, so `--dir <path>` works on all of them; only per-command extras are listed.
 const HELP = {
   prove: `sparda prove [--dir <path>] [--json | --markdown]\n  The whole trust verdict: proof + coverage + a shareable seal.\n  --markdown  emit a sticky-PR-comment body (used by the GitHub Action).`,
+  falsify: `sparda falsify [--dir <path>] [--json]\n  Challenge the proof itself (Popper): ablate EVERY guard in memory (graph\n  surgery, no recompile) and demand the verifier re-derive a violation on each\n  route whose green depended on protection. A route that does not flip is a\n  HOLE — its verdict does not depend on its guards — and exits 1. Deterministic,\n  offline, O(graph): 200 counterfactuals on a 580-route app in ~100 ms.`,
+  enforce: `sparda enforce [--dir <path>] [--apply] [--revert] [--principal req.user] [--json]\n  Close the type-lock gap by SYNTHESIS (PARTIAL → PROVEN (ENFORCED)): each clean\n  mutation route resting on a guard SPARDA cannot verify gets a minimal boundary\n  check SPARDA CAN verify, inserted into the route's middleware chain. The edit\n  persists ONLY if the recompiled app proves PROVEN (else auto-rollback), and is\n  byte-for-byte reversible.\n  (default)    dry run — show the plan, write nothing.\n  --apply      write the checks, recompile, keep only a proven result.\n  --revert     restore the pre-enforce bytes (hash-verified).\n  --principal  the request member your auth middleware sets (default req.user).`,
   apocalypse: `sparda apocalypse [--dir <path>] [--sarif] [--proof] [--save-baseline]\n  Prove the deploy — exit 1 on any critical/high finding.\n  --sarif         also write .sparda/apocalypse.sarif for the Security tab.\n  --proof         also write .sparda/apocalypse.proof.json — a re-verifiable\n                  discharge trace (deny_path per guarded mutation) a third party\n                  can audit against the graph hash without re-compiling.\n  --save-baseline freeze this graph; later runs diff against it.`,
   gate: `sparda gate [--dir <path>] [--arm] [--hook] [--json]\n  The agent edit-loop gate: prove THIS edit lost no guard, dropped no route,\n  grew no blast radius — delta vs the armed baseline only (pre-existing state\n  never blocks an edit). Arms itself on first run.\n  --arm   accept the current graph as the new baseline.\n  --hook  Claude Code PostToolUse contract: silent when clean, report on\n          stderr + exit 2 (blocking feedback to the agent) on regression.\n  --install-claude    wire the gate into .claude/settings.json PostToolUse (one command).\n  --uninstall-claude  remove exactly that hook again (clean).`,
   ubg: `sparda ubg [--dir <path>] [--json] [--out <file>] [--openapi <spec>]\n  Compile the codebase to its Unified Behavior Graph (.sparda/ubg.json).`,
@@ -193,6 +198,16 @@ try {
       await runGate(opts);
       break;
     }
+    case 'enforce': {
+      const { runEnforce } = await import('./commands/enforce.js');
+      await runEnforce(opts);
+      break;
+    }
+    case 'falsify': {
+      const { runFalsify } = await import('./commands/falsify.js');
+      await runFalsify(opts);
+      break;
+    }
     case 'review': {
       const { runReview } = await import('./commands/review.js');
       await runReview(opts);
@@ -266,6 +281,8 @@ PROVE — the point
   prove        The whole trust verdict in one gesture: proof + coverage + seal (--json / --markdown / --openapi)
   apocalypse   Prove the deploy: guards, invariants, transactions, aggregates (--save-baseline)
   gate         The agent edit-loop gate: prove an edit lost no protection (--arm / --hook)
+  enforce      Synthesize the missing proof: insert a verifiable boundary check, PARTIAL → PROVEN (ENFORCED) (--apply / --revert)
+  falsify      Challenge the proof: ablate every guard in memory — each protected route must flip, or its green is a hole
   review       Semantic diff of a PR vs a base ref (--base main / --json / --markdown)
   blindspots   Map SPARDA's own blindness — every unseen route/effect/guard, ranked (--json)
   badge        Emit a shareable SVG badge + README snippet (verdict · coverage · routes)

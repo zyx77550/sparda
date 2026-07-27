@@ -1,0 +1,17 @@
+{
+  "name": "csop",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cross-Service Object-Ownership Proof — sound cross-service BOLA/IDOR detection",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/test/csop.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

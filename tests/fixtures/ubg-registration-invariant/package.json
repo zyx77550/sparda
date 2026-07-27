@@ -1,0 +1,2 @@
+{ "name": "ubg-registration-invariant-fixture", "private": true, "main": "src/app.js",
+  "dependencies": { "express": "^4.21.0", "@prisma/client": "^5.20.0" } }

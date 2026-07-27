@@ -36,6 +36,8 @@ const OP_BY_VERB = [
 export function extractMedusa(cwd, entryDir) {
   const routes = [];
   const skipped = [];
+  // the registration invariant (ADR-079): a route seen but unbindable is DECLARED
+  const unknownHandlers = [];
   const scannedFiles = [];
   const apiRoot = path.resolve(cwd, entryDir || 'src/api');
 
@@ -61,7 +63,25 @@ export function extractMedusa(cwd, entryDir) {
     for (const name of Object.keys(exportsByName)) {
       if (!HTTP.has(name)) continue;
       const fn = exportsByName[name].fn;
-      if (!fn) continue;
+      if (!fn) {
+        // The file EXPORTS the verb — the route exists and Medusa will serve it — but
+        // the handler could not be resolved to a body. Dropping it here lost the whole
+        // endpoint silently; the registration invariant (ADR-079) says declare it.
+        unknownHandlers.push({
+          kind: 'UnknownHandler',
+          via: `unresolved-route-export:${name.toLowerCase()}`,
+          target: name,
+          file: rel,
+          line: exportsByName[name].line,
+        });
+        skipped.push({
+          reason: `${name.toUpperCase()} exported by ${rel} but its handler did not resolve — the route exists and its behaviour is unseen`,
+          file: rel,
+          line: exportsByName[name].line,
+          risk: 'high',
+        });
+        continue;
+      }
       contributed = true;
       const method = name.toLowerCase();
       const line = exportsByName[name].line;
@@ -103,7 +123,14 @@ export function extractMedusa(cwd, entryDir) {
   }
 
   routes.sort((a, b) => cmp(a.path, b.path) || cmp(a.method, b.method));
-  return { routes, globalMiddlewares: [], helpers: [], skipped, scannedFiles };
+  return {
+    routes,
+    globalMiddlewares: [],
+    helpers: [],
+    skipped,
+    unknownHandlers,
+    scannedFiles,
+  };
 }
 
 // --- handler scan: real body effects + synthesized workflow effects ---------

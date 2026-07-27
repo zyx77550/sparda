@@ -58,6 +58,8 @@ const CORE_CRUD = [
 export function extractStrapi(cwd, entryDir) {
   const routes = [];
   const skipped = [];
+  // the registration invariant (ADR-079): a surface seen but unbindable is DECLARED
+  const unknownHandlers = [];
   const scannedFiles = [];
   const apiRoot = path.resolve(cwd, entryDir || 'src/api');
 
@@ -79,6 +81,25 @@ export function extractStrapi(cwd, entryDir) {
 
       for (const def of defs) {
         const controllerFn = resolveHandler(apiDir, def.handler);
+        // The route table DECLARES this endpoint, so Strapi will serve it; only its
+        // controller body escaped us. The route stays (a synthesized scan still models
+        // the core CRUD verb) but a hand-written handler we could not read is a real
+        // hole — declared rather than left to look like a resolved route.
+        if (!controllerFn && def.handler && !def.defaultVerb) {
+          unknownHandlers.push({
+            kind: 'UnknownHandler',
+            via: 'unresolved-controller',
+            target: def.handler,
+            file: rel,
+            line: def.line,
+          });
+          skipped.push({
+            reason: `Strapi route ${def.method ?? ''} ${def.path ?? ''} declares handler "${def.handler}" which did not resolve — its behaviour is unseen`,
+            file: rel,
+            line: def.line,
+            risk: 'high',
+          });
+        }
         const scan = scanHandler(controllerFn, def.defaultVerb, def.defaultTable);
         const chain = [];
         for (const guard of def.guards) {
@@ -115,7 +136,14 @@ export function extractStrapi(cwd, entryDir) {
 
   applyAuthPosture(routes);
   routes.sort((a, b) => cmp(a.path, b.path) || cmp(a.method, b.method));
-  return { routes, globalMiddlewares: [], helpers: [], skipped, scannedFiles };
+  return {
+    routes,
+    globalMiddlewares: [],
+    helpers: [],
+    skipped,
+    unknownHandlers,
+    scannedFiles,
+  };
 }
 
 // --- route-table reading ----------------------------------------------------

@@ -1,0 +1,23 @@
+{
+  "name": "sparda-launch-video",
+  "private": true,
+  "description": "SPARDA launch video (FR+EN, 9:16) — written in code with Remotion, rendered deterministically",
+  "scripts": {
+    "studio": "remotion studio",
+    "render:fr": "remotion render src/index.ts sparda-fr out/sparda-launch-fr.mp4",
+    "render:en": "remotion render src/index.ts sparda-en out/sparda-launch-en.mp4"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.0.0",
+    "@fontsource/jetbrains-mono": "^5.0.0",
+    "@fontsource/space-grotesk": "^5.0.0",
+    "@remotion/cli": "^4.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0"
+  }
+}

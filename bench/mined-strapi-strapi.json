@@ -1,0 +1,93 @@
+[
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "8c9f496b024547e2736fd11fa1f8f94a665a4e54",
+    "parent_commit": "434ca05133c6059fe318cc02ad40ec77b462a696",
+    "subject": "feat(admin): make admin auth cookie name configurable (#26931)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "ac07513fb6ecfe52ee831435a489e374b79d0597",
+    "parent_commit": "7c554df8208f884dd4405ee9b2891163be9e4d39",
+    "subject": "feat(cli): add security defaults to create-strapi-app templates (#2673",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "ac6c76c235167c88527fdfe0ec095479acc4ed86",
+    "parent_commit": "73a69e3c5d853bcf256f3760d233f723ba0da539",
+    "subject": "fix(admin): guard stale admin configuration (#26625)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "d0aba651ccc871ef33703f3521f8cb1bddd86f70",
+    "parent_commit": "9a73cf87a61e2db80b54fdeb5956acc3da8858ca",
+    "subject": "Merge remote-tracking branch 'origin/develop' into security/uuid-qs-ad",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "85e81cd8a8fabe3700a799c34087fcde28c8e9ab",
+    "parent_commit": "658bf576dd840a9cac3f73129c9578268760eaaf",
+    "subject": "docs(security): overhaul vulnerability reporting policy (#26393)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "6ed22b5cfafbc0572ff2eb37447a134c3f53625a",
+    "parent_commit": "1a0cb0750909ab1541140fe1dda8b55c7f272505",
+    "subject": "security(deps): upgrade multiple dependencies (#26326)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "8c649cc43b9208da7e5d730be7c58518888d6093",
+    "parent_commit": "6f0f395f04387b57060b3c3216f48eb658b8559d",
+    "subject": "fix(admin): batch content manager permission checks and reuse session ",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "1677ded1c6a24600bf5982e3f8e356fb0ec2af29",
+    "parent_commit": "af6252cd64c22d43d8fb7afab7328c4ab1fabdc8",
+    "subject": "fix(homepage): render widgets progressively and batch permission check",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "353a86a60deac91c7ba40ae51d1700d19056ef93",
+    "parent_commit": "b487698e1056b0dafd7e91d5719d3bf89059bae7",
+    "subject": "security: package upgrades to remove deprecated versions of boolean, t",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "90dab7c990f450b245b4d40bc7be47cc752a950a",
+    "parent_commit": "a4f2bb5e4ea49da2aa37f6783cbfbf2aa9fdbaf8",
+    "subject": "security(deps): upgrade multiple dependencies (#25506)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "91f3ae970fe679dc0b1aa20eed15d1ebe84c0a6b",
+    "parent_commit": "ddfa7a6cd3b1abe9b239605b7ed52ab5ed0ef6bb",
+    "subject": "enhancement: cookie security configuration (#24524)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "f22331fa56fa7635505cfdeedefe6dd31aa3e216",
+    "parent_commit": "954e7b08b982c9b314619da46396fafb98fc9895",
+    "subject": "Chore: security policy for supported versions and exclusions (#24314)",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "strapi/strapi",
+    "fix_commit": "24165c9d5cbc756c03fe23bc491569c77973f5ac",
+    "parent_commit": "8f958d1f876cb398ec70aceabdd861d312b2a514",
+    "subject": "chore: document the permission checker service (#22922)",
+    "verdict": "no-routes"
+  }
+]

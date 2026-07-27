@@ -10,7 +10,7 @@
 //   sparda blindspots --json     the raw survey for tooling
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
 
 const ICON = { critical: '✗', high: '✗', medium: '⚠', low: '·' };
 
@@ -30,7 +30,7 @@ export async function runBlindspots(opts) {
       `  ${surface} blind spot(s): ${byRisk.high + byRisk.critical} high+, ${byRisk.medium} medium, ${byRisk.low} low`,
     );
     console.log(
-      `  coverage ${(coverage.ratio * 100).toFixed(1)}% — ${coverage.resolved} behaviors resolved, ${coverage.blind} left unseen`,
+      `  coverage ${coveragePct(coverage.ratio, 1)} — ${coverage.resolved} behaviors resolved, ${coverage.blind} left unseen`,
     );
     if (surface === 0) {
       console.log(

@@ -70,12 +70,16 @@ export function detectStack(cwd) {
       // An app with no other framework marker keeps the original error (E-028's
       // tree-scan fallback already ran inside findExpressEntry).
       try {
-        const entryFile = findExpressEntry(cwd, pkg);
+        const { entryFile, entryCandidates } = findExpressEntry(cwd, pkg);
         const moduleType = detectModuleType(cwd, pkg, entryFile);
         const port = detectExpressPort(cwd, entryFile);
         return {
           framework: 'express',
           entryFile,
+          // present only when the entry was GUESSED by the fallback tree search among
+          // several files that call express(). The whole analysis is about whichever
+          // one we picked, so the doubt travels with the result instead of vanishing.
+          ...(entryCandidates?.length > 1 ? { entryCandidates } : {}),
           moduleType,
           port,
           expressVersion: deps.express,
@@ -551,7 +555,7 @@ function findExpressEntry(cwd, pkg) {
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       const src = fs.readFileSync(abs, 'utf8');
       if (/express\s*\(/.test(src))
-        return path.relative(cwd, abs).split(path.sep).join('/');
+        return { entryFile: path.relative(cwd, abs).split(path.sep).join('/') };
     }
   }
   // No standard-named entry matched — the app's entry is a non-conventional file
@@ -559,7 +563,7 @@ function findExpressEntry(cwd, pkg) {
   // file that actually creates the app (a bare `express()` call), the same fallback
   // FastAPI detection already uses. Ranked so a real server (`.listen()`) wins.
   const found = searchExpressEntry(cwd);
-  if (found) return found;
+  if (found) return { entryFile: found.rel, entryCandidates: found.candidates };
   throw err(
     'Could not locate your Express entry file (the one calling express()).',
     'Re-run from the project root, or open an issue with your layout.',
@@ -571,6 +575,11 @@ function findExpressEntry(cwd, pkg) {
 // real server entry) beats a library file; then shallower path; then alphabetical —
 // deterministic. Caps the number of files read so a giant repo can't stall detection.
 function searchExpressEntry(cwd) {
+  // Directories that CANNOT hold the application's entry point. Measured omission:
+  // on the parse-server repository the fallback search picked
+  // `benchmark/performance.js` — a load-test harness that calls `express()` — so the
+  // whole analysis was about the wrong program, silently. A benchmark, a script, a
+  // doc sample or a fixture is never the app.
   const EXCLUDE = new Set([
     'node_modules',
     '.git',
@@ -585,6 +594,19 @@ function searchExpressEntry(cwd) {
     'spec',
     'examples',
     'example',
+    'benchmark',
+    'benchmarks',
+    'bench',
+    'perf',
+    'scripts',
+    'docs',
+    'doc',
+    'fixtures',
+    '__fixtures__',
+    '__mocks__',
+    'mocks',
+    'e2e',
+    'integration',
   ]);
   const APP_CALL = /(?<![.\w])express\s*\(\s*\)/; // `express()` app factory
   // Conventional entry basenames get their OWN budget, so a giant's entry is found no
@@ -638,7 +660,10 @@ function searchExpressEntry(cwd) {
   const bucket = nameMatches.length ? nameMatches : otherMatches;
   if (!bucket.length) return null;
   bucket.sort(rank);
-  return bucket[0].rel;
+  // The fallback search is a GUESS, not a reading: several files in a repository can
+  // call `express()`. Report the competition so the caller can declare the doubt
+  // instead of presenting one arbitrary winner as fact.
+  return { rel: bucket[0].rel, candidates: bucket.map((b) => b.rel) };
 }
 
 function detectModuleType(cwd, pkg, entryFile) {

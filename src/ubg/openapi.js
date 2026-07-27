@@ -12,7 +12,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const VERBS = new Set(['get', 'post', 'put', 'patch', 'delete']);
+// Every operation an OpenAPI path item may declare. Dropping options/head/trace
+// silently discarded declared surface from the spec — the whole point of the
+// OpenAPI lowering is that the spec IS the declaration.
+// Path-item members that are NOT operations (OpenAPI 3.x §4.8.9).
+const NON_OPERATION = new Set([
+  'summary',
+  'description',
+  'servers',
+  'parameters',
+  '$ref',
+]);
+
+const VERBS = new Set([
+  'get',
+  'post',
+  'put',
+  'patch',
+  'delete',
+  'options',
+  'head',
+  'trace',
+]);
 
 const err = (message, hint) => Object.assign(new Error(message), { code: 'USER', hint });
 
@@ -36,12 +57,31 @@ export function extractOpenAPI(cwd, specPath) {
 
   const sourceFile = path.relative(cwd, abs).split(path.sep).join('/');
   const skipped = [];
+  // the registration invariant (ADR-079): declared surface we do not model is DECLARED
+  const unknownHandlers = [];
   const routes = [];
   const securitySchemes = Object.keys(spec.components?.securitySchemes ?? {}).sort();
   const globalSecurity = (spec.security ?? []).flatMap((s) => Object.keys(s));
 
   for (const [rawPath, item] of Object.entries(spec.paths).sort()) {
     if (typeof item !== 'object' || item === null) continue;
+    // An operation key the lowering does not model. The spec DECLARES this endpoint —
+    // that is the entire premise of the OpenAPI lowering — so dropping it would discard
+    // declared surface, the one thing this reader exists to honour.
+    for (const key of Object.keys(item).sort()) {
+      if (VERBS.has(key) || NON_OPERATION.has(key) || key.startsWith('x-')) continue;
+      unknownHandlers.push({
+        kind: 'UnknownHandler',
+        via: `unmodelled-operation:${key}`,
+        target: rawPath,
+        file: sourceFile,
+      });
+      skipped.push({
+        reason: `the spec declares operation "${key}" on ${rawPath}, which this lowering does not model — declared surface left out of the graph`,
+        file: sourceFile,
+        risk: 'high',
+      });
+    }
     for (const verb of [...VERBS].sort()) {
       const op = item[verb];
       if (!op) continue;
@@ -95,6 +135,7 @@ export function extractOpenAPI(cwd, specPath) {
     globalMiddlewares: [],
     helpers: [],
     skipped,
+    unknownHandlers,
     scannedFiles: [sourceFile],
   };
 }

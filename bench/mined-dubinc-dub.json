@@ -1,0 +1,38 @@
+[
+  {
+    "repo": "dubinc/dub",
+    "fix_commit": "f587f190fe9fbaabd9940627752d36bf2cbc3a9b",
+    "parent_commit": "be4905069297e5afbde6c9b0938395930d64a23d",
+    "subject": "Guard in recordClickCache (#3567)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "dubinc/dub",
+    "fix_commit": "f53db546730e81827dbfb837daea3d354418324a",
+    "parent_commit": "583ba120e6fbedb0e9caeeb6998566ef1255cafa",
+    "subject": "Implement runtime cache to guard against traffic spikes (#3541)",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "dubinc/dub",
+    "fix_commit": "821f94d690e1f986414fb9353a5ed24a2915f8b3",
+    "parent_commit": "87eee4df91b74ee46d71e81caae6b2b500e0182b",
+    "subject": "Enhance Stripe integration by adding token validation and authorizatio",
+    "diff_hit": null,
+    "static_hit": "OBJECT_SCOPE_UNPROVEN",
+    "verdict": "flagged-weak"
+  },
+  {
+    "repo": "dubinc/dub",
+    "fix_commit": "f62eab49204791629e40b658da29f4bf0bc7f15f",
+    "parent_commit": "7cc2a1e63d1e0b06a51163c27792444d5ad47eed",
+    "subject": "fix: Bitly OAuth callback does not perform authentication",
+    "diff_hit": null,
+    "static_hit": "UNGUARDED_MUTATION",
+    "verdict": "flagged-weak"
+  }
+]

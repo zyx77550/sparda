@@ -1,0 +1,8 @@
+{
+  "name": "ubg-broken-entry-fixture",
+  "private": true,
+  "main": "src/app.js",
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

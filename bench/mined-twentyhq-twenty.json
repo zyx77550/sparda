@@ -1,0 +1,137 @@
+[
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "dd9763a7a0315f28471365fe4f79cc010c18429a",
+    "parent_commit": "f4b2968a749565a7a1a681c8e16e7b941fe3ef9a",
+    "subject": "Allow workflow run control mutations to be called with API key auth (#",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "4e43a0fb4e88dab0885147fe7a2199e8b3d24f71",
+    "parent_commit": "59c16ef46f0bb8f9126f60d9474ed1792daeff23",
+    "subject": "refactor(server): regroup application resolvers by resource and unify ",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "e2df785aece3ea69c874c9c329f679edbfb456a7",
+    "parent_commit": "2eef2f12be3273fb743e51515336eea6857310dd",
+    "subject": "fix(security): bump http-proxy-middleware to 3.0.7 (multipart field in",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "6a1b28bc124704ae3dbee372c3f9648aa368a95f",
+    "parent_commit": "880e7144ecd3ec06a67dd1f044d01ed0c9871e6c",
+    "subject": "feat(auth): collect the workspace logo on the sign-up creation step (#",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "9001078cb21306e82c0dd0d627c0769f60d2bbf2",
+    "parent_commit": "b8329e3e79d038a68a77445302eeec8d019774a6",
+    "subject": "fix(cli): detect expired token on deploy and offer interactive re-auth",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "9100fb1e9f6844f0c4a1e35f7e82d65c14347e4f",
+    "parent_commit": "9d7f0c405f6b802f317b63533ae7d877c3fbbd9d",
+    "subject": "security: scoped resolution for webpack-dev-server 5.2.4 (Dependabot a",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "217e1f5ab38cfd3f9f8be23725ea2b63fa228177",
+    "parent_commit": "3c81566d65b873390a53b6610e6f3724e8cbe9d3",
+    "subject": "security: clear immutable High alert via @graphql-codegen typescript p",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "d2f30e0513ad38b4eeb48d0ab271a9488c0f6872",
+    "parent_commit": "ca4fc5615fdf47ebf96c689116a0b7856eb2436b",
+    "subject": "security: clear fast-uri + fast-xml-parser High alerts (lockfile only)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "0d8d463a44dc9a1be22c10643e66cf04966e4b32",
+    "parent_commit": "06d68f665dfc368554c4822fdc35b524b8f9b0a7",
+    "subject": "security: clear all High minimatch Dependabot alerts via parent bumps ",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "37b986aa4b9b5606267eccffa05467f04c2a9a75",
+    "parent_commit": "a0fb1578995a1e7be0a519e7112c134453735f7d",
+    "subject": "security: vendor @genql/cli codegen to drop undici/native-fetch (#2133",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "865ca697ca69b623b3d798c4255dc6171f6c6a6b",
+    "parent_commit": "ebfaca5b3d8e2178ea9ab32e82751184a160c032",
+    "subject": "Fix AI permission gating: use Ask AI for chat UI, AI Settings for admi",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "dbc033b29b3b292046b219029960fe631b70b065",
+    "parent_commit": "72f857fc1055f2985ed2c6944c064735826a873f",
+    "subject": "fix(auth): exclude /authorize from MinimalMetadataGater loading gate (",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "49b966042080739de19ed94c36d0daa124ee78c0",
+    "parent_commit": "2a9fef23419cb964261c4e9ed216dda3493c3d87",
+    "subject": "fix(auth): preserve returnToPath across Google/Microsoft SSO redirects",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "cb6953abe35cec54e888c66f870b2df1fcb2e9d1",
+    "parent_commit": "9bc803d0c7d90d01d7ad12fca17bb2eda07a430a",
+    "subject": "fix(server): make OAuth discovery and MCP auth metadata host-aware (#1",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "twentyhq/twenty",
+    "fix_commit": "6d4d1a97bc8aaec501589887bfcae51683d67ce0",
+    "parent_commit": "8ccaf635bc242edd1d90ba8b84acf4c58c82bbfc",
+    "subject": "Migrate object permission to syncable entity (#18609)",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  }
+]

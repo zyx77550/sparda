@@ -8,7 +8,10 @@ import path from 'node:path';
 import { parseModule, resolveExportedFunction, scanFunction } from './extract.js';
 import { walkCalls } from './resolve.js';
 
-const VERBS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+// Every method the App Router lets a route file export. OPTIONS and HEAD were
+// missing, so a route file whose ONLY export was one of them read as no route at
+// all — the Next twin of the ghost-verb class (E-067).
+const VERBS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
 
 // Read `export const config = { matcher: "…" | ["…", …] }` from a middleware module.
 // Returns { patterns: string[]|null, unresolved: boolean }. patterns=null means no
@@ -87,13 +90,20 @@ const ROUTE_FILES = new Set([
   'route.jsx',
   'route.tsx',
 ]);
-const EXCLUDE = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.sparda']);
+// Inside `app/`, a directory name is a URL SEGMENT — nothing else. `dist` and `build`
+// used to sit in this set, so `app/dist/route.ts` (which Next serves at `/dist`, the
+// name meaning nothing to it) was skipped without a route, a skip or an unknown handler:
+// invisible on all three channels. Only build artefacts that could never be a segment
+// anyone routes on stay excluded.
+const EXCLUDE = new Set(['node_modules', '.git', '.next', '.sparda']);
 
 export function extractNext(cwd, appDir) {
   const routes = [];
   const globalMiddlewares = [];
   const helpers = [];
   const skipped = [];
+  // the registration invariant (ADR-079): a surface seen but unbindable is DECLARED
+  const unknownHandlers = [];
   const scannedFiles = [];
   const seen = new Set();
 
@@ -102,7 +112,23 @@ export function extractNext(cwd, appDir) {
     const abs = path.resolve(cwd, mwName);
     if (!fs.existsSync(abs)) continue;
     const mod = parseModule(abs);
-    if (mod.error) continue;
+    if (mod.error) {
+      // The middleware file IS the app's global guard. Losing it silently is the worst
+      // direction of all: every route then reads as unguarded (noise) or, if another
+      // guard covers them, the app reads clean over a protection SPARDA never verified.
+      skipped.push({
+        reason: `${mod.error} in ${rel(abs)} — this file is the app's global middleware, so its protection is entirely unread`,
+        file: rel(abs),
+        risk: 'high',
+      });
+      unknownHandlers.push({
+        kind: 'UnknownHandler',
+        via: 'unparseable-middleware',
+        target: rel(abs),
+        file: rel(abs),
+      });
+      continue;
+    }
     const fn = mod.functions.get('middleware') ?? mod.functions.get('default');
     if (fn) {
       // `export const config = { matcher: [...] }` scopes which paths the middleware
@@ -126,7 +152,7 @@ export function extractNext(cwd, appDir) {
 
   walk(path.resolve(cwd, appDir), []);
   routes.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
-  return { routes, globalMiddlewares, helpers, skipped, scannedFiles };
+  return { routes, globalMiddlewares, helpers, skipped, unknownHandlers, scannedFiles };
 
   function walk(dir, segments) {
     let items;
@@ -145,6 +171,7 @@ export function extractNext(cwd, appDir) {
             reason: `parallel route slot ${name} — not a URL segment, skipped`,
             file: rel(abs),
           });
+          declareUnrouted(abs, `inside parallel route slot ${name}`);
           continue;
         }
         if (/^\(\.{1,3}\)/.test(name)) {
@@ -152,6 +179,7 @@ export function extractNext(cwd, appDir) {
             reason: `intercepting route ${name} — UI-layer routing, skipped`,
             file: rel(abs),
           });
+          declareUnrouted(abs, `inside intercepting route ${name}`);
           continue;
         }
         if (/^\[\[\.\.\..+\]\]$/.test(name) || /^\[\.\.\..+\]$/.test(name)) {
@@ -159,6 +187,7 @@ export function extractNext(cwd, appDir) {
             reason: `catch-all segment ${name} — variable-arity paths not supported`,
             file: rel(abs),
           });
+          declareUnrouted(abs, `under catch-all segment ${name}`);
           continue;
         }
         if (/^\(.+\)$/.test(name)) {
@@ -177,6 +206,57 @@ export function extractNext(cwd, appDir) {
         parseServerActions(abs);
       }
     }
+  }
+
+  // A directory shape the URL builder cannot express (a catch-all segment, a parallel
+  // slot, an intercepting route) stops the walk — but the `route.ts` files UNDER it are
+  // still modules that export HTTP verbs, and for the catch-all at least Next really
+  // does serve them. Stopping silently made the whole subtree vanish: no route, no
+  // unknown handler, and a directory-level skip with no risk, i.e. below `blindHigh` and
+  // therefore unable to stop a PROVEN. Measured on the `nextjs-basic` fixture, where
+  // `app/api/docs/[...slug]/route.js` served GET and appeared nowhere.
+  //
+  // The registration invariant (ADR-079) does not care that the PATH is inexpressible:
+  // the registration exists, so it is declared, once per exported verb, at a risk that
+  // bars PROVEN. The route is deliberately NOT synthesized — SPARDA does not know the
+  // URL, and inventing one would misplace every guard judgement about it.
+  function declareUnrouted(dirAbs, why) {
+    for (const absFile of walkRouteFiles(dirAbs)) {
+      const relFile = rel(absFile);
+      const mod = parseModule(absFile);
+      const verbs = mod.error ? [] : [...verbHandlers(mod).keys()].sort();
+      const items = verbs.length ? verbs : ['<unreadable>'];
+      for (const verb of items) {
+        unknownHandlers.push({
+          kind: 'UnknownHandler',
+          via: `unrouted-segment:${verb}`,
+          target: verb,
+          file: relFile,
+        });
+        skipped.push({
+          reason: `${verb.toUpperCase()} exported by ${relFile} ${why} — the handler exists and SPARDA cannot bind its URL, so its behaviour is unseen`,
+          file: relFile,
+          risk: 'high',
+        });
+      }
+    }
+  }
+
+  function walkRouteFiles(dirAbs, out = []) {
+    let items;
+    try {
+      items = fs.readdirSync(dirAbs, { withFileTypes: true });
+    } catch {
+      return out;
+    }
+    for (const item of items.sort((a, b) => a.name.localeCompare(b.name))) {
+      const abs = path.join(dirAbs, item.name);
+      if (item.isDirectory()) {
+        if (EXCLUDE.has(item.name)) continue;
+        walkRouteFiles(abs, out);
+      } else if (ROUTE_FILES.has(item.name)) out.push(abs);
+    }
+    return out;
   }
 
   // A server action = an exported async function in a `'use server'` MODULE, or any async function

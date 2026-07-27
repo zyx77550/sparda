@@ -1,0 +1,15 @@
+{
+  "//": "SPARDA x Claude Code — prove what the AI just wrote, every turn. Merge this into your project's .claude/settings.json (or copy the hook block). It runs `sparda review` after each Claude Code turn and prints the behavior diff of the changes to the transcript. Requires `sparda-mcp` installed in the project (npm i -D sparda-mcp) and this repo's sparda-prove.mjs copied to .claude/sparda-prove.mjs. The hook never blocks the loop and always exits 0.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/sparda-prove.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "openapi": "3.2.0",
+  "info": { "title": "ghost", "version": "1.0.0" },
+  "paths": {
+    "/reports": {
+      "summary": "Reporting surface",
+      "get": {
+        "operationId": "listReports",
+        "responses": { "200": { "description": "ok" } }
+      },
+      "query": {
+        "operationId": "queryReports",
+        "responses": { "200": { "description": "ok" } }
+      }
+    }
+  }
+}

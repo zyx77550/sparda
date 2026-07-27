@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "node": "v24.5.0",
+    "platform": "win32 x64",
+    "cpus": "Intel(R) Pentium(R) CPU 2020M @ 2.40GHz",
+    "when": "2026-06-23T21:47:36.467Z"
+  },
+  "proxyOverhead": {
+    "n": 3000,
+    "direct": {
+      "p50": 1.6110000000007858,
+      "p95": 10.469099999998434,
+      "p99": 20.984599999999773,
+      "mean": 3.5000822999999905
+    },
+    "mcp": {
+      "p50": 4.2959999999984575,
+      "p95": 18.212200000001758,
+      "p99": 56.43899999999849,
+      "mean": 8.664979466666626
+    },
+    "overheadP50": 2.6849999999976717,
+    "overheadP95": 7.743100000003324
+  },
+  "flywheelOn": {
+    "warmupCalls": 4,
+    "armed": true,
+    "served": {
+      "p50": 1.2370000000009895,
+      "p95": 41.65380000000005,
+      "p99": 96.17250000000058,
+      "mean": 7.725961400000102
+    },
+    "hitRateInBurst": 1,
+    "flywheel": {
+      "servedFromMemory": 501,
+      "armed": 1
+    }
+  },
+  "flywheelOff": {
+    "served": {
+      "p50": 14.809900000000198,
+      "p95": 25.31970000000001,
+      "p99": 67.59530000000086,
+      "mean": 18.393087800000327
+    },
+    "hitRateInBurst": 0
+  },
+  "mixed": {
+    "pattern": "1 pure read + 1 volatile read per round",
+    "rounds": 200,
+    "total": 400,
+    "served": 200,
+    "sharePct": 50
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "sparda-gate",
+  "version": "0.1.0",
+  "description": "The behavior gate for AI edits — proves each edit lost no auth guard, dropped no route, and grew no blast radius. Deterministic, <2s, offline, zero API key.",
+  "author": { "name": "Residual Labs", "url": "https://github.com/zyx77550/sparda" },
+  "homepage": "https://github.com/zyx77550/sparda",
+  "keywords": ["security", "proof", "guard", "authorization", "behavior", "gate"],
+  "hooks": "./hooks/hooks.json"
+}

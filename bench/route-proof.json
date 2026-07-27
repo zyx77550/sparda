@@ -1,0 +1,32 @@
+{
+  "when": "2026-07-17",
+  "node": "v22.22.2",
+  "repos": [
+    {
+      "name": "dub",
+      "routes": 579,
+      "verdict": "NOT_PROVEN",
+      "ms": 2052,
+      "floor": 400
+    },
+    {
+      "name": "immich",
+      "routes": 281,
+      "verdict": "NOT_PROVEN",
+      "ms": 1146,
+      "floor": 200
+    },
+    {
+      "name": "medusa",
+      "routes": 477,
+      "verdict": "PROVEN",
+      "ms": 665,
+      "floor": 400
+    }
+  ],
+  "totals": {
+    "routes": 1337,
+    "crashes": 0,
+    "slowestMs": 2052
+  }
+}

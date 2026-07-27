@@ -23,6 +23,23 @@ import { cmp } from './schema.js';
 const RISK_RANK = { critical: 0, high: 1, medium: 2, low: 3 };
 const MUTATING_VERB = /\b(post|put|patch|delete)\b/i;
 
+// A FATAL skip loses a WHOLE FILE, not one construct: the parser refused it, the
+// bytes were unreadable, or a size cap rejected it. Everything that file declared —
+// possibly dozens of unguarded mutations — is outside the graph, and nothing else in
+// the report can hint at what was lost.
+//
+// The default risk heuristic reads the skip's TEXT for a mutating verb, and a parse
+// error never contains one, so a lost file used to score `medium` — below `blindHigh`,
+// therefore unable to stop the verdict. Measured consequence: an app whose admin
+// router failed to parse read a bare PROVEN at 66.7% coverage while an unguarded
+// deleteMany sat in the unparsed file. Losing a file is never a medium event: the
+// size of the hole is precisely what SPARDA cannot know.
+const FATAL_SKIP =
+  /\b(parse error|unreadable|size cap|unmodelable|encoding|could not read)\b/i;
+function isFatalSkip(reason) {
+  return FATAL_SKIP.test(reason);
+}
+
 // An effect whose target SPARDA could not resolve to a concrete (or symbolic) name.
 // A `symbolic` table (`:collection`, param-derived) is NOT opaque — it is a precise
 // answer expressed as a rule, so it is deliberately excluded.
@@ -111,11 +128,17 @@ export function surveyBlindspots(graph, report = {}) {
   }
 
   // 4 — skipped surface: routes/handlers/mounts the extractor could not graph at all.
+  // An extractor that KNOWS how dangerous its own skip is says so (`risk` on the entry:
+  // conditional registrations, resource-limit truncations, dynamic registrations, budget
+  // exhaustion); a FATAL skip is forced to high regardless; otherwise the mutating-verb
+  // heuristic decides.
   for (const s of report.skipped ?? []) {
     const reason = s.reason ?? '';
     spots.push({
       kind: 'skipped-surface',
-      risk: MUTATING_VERB.test(reason) ? 'high' : 'medium',
+      risk:
+        s.risk ??
+        (isFatalSkip(reason) ? 'high' : MUTATING_VERB.test(reason) ? 'high' : 'medium'),
       location: s.file ? `${s.file}${s.line ? `:${s.line}` : ''}` : null,
       label: reason,
       why: 'a surface the static walk could not bring into the graph — its behavior is entirely unseen',
@@ -144,13 +167,25 @@ export function surveyBlindspots(graph, report = {}) {
       s.kind === 'skipped-surface',
   ).length;
   const denom = resolved + blindBehavior;
+  // 0/0 is NOT 100%: zero behaviors resolved out of zero seen is the ABSENCE of a
+  // measurement, not a perfect one (E-064). The ratio is null ("unknown") and the
+  // verdict layer treats it as measured-but-unknown — a state that can never carry
+  // PROVEN. The golden rule: absence of proof is never proof.
   const coverage = {
     resolved,
     blind: blindBehavior,
-    ratio: denom === 0 ? 1 : Math.round((resolved / denom) * 1000) / 1000,
+    ratio: denom === 0 ? null : Math.round((resolved / denom) * 1000) / 1000,
+    ...(denom === 0 ? { unknown: true } : {}),
   };
 
   return { surface: spots.length, byRisk, coverage, spots };
+}
+
+// The ONE way a coverage ratio becomes text. null = 0/0 = unknown — every display
+// surface must say the word, never coerce null into a number (null*100 is 0 in JS,
+// which would turn "unknown" into a confident-looking 0%).
+export function coveragePct(ratio, digits = 0) {
+  return ratio == null ? 'unknown' : `${(ratio * 100).toFixed(digits)}%`;
 }
 
 // resolved behavior = state nodes + effects whose target IS known (concrete or symbolic).

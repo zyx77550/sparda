@@ -30,11 +30,49 @@ import { matcherCovers } from './nextjs.js';
 // actually covers. No matcher → every path (Next default). A matcher present but
 // unresolved, or one that resolves to "not covered", → do NOT attribute (an
 // unproven guard is never fabricated — SOUNDNESS.md, no false PROVEN).
-function middlewareAppliesTo(mw, routePath) {
+function middlewareAppliesTo(mw, route) {
+  // Sequential scope (E-061): the framework reads setup top-to-bottom — a use()
+  // declared AFTER a route never runs for that route, so crediting it would fabricate
+  // protection out of thin air. Comparable only when BOTH sides carry an order stamp
+  // (one extractor run); an unstamped side keeps the prior semantics. Monotone in the
+  // safe direction: this check can only WITHHOLD credit, never add it.
+  if (mw.order != null && route.order != null) {
+    if (mw.order > route.order) return false;
+    // Same mount position → compare the position WITHIN the file. Every route in a
+    // mounted router shares the mount's order, so without this a `router.use(auth)`
+    // written at the bottom of that file would be credited to the routes above it.
+    if (
+      mw.order === route.order &&
+      mw.orderIn != null &&
+      route.orderIn != null &&
+      mw.orderIn > route.orderIn
+    )
+      return false;
+  }
+  // Path scope (Z6): `app.use('/api', mw)` runs ONLY under that prefix. Crediting it
+  // beyond the prefix fabricates protection — the Express twin of the Next matcher sin
+  // (E-NEXT-MW). Express matches the prefix itself and anything below it, never a mere
+  // string prefix of a longer segment (`/api` does not cover `/apikeys`).
+  if (mw.pathPrefix && !pathCoveredBy(mw.pathPrefix, route.path)) return false;
   if (mw.role !== 'middleware' || mw.matcherPatterns == null) {
     return !mw.matcherUnresolved; // no matcher = all paths; unresolved matcher = abstain
   }
-  return matcherCovers(mw.matcherPatterns, routePath) === true;
+  return matcherCovers(mw.matcherPatterns, route.path) === true;
+}
+
+// RFC 9110 §9.2.1 safe methods: they are not expected to change state, so an
+// entrypoint using one carries no mutation obligation. This is a SET, not
+// `method !== 'get'`, because the extractors now model OPTIONS/HEAD/TRACE too —
+// and reading a CORS pre-flight handler as a mutation would flood every real app
+// with false criticals. A safe method that DOES write still surfaces: the write
+// itself is an effect, and O1 fires on the effect, not on the verb.
+const SAFE_METHOD = new Set(['get', 'head', 'options', 'trace']);
+
+// Express mount semantics: `/api` covers `/api` and `/api/**`, but not `/apikeys`.
+function pathCoveredBy(prefix, routePath) {
+  if (routePath === prefix) return true;
+  const base = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  return routePath.startsWith(base);
 }
 
 // Is this chain step / helper a REAL guard? Named or deny-bodied like a guard, and
@@ -155,7 +193,7 @@ function translateRoute(
         method: route.method,
         path: route.path,
         inputs: route.params,
-        mutating: route.method !== 'get',
+        mutating: !SAFE_METHOD.has(route.method.toLowerCase()),
         ...(route.description ? { description: route.description } : {}),
       },
     ),
@@ -163,9 +201,7 @@ function translateRoute(
 
   // global middlewares run before route-level ones — same chain, lower order —
   // but only those whose matcher actually covers this route's path (E-NEXT-MW)
-  const applicable = globalMiddlewares.filter((mw) =>
-    middlewareAppliesTo(mw, route.path),
-  );
+  const applicable = globalMiddlewares.filter((mw) => middlewareAppliesTo(mw, route));
   const fullChain = [...applicable, ...route.chain];
   let prevId = epId;
   let order = 0;
@@ -333,6 +369,10 @@ function attachBody(graph, ownerId, scan, helperByName, scanCache, expanded) {
           // opaque persistence write (ADR-068): a proven-handle call with an unknown method/table
           // — fires the guard obligation (O1) with no table, never O2/O3 precision.
           ...(eff.opaque ? { opaque: true } : {}),
+          // …and WHY it is opaque: a computed member (`prisma.note[OP]()`) whose method
+          // name is not statically readable. Carried so the ledger can say which kind of
+          // blindness it is, rather than lumping it with an unknown-but-named method.
+          ...(eff.dynamicMember ? { dynamicMember: true } : {}),
           ...(eff.target ? { target: eff.target } : {}),
           ...(eff.driver ? { driver: eff.driver } : {}),
           ...(eff.httpMethod ? { httpMethod: eff.httpMethod } : {}),

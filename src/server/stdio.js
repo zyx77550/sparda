@@ -30,6 +30,8 @@ import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, diffGraphs, verdictOf, verdictState } from '../ubg/apocalypse.js';
 import { surveyBlindspots } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { witnessTargets, admitWitnesses } from '../ubg/witness.js';
 
 const EVENT_POLL_MS = Number(process.env.SPARDA_EVENT_POLL_MS ?? 5000);
 
@@ -75,6 +77,7 @@ const SPARDA_VERSION = (() => {
 const DIAGNOSIS_TOKENS = 120;
 const SEMANTIC_TOKENS = 1500;
 const CRYSTAL_TOKENS = 150; // naming a crystallized circuit: once per circuit, ever
+const WITNESS_TOKENS = 800; // proposing ownership witnesses: hints only, never trusted
 
 export async function startStdioBridge({ cwd, portOverride }) {
   // pitfall #1: neutralize any stray console.log from deps
@@ -387,6 +390,30 @@ export async function startStdioBridge({ cwd, portOverride }) {
         },
       },
       {
+        name: 'sparda_witness',
+        description:
+          "Generate-and-check for object-level authorization (BOLA/IDOR, OWASP API #1). Call with no arguments to list the routes where sparda_prove could not prove an ownership scope (O7 advisories). If you can SEE the ownership check in the code (an inline `if (row.ownerId !== req.user.id) deny`, or a helper call like `assertOwner(row.ownerId, req.user.id)`), call again with hints: [{route, file, line}] naming where it lives. SPARDA re-proves every claim deterministically against the AST — a wrong location, a compare against attacker-controlled input, or a check that doesn't deny is REJECTED; nothing is taken on your word. Discharged routes are reported with an auditable 'generator+verified' provenance. Advisory-only: never changes the verdict.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            hints: {
+              type: 'array',
+              description:
+                'Proposed ownership witnesses. Each: {route: substring of the flagged route label, file: path relative to the app root, line: 1-based line where the ownership check (if-compare or helper call) STARTS}.',
+              items: {
+                type: 'object',
+                properties: {
+                  route: { type: 'string' },
+                  file: { type: 'string' },
+                  line: { type: 'integer' },
+                },
+                required: ['route', 'file', 'line'],
+              },
+            },
+          },
+        },
+      },
+      {
         name: 'sparda_confirm',
         description:
           'Confirms a pending write or delete operation gated by human-in-the-loop policies using its confirmation token.',
@@ -458,7 +485,49 @@ export async function startStdioBridge({ cwd, portOverride }) {
       );
     }
     if (name === 'sparda_prove') {
-      return text(JSON.stringify(proveApp(cwd, { route: args.route }), null, 2));
+      return text(JSON.stringify(await proveApp(cwd, { route: args.route }), null, 2));
+    }
+    if (name === 'sparda_witness') {
+      let hints = args.hints;
+      let generator = Array.isArray(hints) && hints.length ? 'caller' : null;
+      // No hints supplied → if the client exposes MCP sampling, ask ITS model to propose
+      // them (the untrusted-generator half of ADR-074; the host never pays, Law 1). The
+      // proposals buy nothing by themselves: witnessApp re-proves every one against the
+      // AST, so a hallucinated location or a spoof is rejected exactly like a caller hint.
+      let probe = null;
+      if (!generator && server.getClientCapabilities()?.sampling) {
+        probe = witnessApp(cwd, {});
+        if (probe.advisories > 0) {
+          try {
+            const res = await server.createMessage({
+              messages: [
+                {
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: `These routes access an object by a request-supplied id and SPARDA could not prove an ownership scope on their resolved path:\n${probe.targets.map((t) => `- ${t.route}`).join('\n')}\n\nSearch the app source for where each route enforces ownership — an inline compare (\`if (row.ownerId !== req.user.id) deny\`) or a helper call (\`assertOwner(row.ownerId, req.user.id)\`). Reply with ONLY JSON: {"hints": [{"route": "<flagged route substring>", "file": "<path relative to app root>", "line": <1-based line where the check STARTS>}]}. Include a hint ONLY where you actually see such a check; reply {"hints": []} otherwise.`,
+                  },
+                },
+              ],
+              maxTokens: WITNESS_TOKENS,
+            });
+            const raw = res?.content?.type === 'text' ? res.content.text : '';
+            const parsed = JSON.parse(
+              raw.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, ''),
+            );
+            if (Array.isArray(parsed?.hints) && parsed.hints.length) {
+              hints = parsed.hints;
+              generator = 'mcp-sampling';
+            }
+          } catch {
+            // a malformed proposal buys nothing — fall through to the target list
+          }
+        }
+      }
+      // sampling attempted but yielded no usable hints → the probe IS the answer
+      // (same target list), no need to compile the app a second time
+      const out = generator || !probe ? witnessApp(cwd, { hints }) : probe;
+      return text(JSON.stringify(generator ? { ...out, generator } : out, null, 2));
     }
     if (name === 'sparda_get_context') {
       const headers = hostHeaders(key, ctx);
@@ -1137,7 +1206,7 @@ function text(t) {
 // AI-initiated call, never on the host's request path, so Law 1 holds.
 //   opts.route  — substring; keep only findings on routes whose label matches (focus the
 //                 answer on the route the AI just edited, e.g. "DELETE /orders").
-export function proveApp(cwd, { route } = {}) {
+export async function proveApp(cwd, { route } = {}) {
   let canonical, report;
   try {
     const compiled = compileUBG(cwd, { write: false });
@@ -1183,23 +1252,68 @@ export function proveApp(cwd, { route } = {}) {
     findings = findings.filter((f) => f.route.toLowerCase().includes(needle));
   }
 
-  const blind = surveyBlindspots(canonical, report);
+  // THE PREMISE, before the proof (ADR-083). This tool states the verdict word to the one
+  // consumer that acts on it without reading the code — the editing agent — so it is the
+  // last place that may answer "PROVEN" over an app whose route table no oracle ever saw.
+  // Same shared call as the CLI and the badge, same opt-in boundary: only the boot-free
+  // convention oracle runs here (the runtime one executes the target's code, which an MCP
+  // tool call must never do as a side effect).
+  const premise = await premiseFor(canonical, report, { cwd });
+  const blind = surveyBlindspots(canonical, withPremiseGaps(report, premise));
   // The verdict word always reflects the WHOLE app (a route filter narrows the finding list,
   // never the safety claim — an AI must never read "PROVEN" because it hid the rest).
   const verdict = verdictOf(all, canonical, {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
+    premiseGaps: premise.available ? premise.gaps.length : 0,
   });
   return {
     verdict: verdictState(verdict),
     provable: verdict.provable,
-    coverage: Math.round(blind.coverage.ratio * 100) / 100,
+    coverage:
+      blind.coverage.ratio == null
+        ? null // 0/0 — measured-but-unknown, never a fabricated 1.0
+        : Math.round(blind.coverage.ratio * 100) / 100,
     baselined,
     obligations,
     counts: verdict.counts,
     findings,
     blindspots: { surface: blind.surface, coverage: blind.coverage.ratio },
     ...(route ? { scopedTo: route } : {}),
+  };
+}
+
+// The generate-and-check loop served live over MCP (ADR-074): the CALLER is the untrusted
+// generator — it proposes where each O7/BOLA advisory's ownership check lives ({route, file,
+// line}) — and SPARDA's deterministic AST verifier judges every claim (witness.js). Soundness
+// never comes from the generator: a fabricated location, spoof-compare, or no-deny check is
+// rejected exactly as in the static pass, and the whole loop feeds ONLY the O7 advisory
+// (never a hard rule, never the verdict). Called without hints it returns the target list —
+// the prompt material — so any agent can close the loop in two calls. Read-only; Law 1 holds.
+export function witnessApp(cwd, { hints } = {}) {
+  let canonical;
+  try {
+    canonical = canonicalizeGraph(compileUBG(cwd, { write: false }).graph);
+  } catch (err) {
+    return {
+      advisories: 0,
+      note: `SPARDA could not compile this app's surface (${err.message}). Nothing to witness.`,
+    };
+  }
+  const { findings } = checkGraph(canonical);
+  if (!Array.isArray(hints) || hints.length === 0) {
+    const targets = witnessTargets(findings);
+    return {
+      advisories: targets.length,
+      targets,
+      note: targets.length
+        ? 'These routes access an object by a request-supplied id with no ownership scope proven on the resolved path. If a route DOES enforce ownership (an inline `if (row.ownerId !== <principal>) deny`, or a helper call like `assertOwner(row.ownerId, req.user.id)`), call sparda_witness again with hints: [{route, file, line}] naming where that check lives — SPARDA will verify each claim deterministically against the AST and discharge only what it can re-prove. A wrong or invented location is rejected; nothing is taken on your word.'
+        : 'No object-scope advisories — nothing to witness.',
+    };
+  }
+  return {
+    ...admitWitnesses(cwd, canonical, findings, hints),
+    note: 'Each hint was re-proven against the AST (witnessVia: generator+verified) or rejected with a reason. Discharged routes are proven owner-scoped; remaining ones still need review. Advisory-only: this never changes the verdict.',
   };
 }
 

@@ -1,5 +1,9 @@
 node_modules/
-dist/
+# Root-anchored: a nested `dist` is a fixture SOURCE directory, not build output.
+# `app/dist/route.js` is the Next fixture proving that a directory named like build
+# output is still a URL segment (E-081), and a bare `dist/` rule silently dropped the
+# one file its test asserts on — git cannot re-include a file under an excluded dir.
+/dist/
 coverage/
 .sparda/
 *.log

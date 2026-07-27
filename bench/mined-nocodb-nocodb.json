@@ -1,0 +1,111 @@
+[
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "efcfb7f6a66e6dfad229a2fd2e2e1dbcdb11ceac",
+    "parent_commit": "3b18b2bd91144eb308146d8c14a0194038953eb1",
+    "subject": "fix(nc-gui): guard localStorage access in auth middleware",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "d785db2261a60ac29fa582bc00d6f1d65cfbd374",
+    "parent_commit": "a30f53cbc3381de8b14c5be128ed79688fb06bc3",
+    "subject": "fix(auth): make SSO short-lived tokens single-use",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "4ef9130ab207d936fd8addbfc915f8d411d69e49",
+    "parent_commit": "2cf0de39e867c12ed35190a8287819387cc21bba",
+    "subject": "fix(nocodb): reject /auth/user/me with 401 when supplied JWT is invali",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "b96aa78ce9c6e4b11953a384e765c5ecc59ff1de",
+    "parent_commit": "93adcf0cdc77cd4fc8e1c6aa8a6c8b8b2226e74e",
+    "subject": "Merge pull request #13826 from nocodb/fix/security-may-batch",
+    "verdict": "no-routes"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "a6af27c79da18661f05be40022a7d04c37644b79",
+    "parent_commit": "64c566e9a5e7042674389fdace103fe211559b0d",
+    "subject": "fix: close listColumnUpdate security gap + add editor timelineColumnUp",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "03cbc8c68b94feae26d83adf538e6c4867bec2bd",
+    "parent_commit": "d55229c3db1db61a0684a8719c3499e1d7be915b",
+    "subject": "fix: grant editor shareView permission",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "d55229c3db1db61a0684a8719c3499e1d7be915b",
+    "parent_commit": "1104b152363d8a65043f78cb5b7e0b412d71ddfb",
+    "subject": "fix: editor share-view + type-specific view update lock guard",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "1104b152363d8a65043f78cb5b7e0b412d71ddfb",
+    "parent_commit": "615a72db8b16c63632cce8b6142d750158ca5387",
+    "subject": "fix: guard editor writes on locked views + expand editor permissions",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "fbce363c981e3b54bdc59a053f9ae314e56c5486",
+    "parent_commit": "016e4334c4ccd33d37843222f3936042944747b8",
+    "subject": "fix: guard role-dependent tabs with isBaseRolesLoaded to prevent flash",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "4b06b3e79287b4bce262839d9f93c5d1e666f3be",
+    "parent_commit": "8e89dbf45b60f664416d3635b166880c2ec2430b",
+    "subject": "chore: remove security advisory responses markdown",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "8ccad9340020c1d6e2de800868fc035a850591cd",
+    "parent_commit": "ae57e72e8ae53db4fb270515c76398c3cd8dc1b0",
+    "subject": "feat: support for cookie based auth and attachment auth proxy",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "e0fd1b08370b765b888b5cf669fbddde85a6bef5",
+    "parent_commit": "468bdd63b8b3ddb1604131f7d25e227725bf6a55",
+    "subject": "fix(security): remove dead xc-preview header code from GlobalGuard (GH",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  },
+  {
+    "repo": "nocodb/nocodb",
+    "fix_commit": "4e736ee40951c7b4f9760f372780e0712c44b9dd",
+    "parent_commit": "dfbe836577354ba780563a5cf8cb50bfc61a203e",
+    "subject": "fix(security): add ownership validation to MCP token operations (GHSA-",
+    "diff_hit": null,
+    "static_hit": null,
+    "verdict": "missed"
+  }
+]

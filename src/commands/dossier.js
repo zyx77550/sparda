@@ -10,7 +10,8 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, verdictState } from '../ubg/apocalypse.js';
-import { surveyBlindspots } from '../ubg/blindspots.js';
+import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { AXES, POLARITY_SYMBOL, exposedAxes } from '../ubg/polarity.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
@@ -20,10 +21,20 @@ export async function runDossier(opts) {
   const canonical = canonicalizeGraph(compiled.graph);
   const { findings, polarity } = checkGraph(canonical);
   const capsule = buildCapsule(canonical);
-  const blindspots = surveyBlindspots(canonical, compiled.report);
+  // the public report — same rule as the badge: it must not describe an app SPARDA
+  // never fully had
+  const premise = await premiseFor(canonical, compiled.report, {
+    cwd: opts.cwd,
+    probe: opts.probe,
+  });
+  const blindspots = surveyBlindspots(
+    canonical,
+    withPremiseGaps(compiled.report, premise),
+  );
   const verdict = verdictOf(findings, canonical, {
     coverage: blindspots.coverage.ratio,
     blindHigh: blindspots.byRisk.critical + blindspots.byRisk.high,
+    premiseGaps: premise.available ? premise.gaps.length : 0,
   });
 
   const data = {
@@ -36,7 +47,10 @@ export async function runDossier(opts) {
     provable: verdict.provable,
     proven: verdict.provable && verdict.clean,
     state: verdictState(verdict),
-    coverage: Math.round(blindspots.coverage.ratio * 100),
+    coverage:
+      blindspots.coverage.ratio == null
+        ? null // 0/0 — a measurement that does not exist, never "100"
+        : Math.round(blindspots.coverage.ratio * 100),
     surfaceOnly: verdict.surfaceOnly,
     guards: verdict.guards,
     guardsVerified: verdict.guardsVerified,
@@ -241,12 +255,12 @@ export function renderDossierHTML(d) {
   <section class="hero">
     <div class="verdict-row">
       <span class="stamp ${verdictClass}"><span class="dot"></span>${esc(verdictText)}</span>
-      <span class="cov" title="share of the app's behavior SPARDA resolved and reasoned about">coverage&nbsp;<b>${b.coverage ? (b.coverage.ratio * 100).toFixed(0) : (d.coverage ?? 0)}%</b></span>
+      <span class="cov" title="share of the app's behavior SPARDA resolved and reasoned about">coverage&nbsp;<b>${b.coverage ? coveragePct(b.coverage.ratio) : `${d.coverage ?? 0}%`}</b></span>
     </div>
     <p>${esc(verdictLede)}</p>
     <div class="stats">
       ${statCard(d.routes, 'routes')}
-      ${statCard((b.coverage.ratio * 100).toFixed(0) + '%', 'behavior resolved')}
+      ${statCard(coveragePct(b.coverage.ratio), 'behavior resolved')}
       ${statCard(d.nodes, 'graph nodes')}
       ${statCard(d.tables, 'data tables')}
       ${statCard(esc(d.framework), 'framework')}
@@ -266,7 +280,7 @@ export function renderDossierHTML(d) {
   <h2>What SPARDA found</h2>
   ${findingCards}
 
-  <h2>Where the proof stops <small>SPARDA's own blind spots · coverage ${(b.coverage.ratio * 100).toFixed(0)}% · ${b.surface} unseen, ranked by what each could hide</small></h2>
+  <h2>Where the proof stops <small>SPARDA's own blind spots · coverage ${coveragePct(b.coverage.ratio)} · ${b.surface} unseen, ranked by what each could hide</small></h2>
   ${blindRows}
 
   <footer>
