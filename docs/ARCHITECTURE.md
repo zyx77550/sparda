@@ -26,6 +26,11 @@ detect ─► extract (facts) ─► translate ─► link ─► optimize (8 pa
   proof + SARIF), `mirror.js` (execute the graph over HTTP), `openapi-emit.js`
   (graph → OpenAPI 3.1), `verify.js` (prove the compiler laws), and the flight
   engine (`src/flight/`: record/replay + `heal.js` closed-loop gate).
+- **Report shaping is part of the analysis, not cosmetics.** `apocalypse.js` collapses a
+  rule that repeats — across routes (`collapseFloods`, ADR-071) and within one route
+  (ADR-086) — because a signal that repeats loses contrast and stops being read. Both
+  collapses are constrained the same way: the flagged SET and the severity are preserved,
+  every collapsed item survives in `evidence`, and the CI gate reads exactly as before.
 - **The premise verifier** (`premise.js`, `oracle-static.js`) sits OUTSIDE that list on
   purpose. Every consumer above reasons over the graph, so every one is blind to a route
   that is not in it (SOUNDNESS Direction 3). The verifier checks the compiler's SUBJECT

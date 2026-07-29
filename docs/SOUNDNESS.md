@@ -154,6 +154,73 @@ degraded to "no aliases" with no trace.
 3b. Does it add a code path that can leave a registration **neither modelled nor
    declared**? → reject (Direction 3). Every `continue` in a registration dispatch must
    either register something or emit an `UnknownHandler`.
+3c. Does it produce **fewer findings**? Then say which of the two kinds it is, and prove
+   it. Item 3 forbids losing a finding; it does not forbid counting one finding once.
+   The two are distinguished by the **flagged SET**, never by the count:
+   - **UNSAFE** — a route that was flagged stops being flagged, or a severity drops below
+     the gate. That is a false negative whatever the justification. → reject.
+   - **SAFE** — the same routes stay flagged at the same severity, and only duplicates of
+     one problem on one route collapse. The unit of a finding is the unit of its
+     REMEDIATION (ADR-086): a rule fixed per route was never honestly counted per effect
+     node, and a DI fan-out turned one missing compensation path into twelve lines.
+   The proof obligation is concrete: show the flagged set before and after and show it is
+   IDENTICAL, on a real corpus app, not a fixture. Anything kept out of the report must
+   survive in `evidence` — "fewer lines" may never mean "less recorded".
+3d. Does it emit a **number, a word, an `ok`, or a score** that a reader acts on? Then
+   construct its UNMEASURED state and check what the HEADLINE says — not what the notes say.
+   **Put the admission inside the number, never beside it.**
+
+   This is item 7 of the honest-assumptions list, sharpened by five separate failures that all
+   had the same shape. In none of them was the honest field missing:
+
+   | where | the honest field, present | the headline that lied |
+   |---|---|---|
+   | premise (E-104) | `available: false` | `premiseGaps: 0` → **PROVEN** |
+   | `falsify` | `note: 'nothing to falsify'` | `score: 1` |
+   | `gate` | `abstained: <reason>` | `ok: true` |
+   | `speculate` | `(by lookup)` | `✓ PROVEN` |
+   | `immunize` | — | `✓ PROVEN` |
+
+   Nobody ever wrote `available: true` for an oracle that had not run. The admission was
+   simply placed NEXT TO the number instead of IN it — and a reader acts on the number, a
+   dashboard graphs the number, a CI job branches on the number. The note is for someone who
+   already suspects something is wrong, which is exactly the person who does not need it.
+
+   `null` is the only value that carries its own caveat. **Not `0`, not `false`, not an empty
+   array** — those are ANSWERS ("we measured, and the answer is none"). Only `null` says
+   "there is no answer here", and only `null` cannot be summed, averaged, or shown green.
+
+   If a surface has no expressible "I don't know", that is itself the finding: it will invent
+   one under pressure. Mechanized in `tests/unmeasured-is-not-a-pass.test.js`, which is a
+   REGISTRY — every new headline field adds a row, or the family reopens one leak at a time.
+
+3e. **And then check that the state is REACHABLE.** A row that hand-constructs the unmeasured
+   state proves the field can hold it. It proves nothing about whether any caller ever puts it
+   there — and E-106 is that distinction costing a whole ADR. `buildCapsule(g, { premiseBasis:
+   'unmeasured' }).proven === null` passed from the day it was written while all four call sites
+   in `src/commands/` called `buildCapsule(canonical)` bare, so the three-state field was
+   unreachable in the product and `immunize` printed an `UNMEASURED PREMISE` branch no input
+   could produce. **A green row over a dead wire.**
+
+   So every row owes two assertions:
+
+   1. **EXPRESSIBLE** — the headline field can hold the unmeasured state. (hand-constructed)
+   2. **REACHABLE** — a real call path actually produces it. (drive the command)
+
+   Where the property is *wiring* rather than behaviour — "every call site passes this
+   argument" — a source rule is the right instrument and not a compromise: wiring cannot be
+   observed by running one command, which is exactly how four call sites stayed unwired under a
+   green suite. Write it against the ARGUMENT, and keep a vacuity check that lists the sites, so
+   the rule cannot quietly stop matching.
+
+3f. **When a rule fails to catch something, ask what its SCOPE was.** ADR-083's structural
+   guard was first scoped to `src/commands/` and found two more graders when widened to the
+   repo. E-106 found two more still, because the widened rule was scoped to a *function name*
+   (`verdictOf`/`badgeFor`) and `buildCapsule` is a second grader. Both times the gap was
+   exactly the size of the scope. Key the predicate on the PROPERTY — "turns a compiled graph
+   into a claim someone acts on" — and keep the list of such functions in one named place
+   (`GRADERS`) so extending it is the obvious move rather than an insight.
+
 4. Does it add a **runtime cost on the host request path** or a **new dependency**? →
    reject (hard rules 1, 8). Analysis-time compute is fine; host-time is not.
 4a. **A new command that grades a compiled graph must call `premiseFor`.** Direction 3 is

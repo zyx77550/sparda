@@ -19,7 +19,7 @@ import { AXES, posture, provenByPolarity, packVector, exposedAxes } from './pola
 export const CAPSULE_VERSION = 'imm1';
 
 // canonical graph → a compact, portable, deterministic safety capsule.
-export function buildCapsule(graph) {
+export function buildCapsule(graph, { premiseBasis = null } = {}) {
   const prints = new Map(fingerprintGraph(graph).map((p) => [p.entrypoint, p]));
   const { polarity } = checkGraph(graph);
 
@@ -38,9 +38,29 @@ export function buildCapsule(graph) {
   // only if it says so. The genome inherits this, so the world memory carries not just
   // "proven" but "proven over how much" — a verdict's confidence, made portable.
   const survey = surveyBlindspots(graph);
+  // THE CAPSULE CARRIES ITS OWN BASIS OF MEASUREMENT (ADR-092). A capsule is PORTABLE — it
+  // travels between repos and is replayed by `speculate`/`immunize` far from the analysis that
+  // produced it. A frozen `proven: true` whose premise nobody ever measured would be a claim
+  // re-asserted in a context where its licence cannot even be checked, which is worse than the
+  // original E-104: there, at least, the oracle was one call away.
+  //
+  // So `proven` is a THREE-state field, not a boolean. `null` = the premise was never measured,
+  // and no consumer can read a pass out of it. Absent basis (an older capsule, or a caller
+  // with no premise to speak of) keeps the previous semantics rather than retroactively
+  // invalidating capsules already in the wild.
+  //
+  // ONLY THE POSITIVE IS WITHHELD, and getting this wrong is a regression in the unsafe
+  // direction. The premise bounds the route SET; a route that is missing from the graph cannot
+  // rescue one that IS in it and is exposed. So `proven: false` needs no premise and survives
+  // untouched — the direction premise.js states plainly: gaps WITHHOLD a verdict, never grant
+  // one. Blanking `false` to `null` would have turned "this app has an unguarded mutation"
+  // into "we don't know", which is the same lie pointed the other way.
+  const premiseUnmeasured = premiseBasis === 'unmeasured';
+  const provenByPol = !surfaceOnly && provenByPolarity(polarity);
   return {
     v: CAPSULE_VERSION,
-    proven: !surfaceOnly && provenByPolarity(polarity),
+    proven: premiseUnmeasured && provenByPol ? null : provenByPol,
+    premiseBasis,
     surfaceOnly,
     coverage: survey.coverage.ratio,
     blindHigh: survey.byRisk.critical + survey.byRisk.high,

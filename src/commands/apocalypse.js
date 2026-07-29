@@ -19,7 +19,7 @@ import {
   buildProofObjects,
 } from '../ubg/apocalypse.js';
 import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../ubg/premise.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 // version travels with the proof so an audit knows which prover produced it
@@ -86,6 +86,7 @@ export async function runApocalypse(opts) {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
 
   if (opts.sarif) {

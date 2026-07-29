@@ -86,6 +86,7 @@ export function reviewGraphs(
       coverage: candCov,
       blindHigh: candBlind.byRisk.critical + candBlind.byRisk.high,
       premiseGaps: premise?.available ? premise.gaps.length : 0,
+      premiseBasis: premise?.available ? 'measured' : (premise?.basis ?? 'unmeasured'),
     }),
     obligations,
     findings,

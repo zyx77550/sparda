@@ -799,6 +799,36 @@ export function resolveExportedFunction(mod, name, seen = new Set()) {
   return null;
 }
 
+// The CLASS twin of `resolveExportedFunction`, and it exists for the same reason one
+// level up. A monorepo package (`@novu/dal`, `@novu/application-generic`) resolves to its
+// entry file, and that entry file is a BARREL — sixty `export * from './repositories/…'`
+// lines and not one class declaration. `classInModule` looks for a class DECLARED in the
+// module it was handed, so every DI hop into a workspace package died on the barrel:
+// measured on novu, 1479 of 2039 constructor-DI hops resolved to nothing, `PinoLogger`
+// and the repository classes at the top of the list. The route's real behavior — every
+// db_write the repository performs — was simply absent from the graph.
+//
+// Bounded by `seen` (a barrel cycle terminates) and memoized by the caller, because a
+// wide barrel is walked once per hop otherwise.
+export function resolveExportedClass(mod, name, seen = new Set()) {
+  if (!mod || mod.error) return null;
+  const direct = classInModule(mod, name);
+  if (direct) return { cls: direct, mod };
+  const named = mod.reexports.get(name); // export { X } from './x'
+  if (named && !seen.has(named)) {
+    seen.add(named);
+    const hit = resolveExportedClass(parseModule(named), name, seen);
+    if (hit) return hit;
+  }
+  for (const file of mod.starReexports ?? []) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const hit = resolveExportedClass(parseModule(file), name, seen);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function collectTopLevel(node, facts, absFile, exported) {
   if (node.type === 'ExportNamedDeclaration' && node.declaration) {
     collectTopLevel(node.declaration, facts, absFile, true);

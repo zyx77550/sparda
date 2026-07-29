@@ -1,0 +1,126 @@
+{
+  "name": "sparda",
+  "displayName": "SPARDA — prove AI-written code",
+  "description": "The trust layer for AI-written code. AI writes, SPARDA proves. Deterministic, offline behavior proofs + a live gate for AI edits, right in the editor.",
+  "version": "0.71.1",
+  "icon": "logo.png",
+  "publisher": "zyx77550",
+  "license": "BUSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zyx77550/sparda-hq.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "ai-code-review",
+    "trust-layer",
+    "authorization",
+    "bola",
+    "claude-code"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sparda.prove",
+        "title": "Prove workspace",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.apocalypse",
+        "title": "Apocalypse — findings to the Problems panel",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.gate.arm",
+        "title": "Gate — arm the baseline",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.installClaudeHook",
+        "title": "Install the gate into Claude Code",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.showOutput",
+        "title": "Show output",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.install",
+        "title": "Install the sparda-mcp CLI",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.statusMenu",
+        "title": "Actions",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.openProblems",
+        "title": "Open the Problems panel",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.explain",
+        "title": "Explain a finding",
+        "category": "SPARDA"
+      },
+      {
+        "command": "sparda.enforce",
+        "title": "Enforce — plan a verified boundary check (dry run)",
+        "category": "SPARDA"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "sparda.getStarted",
+        "title": "Prove your backend with SPARDA",
+        "description": "Three steps: install the engine, get a verdict, then freeze it as the baseline every AI edit is proven against.",
+        "steps": [
+          {
+            "id": "install",
+            "title": "Install the engine",
+            "description": "This extension ships no engine — it is a thin bridge over the `sparda-mcp` CLI, so its verdict can never drift from the CLI's. Install it into your workspace and the extension picks it up.\n[Install sparda-mcp](command:sparda.install)",
+            "media": { "markdown": "walkthrough/install.md" },
+            "completionEvents": ["onCommand:sparda.install"]
+          },
+          {
+            "id": "prove",
+            "title": "Get a verdict",
+            "description": "SPARDA compiles your routes into a behavior graph and reports what it can and cannot prove. The status bar carries the verdict; an analysis that did not run reads UNKNOWN, never green.\n[Prove workspace](command:sparda.prove)",
+            "media": { "markdown": "walkthrough/prove.md" },
+            "completionEvents": ["onCommand:sparda.prove"]
+          },
+          {
+            "id": "arm",
+            "title": "Arm the gate",
+            "description": "Freeze the current behavior as the accepted baseline. From then on, every edit — yours or an agent's — is proven against it, and a removed guard is caught in the loop rather than in review.\n[Arm the baseline](command:sparda.gate.arm)",
+            "media": { "markdown": "walkthrough/arm.md" },
+            "completionEvents": ["onCommand:sparda.gate.arm"]
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "SPARDA",
+      "properties": {
+        "sparda.command": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "How to invoke the SPARDA CLI. Leave empty to use the workspace's own `node_modules/.bin/sparda`, falling back to `npx --no-install sparda-mcp`. A bare global on `PATH` is deliberately never picked up: the version that proves the code should be the version the project pinned."
+        }
+      }
+    }
+  }
+}

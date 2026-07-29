@@ -10,7 +10,7 @@ import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, badgeFor } from '../ubg/apocalypse.js';
 import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../ubg/premise.js';
 
 export async function runBadge(opts) {
   const { graph, report } = compileUBG(opts.cwd, { write: false });
@@ -28,6 +28,7 @@ export async function runBadge(opts) {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
   // null = measured-but-unknown (0/0): the JSON keeps the null, the console says the word
   const cov =

@@ -21,6 +21,7 @@ does not exist.
 | [`SECURITY.md`](SECURITY.md) | "What's the threat model and the defenses?" | A defense or known gap changes |
 | [`COMPETITION.md`](COMPETITION.md) | "Who else plays here, what do we adopt/ignore?" | Every serious competitor scan |
 | [`TESTING.md`](TESTING.md) | "How do I run/write tests?" | The suite structure changes |
+| [`MASTER-PLAN-RELEASE.md`](MASTER-PLAN-RELEASE.md) | "I'm publishing — what is the exact order, and what has already gone wrong?" | **Read in full before ANY release**; update when the procedure or tooling changes |
 | [`HANDOFF.md`](HANDOFF.md) | "What's the current state: done / not done / next?" | **Every session that changes anything** |
 | [`sessions/`](sessions/) | "What happened in each work session?" | One file per session — **append-only** |
 

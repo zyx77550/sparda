@@ -194,3 +194,83 @@ ni Isparta ni Spartan Race, parce que "-mcp" désambiguïse complètement. Le su
 ("on dirait un outil MCP de plus parmi 200"), qui se règle par le badge/case-studies/README —
 pas par un rename. Rien de nouveau ici ne change cette conclusion, ça la renforce : garder
 "sparda-mcp" partout est correct, cohérent, et même défensivement bon sur l'axe découvrabilité.
+
+---
+
+## PARTIE 4 — La pépite du 2026-07-28 : la preuve qui s'expédie (why-provenance comme certificat)
+
+> **Date :** 2026-07-28 · **Origine :** recherche croisée (5 domaines) + un brief géant envoyé à
+> une IA puissante externe, puis **audité honnêtement** contre l'architecture réelle de SPARDA.
+> De toute la réponse externe, UNE idée a survécu à l'audit sans violer un invariant. La voici,
+> avec ses pièges — pas gonflée.
+
+### L'idée en une phrase
+
+Quand SPARDA dit `PROVEN`, il **livre l'arbre de dérivation** de cette preuve — la *lignée*
+(why-provenance) qui dit « ce fait tient PARCE QUE ces arêtes d'AST, ce garde résolu, cette
+absence de bypass ». La machine du user (ou un client MCP, ou un auditeur) **re-valide l'arbre
+contre l'AST brut en quelques ms, sans relancer l'analyse complète, sans solveur SMT.**
+
+### Pourquoi c'est LA pépite (et pas les autres pistes de la réponse externe)
+
+- Ça transforme ta thèse `"on ne ment pas"` en **`"voici la preuve, vérifie-la toi-même"`** — le
+  seul vrai avantage défendable de SPARDA (soundness) devient un **artefact expédiable et
+  auditable**, pas une promesse. C'est ton pitch, rendu tangible.
+- **Zéro nouvel invariant cassé** : déterministe (l'arbre est une fonction pure de l'AST), offline
+  (aucun réseau), l'hôte ne paie rien de lourd (validation = re-check d'arêtes), aucune nouvelle
+  dépendance runtime (règle #7), et le vérifieur d'arbre est **naturellement indépendant** de
+  l'analyseur (règle #6 : il lit l'arbre + l'AST, il n'importe pas l'extracteur).
+- C'est du **proof-carrying code** (PC3, ASE 2024 wksp) appliqué à la sécurité — et surtout : ta
+  **boucle témoin (ADR-074) EST déjà** un PCC. La provenance ne l'invente pas, elle la **muscle**
+  en un certificat complet. Donc c'est un pas *additif* sur un organe existant, pas un paradigme.
+- Réf réelle : **S. Köhler, B. Ludäscher et al., "Declarative Datalog Debugging for Mere
+  Mortals"** — en analyse déclarative, la why-provenance produit **nativement** le témoin. Si un
+  jour SPARDA a un cœur Datalog, l'arbre de dérivation du moteur EST la preuve, gratuitement.
+
+### Les pièges (l'audit honnête — à ne pas oublier en codant)
+
+1. **Ça NE requiert PAS de réécrire SPARDA en Datalog.** L'idée est portable sur le modèle témoin
+   ACTUEL : instrumenter la dérivation d'UNE obligation (ex. O1) pour émettre `{ verdict, proof:
+   [node, node, guardResolved, noBypass] }`. Le cœur Datalog est un **pari SÉPARÉ et bien plus
+   gros** (voir §pièges Datalog ci-dessous), à ne pas confondre avec cette pépite-ci.
+2. **Explosion de taille** : sur des chaînes interprocédurales profondes (novu, twenty), un arbre
+   de preuve peut gonfler (la réponse externe cite >5 Mo pour un endpoint comme seuil d'échec).
+   Mitiger : résumer les sous-arbres via les résumés de fonction déjà mémoïsés (compositionnalité),
+   ne matérialiser que les arêtes soundness-critiques, hasher le reste.
+3. **La provenance certifie ce que l'analyse a DÉRIVÉ, pas ce que l'analyse n'a PAS VU.** Un
+   certificat de `PROVEN` doit donc TOUJOURS embarquer l'état de prémisse (`measured` /
+   `unmeasured`, ADR-091) — sinon on expédie une belle preuve locale sur un app à moitié vu
+   (invariant #4). Le certificat = preuve de dérivation **+** attestation de couverture.
+
+### Pièges Datalog (le gros pari, séparé — noté ici pour ne pas le reconfondre)
+
+- Un moteur Datalog pur-JS comme moteur de dérivation universel (règles-comme-données par
+  framework) est séduisant et déterministe, MAIS la difficulté n'est **jamais** la jointure —
+  c'est la **discipline de sûreté**. La règle jouet proposée par l'IA externe
+  (`MiddlewareBound(mw,route) :- apply(mw), forRoutes(route)`) est **UNSOUND** : elle attacherait
+  un `LoggerMiddleware` à une route → adoucit une vraie faille = exactement le faux négatif que
+  l'ADR-089 empêche (match de méthode strict, non-sur-recouvrement littéral, preuve-de-refus,
+  "un logger n'est pas un garde"). Toute règle framework doit encoder CETTE discipline AVANT
+  d'être écrite.
+- **"Vérifié contre des fixtures" ≠ "sound".** Une règle gelée qui passe 10 fixtures peut faire
+  un faux `PROVEN` sur le 11ᵉ app inconnu. Donc une règle synthétisée-LLM-au-build ne bouge que
+  dans la **direction surfaçable** (ajouter findings / déclarer angle mort), **jamais** dans la
+  direction qui cache — sauf si elle est aussi **deny-prouvée à l'exécution** (le chemin vérifié
+  de l'ADR-089).
+
+### Le prototype d'une semaine (le petit pari sûr)
+
+Sur le modèle témoin actuel, pour l'obligation O1 sur un app réel (nestjs-realworld) :
+1. Quand `admitWitnesses`/`checkGraph` conclut `PROVEN` sur une route, émettre un **objet preuve**
+   `{ route, obligation:'O1', edges:[{kind:'guard-resolved', file, line}, {kind:'no-bypass', …},
+   {kind:'reaches-write', …}], premise:'measured' }`.
+2. Écrire un **micro-vérifieur indépendant** (< 150 lignes) qui prend cet objet + l'AST brut et
+   re-confirme chaque arête, sans toucher l'analyseur. Sortie : `CERTIFIED` / `REJECTED`.
+3. Le brancher comme sortie de `sparda prove` (et plus tard comme champ MCP `sparda_prove`).
+   Test de falsification : ablate un garde (falsify, ADR-077) → le certificat doit devenir
+   `REJECTED`. C'est la preuve que le certificat n'est pas décoratif.
+
+**Verdict honnête :** ce n'est pas un billet magique (il n'en existe pas — Rice). C'est le seul
+morceau de la chasse "billet magique" qui soit **réel, additif, sans violer un invariant, et
+vendeur** : la preuve cesse d'être une promesse et devient un fichier que n'importe qui peut
+re-vérifier.

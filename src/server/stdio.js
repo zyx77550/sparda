@@ -30,7 +30,7 @@ import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, diffGraphs, verdictOf, verdictState } from '../ubg/apocalypse.js';
 import { surveyBlindspots } from '../ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../ubg/premise.js';
 import { witnessTargets, admitWitnesses } from '../ubg/witness.js';
 
 const EVENT_POLL_MS = Number(process.env.SPARDA_EVENT_POLL_MS ?? 5000);
@@ -1266,6 +1266,7 @@ export async function proveApp(cwd, { route } = {}) {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
   return {
     verdict: verdictState(verdict),

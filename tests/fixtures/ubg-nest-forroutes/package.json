@@ -1,0 +1,12 @@
+{
+  "name": "ubg-nest-forroutes",
+  "private": true,
+  "main": "src/main.ts",
+  "dependencies": {
+    "@nestjs/common": "^10",
+    "@nestjs/core": "^10",
+    "@nestjs/typeorm": "^10",
+    "typeorm": "^0.3",
+    "reflect-metadata": "^0.2"
+  }
+}

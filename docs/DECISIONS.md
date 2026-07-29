@@ -2963,3 +2963,618 @@ immich is byte-identical — the non-regression witness that the change reads a 
 without disturbing the one that already worked.
 
 Suite **1111** (+12 sur la #29), mutants **88/88** (+5), 4 deps.
+## ADR-085 — Match the brand by SUFFIX, and register every path a decorator names
+
+**Context.** The brief for twenty was "one rule, 14× IRREVERSIBLE_OBSERVABLE, stands
+between it and a clean verdict". Measuring first inverted it:
+
+| | before | after |
+|---|---|---|
+| files parsed (of 6090) | **33** | 128 |
+| routes | **147** | **579** |
+| guards / verified | 441 / 157 | 1868 / 583 |
+| findings (high) | 14 (2) | 65 (28) |
+
+SPARDA was reading **a quarter of the application**. "One rule" was an artefact of
+near-total blindness, and the honest outcome of this work is that twenty gets **worse**,
+not better — which is the correct outcome, because the extra findings are real.
+
+**Decision 1 — the pre-filter matches a SHAPE, not a vocabulary.** `CANDIDATE_RE` listed
+decorator names; twenty registers 54 resolvers as `@MetadataResolver` / `@CoreResolver` /
+`@AdminResolver` and exactly one as `@Resolver`. A house brand is the norm. Matching the
+SUFFIX (`[A-Za-z]*Controller`, `[A-Za-z]*Resolver`) is what `controllerPrefixOf` already
+did for controllers — ADR-055's rule ("recognise the protocol, not the brand") had simply
+never reached the pre-filter or the class-admission check.
+
+Deliberately **not** widened to `Mutation|Query|Subscription`, despite those being the
+GraphQL operation decorators: they are also PARAMETER decorators (`@Query('id') id:
+string`) in ordinary REST controllers, and measured on twenty they buy one extra file out
+of 6090. A class exposing a GraphQL operation carries a Resolver-suffixed brand, which the
+suffix already catches. 33 → 128 files, 4.0 s for the whole monorepo.
+
+**Decision 2 — a decorator registers every path it names.** `@Post(['a','b'])` is one
+decorator and two live routes. Reading `args[0]`, seeing an `ArrayExpression` and falling
+back to the controller prefix collapsed four of twenty's webhook controllers onto a
+phantom `POST /` — the route that carried the two findings holding its verdict.
+
+The obvious fix is the trap: `elements.find(isStringLiteral)` reads one path and drops the
+rest, losing a live endpoint in silence — ADR-079 violated by the change meant to honour
+it. One route per element; a mixed array routes its readable elements and DECLARES the
+unreadable one at high risk.
+
+**What this refuses to do, and why.** The draft that opened this chantier proposed
+suppressing the webhook findings on the grounds that a signature-verifying webhook driven
+by an external orchestrator is *self-compensating*: Stripe receives a 500 and retries, and
+`subscriptions.cancel` / `invoices.pay` are idempotent, so a failed write is recovered.
+
+The reasoning is sound as an ARGUMENT and inadmissible as a RULE. It rests on three
+premises SPARDA cannot verify from the code in front of it: that the orchestrator retries,
+that this handler surfaces a write failure as a 5xx rather than swallowing it, and that
+the external call is idempotent. Crediting compensation SPARDA has not seen is inventing
+protection — SOUNDNESS Direction 2, in the forbidden direction — and it is the same
+"trust the convention" epistemology ADR-084 had just removed one layer down. A suppression
+rule built on inference about an external system is the one kind of change this codebase
+may not make on reasoning alone.
+
+The correct handling was the parsing fix: the findings did not disappear, they moved to
+the routes that actually serve them (`POST /webhooks/stripe`, not `POST /`). Whether a
+webhook's retry path constitutes compensation is a question for a future rule that PROVES
+its premises — a 5xx on the failure path, an idempotency key on the external call — not
+for a name-based exemption.
+
+**Corpus, decomposed** (E-088's `_pinned` earning its keep a second time): twenty's clone
+sits on `590ae069` while the baseline was pinned at `e631c986`, so its drift is mixed. The
+pin move alone accounts for `coverage 81.6 → 81.4` (measured on this clone BEFORE the
+change); everything else — routes 147 → 579, guards 441 → 1868 — is this change. Re-pinned
+and re-baselined so the move is visible in the artefact instead of left drifting. nocodb
+sits AT its pin and gains too: routes 358 → 566, coverage 40.3 → 47.7. novu, immich and
+ghostfolio are untouched.
+
+Suite **1119** (+8), mutants **92/92** (+4), 4 deps.
+
+## ADR-086 — A finding's unit is the REMEDIATION, not the effect node
+
+**Context.** After ADR-085 opened twenty properly, it read 28 high findings across 14
+routes — and ONE route carried **12** of them. `POST /graphql/sendEmail` resolves through
+a provider-strategy DI graph into Gmail / Microsoft / IMAP-SMTP / email-group senders;
+each leaf is its own effect node, and `IRREVERSIBLE_OBSERVABLE` emitted one finding per
+node. **43 % of the app's high findings were one problem counted twelve times.**
+
+`collapseFloods` (ADR-071) already encodes the principle — a signal that repeats loses
+contrast — but it folds a rule firing across MANY ROUTES into a codebase-wide summary. It
+has no notion of the same rule firing many times on ONE route, which is exactly what a DI
+fan-out produces.
+
+**Decision.** One finding per (route, rule) for `IRREVERSIBLE_OBSERVABLE`. The unit of a
+finding is the unit of its REMEDIATION: fixing this rule means wrapping the send and the
+write together, or adding an undo — a per-ROUTE change. Reporting per leaf described the
+analysis's internal resolution depth, not the user's problem.
+
+**The line this must not cross.** It is a CONTRAST fix, not a suppression, and three
+properties make the difference auditable:
+
+1. the same routes stay flagged — verified on twenty, the 14 routes before and after are
+   IDENTICAL, only the count changed (28 → 14; nocodb 22 → 13);
+2. severity is the strongest of the collapsed set, so the gate reads exactly as before;
+3. every call is named in the message and every node stays in `evidence` — Direction 1's
+   "an effect is in the graph or it is traced" holds twice over here.
+
+**The rung that had to survive it.** Innate immunity (ADR-072): a generic external call is
+an advisory `info`, never a hard finding. Collapsing several advisories may not manufacture
+a `high`. A route carrying both kinds reports once at the hard severity — splitting them
+would put the same route on two lines saying the same thing twice. Killing mutant included.
+
+**What this does NOT do.** twenty still reads NOT_PROVEN, with 14 high findings on 14
+routes — every one a real saga hole in its billing (Stripe) or messaging code, including
+`POST /graphql/deleteCurrentWorkspace`. Honest counting made the report readable; it did
+not make the app safe, and it was never supposed to.
+
+Suite **1128** (+9), mutants **95/95** (+3), 4 deps.
+
+## ADR-087 — The release is an artefact, and it gets a gate of its own
+
+**Context.** v0.69.0 was published from a commit that was not the head of what was being
+merged. It carried ADR-084 and neither ADR-085 nor ADR-086, so for four hours the package
+on npm analysed a NestJS app with house decorator brands at a quarter of its size — the
+exact Direction 3 violation the three sessions before it had removed from the codebase.
+
+Nothing was broken. **Every test passed at the commit that was published.** `prepublishOnly`
+ran `vitest run`, and `vitest run` was green, because the defect was never in the CODE: it
+was in *which commit* got published, and in the release artefacts nobody updated — the
+CHANGELOG had no 0.69.0 entry, and no tag had been pushed since v0.68.0, leaving two
+releases with nothing to check out.
+
+This is the project's own contract turned on the project. SPARDA exists to say that
+"we could not measure" and "we measured nothing wrong" are different states. A green suite
+is a statement about a TREE; a release is a statement about a PUBLISHED ARTEFACT. Reading
+the first as the second is the same substitution, one level up from the code.
+
+**Decision.** `prepublishOnly` runs `scripts/release-gate.mjs`, which asks the questions a
+release actually fails on — and which a passing suite cannot answer:
+
+| | catches |
+|---|---|
+| tree clean, on `main`, HEAD ≡ `origin/main` | a release cut mid-flight — 0.69.0's root cause |
+| version absent from the registry | a forgotten bump, then "why did the fix not ship?" |
+| `server.json` (×2) + `glama.json` agree | a partial bump: a grep finds the first copy and reports agreement |
+| a `## [version]` CHANGELOG heading | a release nobody wrote down is a release nobody can audit |
+| `v<version>` exists and points at HEAD | the drift since v0.68.0; a tag naming the wrong bytes is worse than none |
+| suite green, mutants dead, corpus undrifted | the ordinary bar, restated where it is enforced |
+
+**No escape hatch, deliberately.** A gate that can be talked out of a check gets talked out
+of it, and the one release that skips the gate is the release that needed it. If a check is
+wrong, the check gets fixed. This is a claim about INPUTS, not about strings: the gate reads
+no `process.argv` and exactly one environment variable, `SPARDA_CORPUS`, which can only ADD
+the corpus check. Both are asserted by tests, because the gate's own header contains the
+word `--force` in order to refuse it — a grep cannot tell a check from a comment about one.
+
+**The decisions live apart from the I/O** (`scripts/release-checks.mjs`, pure). A gate that
+exists only as a script can only be tested by grepping its source, and a text assertion dies
+the first time a message is reworded while the check itself rots. Pure functions can be
+handed the exact state 0.69.0 was released from and required to refuse it — which is what
+`tests/release-gate.test.js` does, mutant-backed, for every row of the table above.
+
+**Where it is honest about its own limits.** Two checks can fail to be *measurable*, and
+both say so instead of printing a tick: the corpus without clones is `SKIPPED`, and an
+unreachable registry is `UNVERIFIED (not a pass)` — distinguished from `E404`, which is the
+desired state and passes. The rule the codebase turns on does not get suspended for the
+codebase's own tooling.
+
+**What this does not do.** It cannot make a release correct; it can only refuse one that is
+demonstrably not what was reviewed. 0.69.0's contents were fine at their own commit — the
+gate's whole subject is the distance between that commit and the one that shipped.
+
+Suite **1145** (+17), mutants **100/100** (+5), 4 deps.
+
+## ADR-088 — A class is looked up THROUGH barrels, exactly as a function already was
+
+**Context.** novu read `PARTIAL` with **0 findings** and 14.8 % coverage. The brief was
+"raise the coverage". The measurement said something else: of **2039 constructor-DI hops,
+1479 resolved to nothing** — `PinoLogger` 307 times, then `IntegrationRepository`,
+`EnvironmentRepository`, `SubscriberRepository`, every repository the app writes through.
+
+All of them failed the same way. A monorepo package (`@novu/dal`,
+`@novu/application-generic`) resolves to its entry file, and that entry file is a
+**barrel**: sixty `export * from './repositories/…'` lines and not one class declaration.
+`classInModule` looks for a class DECLARED in the module it was handed, found nothing, and
+returned null.
+
+`resolveExportedFunction` has crossed barrels since the `lib/auth/index.ts` era — a route
+importing a helper from a barrel resolves fine. **Classes never got the twin**, so the
+entire DI half of the resolver stopped at every workspace package in every monorepo.
+
+**Decision.** `resolveExportedClass` — the class twin, same shape, same `seen` bound: the
+class as declared here, else through a named re-export, else through each `export *`.
+Memoized per (module, class name) in the resolver, because a sixty-line barrel is
+otherwise re-walked once per hop.
+
+**Why this is a soundness fix and not a precision one.** A route whose only behavior lives
+behind the barrel resolves to **zero behavior**, and a route with zero behavior has nothing
+to flag. The fixture states it exactly: `POST /orders/purge/:tenant` deletes every order of
+a tenant with no guard, and before this change it produced **no finding at all**, at
+coverage `unknown` (0/0) and verdict `SURFACE`. Blindness that reads as an empty route is
+the one shape of imprecision that pushes the verdict the unsafe way — the same family as
+E-092, where a file that is never opened produces no route, no skip and no unknown handler.
+
+**Measured, isolated** (same clones, same pinned commits, resolver permuted — the whole
+corpus run twice):
+
+| | before | after |
+|---|---|---|
+| novu verdict | PARTIAL | **NOT_PROVEN** |
+| novu db writes | 52 | **132** |
+| novu db reads | 792 | **1464** |
+| novu findings | 0 | **4** (advisories 12 → 15) |
+| novu coverage | 14.8 % | 15.1 % |
+| twenty / immich / nocodb / ghostfolio | — | **byte-identical** |
+
+**novu got WORSE, and that is the result.** Its clean `PARTIAL` was resting on 80 database
+writes its routes perform and SPARDA could not see. Coverage barely moved — opening the
+repositories reveals their own unresolved calls too — which is the honest answer to "raise
+the coverage": the number was never the problem, the missing subject was.
+
+immich unchanged is the control that makes the claim narrow: same framework, same
+extractor, no unbuilt workspace barrels, no drift. The change reaches what it was aimed at.
+
+**What is still open.** 750 of novu's blind spots are `.execute(command)` calls on injected
+use cases, recorded as `db_read` with an unknown table — the raw-SQL fallback fires on the
+method NAME with no database provenance, so a CQRS app's every DI hop is charged as an
+unreadable query. Fixing the label is not enough on its own: the phantom is currently the
+only trace an unresolved hop leaves anywhere, so it must be replaced by a real
+`unresolved-call` blind spot in the same change, never simply deleted (Direction 1).
+
+Suite **1152** (+7), mutants **102/102** (+2), 4 deps.
+
+## ADR-089 — The auth a decorator scan cannot see: MiddlewareConsumer.forRoutes()
+
+**Context.** A NestJS module can gate its routes without a single `@UseGuards` on the
+controller — by registering middleware in its own `configure()` method:
+
+```ts
+export class ArticleModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(AuthMiddleware).forRoutes(
+      { path: 'articles/:slug', method: RequestMethod.DELETE }, …);
+  }
+}
+```
+
+The controller carries no guard decorator, so SPARDA's per-method scan read the mutation as
+UNGUARDED and fired a CRITICAL. Measured on `lujakob/nestjs-realworld-example-app`: 7 hard
+findings, **4 of them false** — the routes ARE authenticated by `AuthMiddleware`, bound from
+the module, not the controller. This is the middleware twin of the `APP_GUARD` global-guard
+detection (ADR-055's global path): the guard is real, it just lives one file from the route.
+
+**Decision.** Read the binding once, in the module, and attach the guard to every route it
+PROVABLY targets. Two grades, matching SPARDA's asserted/verified split:
+
+1. **Asserted (name-trusted).** An auth-named applied middleware matched to a route becomes an
+   ASSERTED guard (ADR-063) — enough to clear the false UNGUARDED critical, never enough for
+   PROVEN on its own.
+2. **Verified (deny-proven).** When the middleware's `use()` resolves through DI to a real deny
+   (a 4xx throw / `res.status(401)`), the guard reads VERIFIED and the mutation reaches PROVEN
+   — the same proof the global-guard path already earns. Proof beats name: a proven denier is a
+   guard whatever it is called; a middleware that proves no deny must be auth-named to attach
+   even asserted.
+
+**Soundness.** Attaching a guard DOWNGRADES a finding, so a binding matched to a route it does
+not cover would HIDE a hole (SOUNDNESS Direction 2). Three disciplines keep it honest:
+
+- **The matcher never over-covers.** A target `:param` covers a route segment (literal or
+  param); a target literal never covers a route `:param` (the route serves URLs the literal
+  misses); a shorter target never covers a deeper route, and the method must match. So
+  `forRoutes('user', GET)` does NOT cover `DELETE /users/:slug`.
+- **Unreadable is declared, never guessed.** A computed path, a spread, an `exclude()` we
+  cannot parse — matches NOTHING and is recorded as a high-risk blind spot. An under-match is a
+  surfaceable false positive, the safe direction.
+- **A non-guard middleware never softens.** A `LoggerMiddleware` bound via forRoutes is neither
+  auth-named nor deny-proven, so it attaches no guard and its destructive route keeps its
+  critical.
+
+**Measured on nestjs-realworld** (same clone, same commit, extractor permuted):
+
+| | before | after |
+|---|---|---|
+| O1 criticals | 7 | **3** |
+| false criticals (article mutations) | 4 | **0** — now PROVEN-guarded |
+| `AuthMiddleware` guard nodes verified | 0 | **12 / 12** |
+| real `DELETE /users/:slug` (no auth) | drowned in 7 | **stands out in 3** |
+
+The 4 false positives clear AND become PROVEN; the two remaining non-article criticals are
+honest (`GET /articles` public browse, `POST /users` public registration), and the genuinely
+unguarded `DELETE /users/:slug` — deletable by anyone — stops hiding in the noise. The floor
+(stop crying false) and the ceiling (prove the guard, surface the real hole) in one change.
+
+Suite **1157** passing, mutants **106/106** (+4), 4 deps.
+
+## ADR-090 — The editor may help you install, and may never help you silence
+
+**Context.** The 0.70.1 extension was correct and unfriendly. A missing CLI produced an honest
+error and a dead end; the status bar had one action whatever the state; and the brief asked for
+three more things — an install button, a walkthrough, and "Quick Fixes that suggest invoking
+the AI to fix the finding."
+
+Two of those are pure UX. The third is a security decision wearing UX clothes, and this ADR
+exists mostly to write down why it was answered differently than asked.
+
+**Decision, part 1 — the install button, and its narrow condition.** A missing CLI is the one
+failure a user can fix in a click, so it earns one. Three properties make it defensible:
+
+- **A visible terminal, never a background install.** An install can prompt, fail, or take a
+  minute — unreadable from a spinner, obvious in a terminal. And a security tool that silently
+  downloads and executes a package because a button was clicked has borrowed the exact habit it
+  exists to argue against. The command is shown; the user can read it, stop it, or copy it.
+- **The package manager comes from the lockfile**, not a guess. `npm i` inside a pnpm workspace
+  creates a second, divergent `node_modules`, and the user ends up debugging a tree they never
+  asked for. Evidence on disk decides.
+- **Always `-D`, never `-g`.** The version that PROVES the code must be the version the project
+  pinned, or two machines on the same commit can disagree. Killing mutant included.
+
+**And it is offered only when installing is genuinely the remedy.** A configured
+`sparda.command` pointing at a path that does not exist fails with `ENOENT` — the same word an
+absent CLI produces. Installing `sparda-mcp` would not fix that setting. So the remedy is
+decided by WHERE we were pointed (`cli.source === 'npx'`, i.e. we fell all the way through),
+never by what the error text said. **A button offering the wrong remedy is a wrong answer
+delivered with more confidence than a plain error message.**
+
+**Decision, part 2 — the lightbulb explains; it does not fix.** A `Quick Fix` in VS Code carries
+a promise: apply this and the problem is gone. A SPARDA finding says an **authorization decision
+is missing** — who may touch what — and that decision belongs to a human. There is no mechanical
+repair, and a lightbulb implying one invites the single most dangerous edit available: silencing
+the finding rather than closing the hole. SPARDA would then read `PROVEN` over a real hole,
+**through its own UI**. That is the product's core failure mode, delivered by its most
+convenient affordance.
+
+So the code actions are `explain` (the evidence chain) and, on `UNGUARDED_MUTATION` only,
+`enforce` — **as a dry run**. `enforce` is the one "fix" that cannot lie: it inserts a boundary
+check, recompiles, and keeps the edit ONLY if the app then proves `PROVEN`, reverting
+byte-for-byte otherwise (ADR-076). It is a fix that re-derives its own result instead of
+asserting it. Even so the lightbulb only PLANS: a code action that edits code on click, in a
+security tool, would be indefensible. Not offered on `OBJECT_SCOPE_UNPROVEN`, because a boundary
+check does not close an ownership hole — the caller is authenticated and still must not touch
+that object, and proposing a check that cannot fix the problem it is attached to is its own
+kind of dishonesty. Three killing mutants.
+
+**Decision, part 3 — the status bar is a menu.** A fixed target is wrong because what the user
+needs depends on what the bar is saying. The menu is built from the last result: install first
+when the CLI is missing, the Problems panel first when hard findings stand, re-prove otherwise.
+A test requires every item to name a command the extension actually registers — the manifest
+already could not advertise a command nothing implements, and now the menu cannot either.
+
+**What did NOT change, and was reconsidered.** `PROVEN` still gets no emphatic colour. VS Code
+offers exactly two status-bar backgrounds, warning and error; the absence of alarm IS the
+signal, and painting the calm state green would put SPARDA's most emphatic pixel on its least
+defensible claim. `UNKNOWN` remains a warning background with its reason in the tooltip.
+
+Suite **1197** (+16), mutants **110/110** (+3), 4 deps.
+
+## ADR-091 — A premise nobody measured cannot license the strongest word
+
+**Context.** `premiseFor` has always reported an absent oracle honestly:
+`{ available: false, gaps: [] }`. Every consumer then read it through one line:
+
+```js
+export function withPremiseGaps(report, premise) {
+  if (!premise?.gaps?.length) return report;   // available:false ⇒ gaps:[] ⇒ report UNCHANGED
+```
+
+and one predicate, `premiseGaps > 0`. Both are blind to the difference between **an oracle
+that did not run** and **an oracle that ran and agreed**. The label was honest; the system
+consuming it could not tell the two apart, so the verdict was computed as though Direction 3
+had been verified.
+
+Measured on our own fixtures before the fix: **of the 8 that read `PROVEN`, 7 had no oracle
+run at all** — every one of them Express or FastAPI. It went unseen because all seven corpus
+giants are `CONVENTION_ROUTED`, so their premise IS measured on every run: the regression net
+and the field were blind in complementary places (E-104).
+
+Found by an independent agent auditing `docs/BRIEF-FOR-A-STRONGER-MIND.md`; its
+implementation was lost to a usage limit before it could be pushed. The diagnosis was
+reproduced here from its description, and it was right.
+
+**Decision.** The premise now has three states, not two, and the verdict can see them:
+
+| basis | meaning | effect on `PROVEN` |
+|---|---|---|
+| `measured` | an oracle that is not the analyser enumerated the surface and agreed | none |
+| `declared` | the artefact analysed IS the route table (OpenAPI) — a second witness would be the same map twice | none |
+| `unmeasured` | no oracle ran | **withheld: `PROVEN` → `PARTIAL`** |
+
+**Why a PARTIAL rung and not `PREMISE_GAP`.** A gap is *measured evidence* that the subject
+was incomplete, and it blocks. Silence is only the absence of a witness. `PARTIAL` already
+means exactly the right thing — "proved what was seen" — so this withholds a claim without
+inventing a fault, and **never fails a gate**. The strongest word is the only casualty, and it
+is the only one that was over-claiming.
+
+**Why `null` still means "old semantics".** `heal` grades a regression delta, a partial graph
+that was never a whole-app proof. A caller with no premise to speak of passes nothing and is
+untouched — the rung is opt-in for consumers that actually have an app.
+
+**The reason is carried, not just the word.** A reader told *"PARTIAL: 100 % of the surface
+resolved"* concludes the analysis was thorough and the word merely cautious. The truth was
+that nothing checked whether that surface was the app's — a different sentence with a
+different remedy (`--probe`). `prove` now leads with it, and `--json` carries
+`premise.basis` so a machine consumer can tell the two apart too.
+
+**`enforce` was the sharpest instance**, and it splits into two questions rather than one.
+It announced the literal string `PROVEN (ENFORCED)` on every successful run — on Express,
+the only framework it supports, which has no boot-free oracle. So the strongest word SPARDA
+has was printed, unconditionally, over a route table nobody had checked.
+
+The *edit* is licensed by the DELTA (same app before and after; the premise is identical on
+both sides and cannot discriminate), and gating the rollback on a measured premise would not
+make enforce safer — it would make enforce impossible. The *announcement* is licensed by the
+ORACLE. So the rollback logic is unchanged and deliberately premise-blind, while the word is
+now `PARTIAL (ENFORCED)` when nothing measured the premise, with the reason printed.
+
+**Measured.** Fixtures: `PROVEN` 8 → **1**, and that one has a measured premise;
+`PROVEN` with an unmeasured premise **7 → 0**. Corpus: **0 drift on the six clonable giants**
+— all convention-routed, so all already measured, which is exactly the control this needed.
+`dub` remains uncloned here and is stated as unmeasured, not assumed.
+
+Suite **1197**, mutants **113/113** (+3), 4 deps.
+
+## ADR-092 — The admission goes INSIDE the number, never beside it
+
+**Context.** E-104 was not one bug. Auditing the RULE rather than the suspects — the method
+an outside agent used to find E-104 in the first place — turned up four more instances of the
+same shape in an hour, and the shape is more interesting than any of them:
+
+| where | the honest field, PRESENT | the headline that lied |
+|---|---|---|
+| premise (E-104) | `available: false` | `premiseGaps: 0` → **PROVEN** |
+| `falsify` | `note: 'nothing to falsify'` | `score: 1` |
+| `gate` | `abstained: <reason>` | `ok: true` |
+| `speculate` | `(by lookup)` | `✓ PROVEN` |
+| `immunize` | — | `✓ PROVEN` |
+
+**Nobody ever lied in the honest field.** Not once in five instances did anyone write
+`available: true` for an oracle that had not run. The admission was simply put NEXT TO the
+number rather than IN it — and the number is what gets read, graphed, and branched on. A note
+is written for a reader who already suspects something is wrong; that reader is exactly the
+one who does not need it.
+
+**Decision.** Every value a consumer acts on must be able to say "I don't know" **in itself**.
+
+- `falsify` returns `score: null` when nothing was falsifiable. It used to return `1` — a
+  perfect score for a run that checked nothing, with the note beside it. A test named
+  *"(vacuously 1)"* had **codified** the equality, which is how long it survived.
+- `gate` emits `ok: null` when it abstains. Abstaining stays right (the agent is mid-edit; a
+  false alarm there is worse than silence) and it still exits 0 — it just stops answering a
+  question it did not ask.
+- The immunity **capsule carries its own basis of measurement**, and `proven` becomes
+  three-state. A capsule is PORTABLE: replayed in another repo by `speculate`, a frozen
+  `proven: true` is a claim re-asserted where its licence can no longer even be checked —
+  strictly worse than E-104, where the oracle was one call away. An older capsule with no
+  basis keeps its previous meaning, because retroactively invalidating proofs we never
+  inspected would be its own dishonesty.
+- `immunize` and `speculate` read that three-state field and say `UNMEASURED PREMISE` rather
+  than `PROVEN`. Both check `=== null` FIRST: a falsy `null` collapsing into "not proven"
+  would be a different lie, in the safe direction, and still a lie.
+
+**`null`, and specifically not `0` / `false` / `[]`.** Those are ANSWERS — "we measured, and
+the answer is none". Only `null` says "there is no answer here", and only `null` refuses to be
+summed, averaged, or rendered green.
+
+**The method is the deliverable.** Fixing five leaks is worth less than being able to find the
+sixth, so the technique is now mechanized rather than remembered:
+
+- **`docs/SOUNDNESS.md` discipline 3d** states the rule where every feature is checked.
+- **`tests/unmeasured-is-not-a-pass.test.js`** is a REGISTRY, not a test file: each row
+  constructs one surface's unmeasured state and asserts its headline does not read as a pass.
+  A new headline field adds a row — otherwise the family reopens one leak at a time, which is
+  precisely how it accumulated.
+- **`CLAUDE.md` hard rule 13**, so it is read before code is written rather than after.
+
+If a surface has no expressible "I don't know", that absence IS the finding: it will invent
+one under pressure.
+
+**Honest note on provenance.** E-104 was found by an independent agent auditing
+`docs/BRIEF-FOR-A-STRONGER-MIND.md`; its implementation was lost to a usage limit before it
+could be pushed. It also flagged `speculate` and `immunize` by name. The diagnosis and the
+`enforce` split were reproduced here; the generalization and the registry are this session's.
+
+Suite **1209** (+12), mutants **116/116** (+6), 4 deps.
+
+## ADR-093 — A guarantee is reachable, or it is decoration
+
+**Status:** accepted · supersedes nothing, amends ADR-083 and ADR-092 · E-106
+
+**Context.** ADR-092 gave the immunity capsule a three-state `proven` so a portable proof could
+never re-assert a claim whose premise nobody measured. The test passed. The mutant died. The
+branch shipped. And no call site ever passed `premiseBasis`, so in the product the field was
+always `null`, the branch never fired, and `sparda immunize` on an Express app printed
+`✓ PROVEN` exactly as before. The organ existed and nothing was plumbed into it.
+
+Two of the four call sites had the value in scope: `prove` computes the premise, uses it for
+the verdict word, and builds the capsule without it; `dossier` built the capsule three lines
+before computing the premise at all. Two others — `immunize` and `genome` — had never called
+`premiseFor` in their lives, which is a plain violation of hard rule 11 that the rule's own
+structural guard could not see, because that guard scans for consumers of `verdictOf`/`badgeFor`
+and `buildCapsule` is a second grader.
+
+**Decision.**
+
+1. **`basisFrom(premise)` is the only way to obtain a basis.** Nine call sites had hand-copied
+   `premise.available ? 'measured' : (premise?.basis ?? 'unmeasured')`. One function now. Its
+   default — for a caller holding no premise at all — is `'unmeasured'`: **forgetting to measure
+   must fail toward the weaker word.** That default is unreachable from today's callers, and has
+   a test of its own for exactly that reason: it exists for the caller not yet written, and
+   E-106 is the proof that such a caller arrives.
+
+2. **Every `buildCapsule` call site states a basis**, and a source rule enforces it. This is a
+   *wiring* property — "every call site passes this argument" cannot be observed by running one
+   command, which is precisely why four of them stayed unwired under a green suite.
+
+3. **`immunize` and `genome` call `premiseFor`.** `genome` matters most: it grades a graph,
+   signs the result with Ed25519 and merges it into a file strangers pull. Antibodies are
+   per-behaviour claims, so a route the compiler never saw does not falsify the ones minted —
+   it means none exists for it. That is now **named per route**, not counted, because a genome
+   that silently under-represents an app teaches the world that the surface it covered *is* the
+   app.
+
+4. **The structural rule names the property, not the function.** `GRADERS` lists every function
+   that turns a compiled graph into a claim someone acts on. ADR-083's first version scoped the
+   scan to a directory; the amendment widened it to the repo; this one had scoped it to a name.
+   Both times the gap was exactly the size of the scope.
+
+5. **Only the POSITIVE claim is withheld.** ADR-092's `premiseUnmeasured ? null : …` blanked a
+   genuine `false`. The premise bounds the route *set*, and a route absent from the graph cannot
+   rescue one that is in it and exposed — so NOT-PROVEN needs no premise. And `immunize` gates on
+   `=== false`, never on falsiness: `null` is falsy, and gating on it would fail builds because
+   no oracle was *available*, which `premise.js` forbids in those words.
+
+6. **Every registry row owes two assertions.** EXPRESSIBLE — the headline field can hold the
+   unmeasured state (hand-constructed). REACHABLE — a real call path produces it. The first
+   without the second is a green row over a dead wire.
+
+**Also fixed in the same pass, from the same audit** (each with a killing mutant):
+`stitch` recorded a service that failed to compile as `unread`, gates CI on it, and qualifies
+the join as PARTIAL — a half join finds no cross-service BOLA and used to report that as
+"no cross-service calls resolved (targets may be dynamic or unrelated)". `heal --check` no
+longer claims "zero protection lost" when no `baseline.json` was frozen, since without it
+`diffGraphs` never ran. `timeless replay` no longer reports "every tap consumed, zero
+divergence" over a flight with zero taps — nothing was virtualized, so the match says today's
+environment agreed, not that the code is unchanged.
+
+**Consequence, stated plainly.** `sparda immunize` on an Express or FastAPI app now withholds
+`PROVEN` until `--probe` runs the oracle, exactly as `prove` has since ADR-091. Exit code stays
+0: the word is withheld, no fault was found, and those are different outcomes.
+
+## ADR-094 — A tag that only exists on the releaser's disk names nothing
+
+**Status:** accepted · E-107 · amended by ADR-095
+
+**Context.** The gate's tag check read `git rev-list -n 1 v<version>` — a purely LOCAL question.
+v0.71.0 was cut with the tag created and never pushed (the environment refused the push), and the
+gate answered `v0.71.0 exists and points at HEAD`. Every word of that was true and it certified
+nothing: a tag nobody else can fetch names no bytes to anyone but its author. That is the v0.69.0
+class of gap again — the local view and the published view diverging, with nothing looking at the
+seam.
+
+**Decision.** `tagChecks` also takes `remoteAt`, read from `git ls-remote --tags origin <tag>`,
+and requires it to equal the local commit. An ANNOTATED tag answers with two lines — the tag
+object, then `<sha> refs/tags/<tag>^{}` for the commit it wraps — so the dereferenced line is
+preferred, because `at` comes from `rev-list` and is already a commit.
+
+**Amendment (ADR-095).** As first written this collapsed two states: `ls-remote` FAILING and
+`ls-remote` returning nothing both produced "the tag is not pushed". An unreachable network was
+reported as a measurement, sending the operator hunting for a tag that was already there. It now
+carries `remoteReachable`, and an origin it could not reach says `UNVERIFIED`. Both still BLOCK —
+a release gate that cannot verify must not certify, the same call `fetched:false` already makes —
+but the stated reason is the true one, and the reason is what someone acts on.
+
+**Also decided here:** publishing is driven by `.github/workflows/release.yml`, fired by a `v*`
+tag push and gated on `npm run release:check`. That finally puts `vsce publish` behind the same
+door as `npm publish` — the VS Code extension had been shipping with nothing checked but its
+version number, which is how a stub reached the Marketplace at 0.70.0.
+
+
+## ADR-095 — The restore may not depend on the process that is dying
+
+**Status:** accepted · E-108 · amends ADR-094
+
+**Context.** `src/ubg/apocalypse.js` reached `main` carrying `if (false)` where
+`assertedOnlyMutationRoutes` decides whether a route is guarded by trust alone. With that line
+dead, `assertedMutations` is always 0, the PARTIAL rung never fires, and a route protected only
+by an UNVERIFIED guard reads `PROVEN` — the exact false-PROVEN generator ADR-070 exists to
+remove. It shipped inside a commit whose stated scope was release automation.
+
+Nobody wrote it. `if (false)` is byte-for-byte the `repl` of a mutant that has lived in
+`tests/mutation/run.mjs` since ADR-070. The harness writes the mutated file, runs one test, and
+restores in a `finally` — and `finally` covers a thrown error, not a killed process. Ctrl-C, a CI
+timeout, an OOM: the mutation stays on disk, `git add -A` sweeps it into the next commit, and the
+suite stays green, because a surviving mutant is BY CONSTRUCTION invisible to the tests.
+
+**Reproduced, not theorised.** SIGKILL during a run left `src/ubg/llm-resolve.js` mutated with
+signal handlers installed — the harness lives inside a BLOCKING `execFileSync`, so a signal
+cannot reach JS until the child returns, and a SIGKILL never reaches it at all.
+
+**Decision — three layers, because each covers what the previous cannot.**
+
+1. **A journal, written BEFORE the file is touched.** The original bytes go to
+   `tests/mutation/.in-flight.json` (gitignored), and the NEXT run puts them back and says so.
+   This is the load-bearing one: recovery that depends on the dying process running code is not
+   recovery. An unreadable journal is FATAL, never skipped — it means a file may still be
+   mutated, and running the suite over a tree we know is suspect is the thing being prevented.
+2. **Signal handlers** for SIGINT/SIGTERM/SIGHUP, which cover the polite exits and give an
+   immediate message rather than a mystery.
+3. **`tests/no-mutant-left-behind.test.js`**, in the ORDINARY suite. The harness already knows
+   every mutation it can make, so "is the tree mutated?" is a lookup, not a judgement — and it
+   costs milliseconds where `npm run mutation` costs ten minutes. It caught the residue the very
+   first time it was reproduced.
+
+The predicate is exact rather than a scan for `repl`: a file is mutated when the mutant's `find`
+is ABSENT **and** its `repl` is PRESENT. Several mutants replace with the same generic text, and
+`if (false)` is legitimate in plenty of code. The same file also fails when a `find` no longer
+matches at all — `npm run mutation` reports that as SURVIVED, correctly but ten minutes and one
+commit too late, and Prettier moving a line is enough to cause it.
+
+**Consequence.** The mutation harness is now importable without running: `MUTANTS` is exported
+and the run is behind an "am I the entry point?" guard, placed last in the file because `run()`
+closes over the journal path.
+
+**Rule.** **A cleanup that only runs when the program is healthy is not a cleanup.** State the
+intent on durable storage before taking the risky action, and heal from that record on the next
+start. And when a tool can put the repository into a wrong state, the ordinary suite — not the
+tool's own slow mode — is where that state must be detected.

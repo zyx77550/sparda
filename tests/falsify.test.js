@@ -32,11 +32,20 @@ describe('falsifyGraph — the proof must be sensitive to its premises', () => {
     }
   });
 
-  it('an app with no protected mutation routes has nothing to falsify (vacuously 1)', () => {
+  it('nothing to falsify is an UNMEASURED score, never a perfect one (ADR-092)', () => {
+    // This test used to be called "(vacuously 1)" and asserted `score === 1`. It had
+    // codified the forbidden equality: a run that checked NOTHING reported the same number
+    // as a run where every green provably depended on its guard.
+    //
+    // The `note` was always there beside it — and that is exactly the failure mode. The
+    // admission sat next to the headline, and the headline is what a reader and a dashboard
+    // act on. `null` is the only value that carries its own caveat.
     const r = falsifyGraph(graphOf('ubg-bola-witness')); // guarded READS only
     expect(r.controls).toEqual([]);
-    expect(r.score).toBe(1);
+    expect(r.score).toBeNull();
+    expect(r.score).not.toBe(1);
     expect(r.note).toMatch(/nothing to falsify/);
+    expect(r.note).toMatch(/UNMEASURED/);
   });
 
   it('EXPOSES a blind checker: findings insensitive to the ablation → every control is a hole', () => {

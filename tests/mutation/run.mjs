@@ -15,8 +15,13 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const f = (p) => path.join(repo, p);
+const VITEST = f('node_modules/vitest/vitest.mjs');
 
-const MUTANTS = [
+// EXPORTED, and the run below is guarded behind "am I the entry point?", so
+// `tests/no-mutant-left-behind.test.js` can read this list in the ordinary suite without
+// executing 126 mutants. That test asks the one question this file cannot ask itself: is a
+// mutation still sitting in the working tree right now? (E-108.)
+export const MUTANTS = [
   {
     desc: 'llm-resolve: drop the structural verification (admit any hint)',
     file: 'src/ubg/llm-resolve.js',
@@ -117,6 +122,13 @@ const MUTANTS = [
     find: 'const softened = credentialGated || expectedPublic;',
     repl: 'const softened = credentialGated || true;',
     test: 'tests/g2-credential-gate.test.js',
+  },
+  {
+    desc: 'apocalypse: public-by-design re-label stops abstaining in an authenticated namespace (2FA-register / webhook-management holes return)',
+    file: 'src/ubg/apocalypse.js',
+    find: '        !credentialGated &&\n        !authenticatedArea &&',
+    repl: '        !credentialGated &&\n        !false &&',
+    test: 'tests/public-path-overreach.test.js',
   },
   {
     desc: 'apocalypse: stop flagging a mutation that runs before its guard (C2 false PROVEN returns)',
@@ -592,7 +604,10 @@ const MUTANTS = [
   {
     desc: 'stdio: the MCP tool grades without the premise again (the agent gets a word the CLI would refuse)',
     file: 'src/server/stdio.js',
-    find: '    premiseGaps: premise.available ? premise.gaps.length : 0,\n  });\n  return {\n    verdict: verdictState(verdict),',
+    find:
+      '    premiseGaps: premise.available ? premise.gaps.length : 0,\n' +
+      '    premiseBasis: basisFrom(premise),\n' +
+      '  });\n  return {\n    verdict: verdictState(verdict),',
     repl: '  });\n  return {\n    verdict: verdictState(verdict),',
     test: 'tests/premise-wired-everywhere.test.js',
   },
@@ -638,35 +653,391 @@ const MUTANTS = [
     repl: '      for (const star of []) {',
     test: 'tests/nest-composite-decorators.test.js',
   },
+  {
+    desc: 'nestjs: pre-filter on a fixed decorator vocabulary again (twenty drops 579 routes to 147, ADR-085)',
+    file: 'src/ubg/nestjs.js',
+    find: '  /@(?:[A-Za-z]*Controller|[A-Za-z]*Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete|Options|Head|All)(?:Mapping)?)\\b/;',
+    repl: '  /@(?:Controller|Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete|Options|Head|All)(?:Mapping)?)\\b/;',
+    test: 'tests/nest-custom-resolver.test.js',
+  },
+  {
+    desc: "nestjs: match the resolver brand by exact name (54 of twenty's 55 resolvers go unread)",
+    file: 'src/ubg/nestjs.js',
+    find: '    if (!name || !/resolver$/i.test(name)) continue;',
+    repl: "    if (name !== 'Resolver') continue;",
+    test: 'tests/nest-custom-resolver.test.js',
+  },
+  {
+    desc: 'nestjs: read only the FIRST element of an array path (a live endpoint lost in silence)',
+    file: 'src/ubg/nestjs.js',
+    find: '            ? http.paths.map((pp) => joinPath(prefix, pp))',
+    repl: '            ? [joinPath(prefix, http.paths[0])]',
+    test: 'tests/nest-custom-resolver.test.js',
+  },
+  {
+    desc: 'nestjs: treat an array path as unreadable again (four webhook controllers collapse onto POST /)',
+    file: 'src/ubg/nestjs.js',
+    find: "      pathArg?.type === 'ArrayExpression' ? pathArg.elements.filter(Boolean) : null;",
+    repl: '      null;',
+    test: 'tests/nest-custom-resolver.test.js',
+  },
+  {
+    desc: "apocalypse: report one irreversible finding per effect NODE again (12 of twenty's 28 highs were one route)",
+    file: 'src/ubg/apocalypse.js',
+    find: '        (knownDangerous ? dangerous : generic).push(obs);',
+    repl: "        (knownDangerous ? dangerous : generic).push(obs);\n        findings.push({ rule: 'IRREVERSIBLE_OBSERVABLE', severity: knownDangerous ? 'high' : 'info', entrypoint: ep.id, message: 'x', evidence: [] });",
+    test: 'tests/irreversible-per-route.test.js',
+  },
+  {
+    desc: "apocalypse: collapse a route's generic calls into a HARD finding (an advisory promoted to a gate)",
+    file: 'src/ubg/apocalypse.js',
+    find: '        const hard = dangerous.length > 0;',
+    repl: '        const hard = true;',
+    test: 'tests/irreversible-per-route.test.js',
+  },
+  {
+    desc: 'apocalypse: drop the collapsed calls from the evidence (the fan-out becomes unauditable)',
+    file: 'src/ubg/apocalypse.js',
+    find: '          evidence: flagged.map((o) => `${o.id} (${locOf(o)})`).sort(),',
+    repl: '          evidence: [],',
+    test: 'tests/irreversible-per-route.test.js',
+  },
+  {
+    desc: 'resolve: stop crossing barrels for classes (every DI hop into a workspace package dies silently)',
+    file: 'src/ubg/resolve.js',
+    find: '    const hit = resolveExportedClass(clsMod, className);',
+    repl: '    const hit = null;',
+    test: 'tests/nest-barrel-di.test.js',
+  },
+  {
+    desc: 'extract: stop following `export * from` when hunting a class (the barrel becomes a wall again)',
+    file: 'src/ubg/extract.js',
+    find: '  for (const file of mod.starReexports ?? []) {\n    if (seen.has(file)) continue;\n    seen.add(file);\n    const hit = resolveExportedClass(parseModule(file), name, seen);',
+    repl: '  for (const file of []) {\n    if (seen.has(file)) continue;\n    seen.add(file);\n    const hit = resolveExportedClass(parseModule(file), name, seen);',
+    test: 'tests/nest-barrel-di.test.js',
+  },
+  {
+    desc: 'falsify: score 1 when NOTHING was falsified (a perfect number for a run that checked nothing)',
+    file: 'src/ubg/falsify.js',
+    find: '      score: null,',
+    repl: '      score: 1,',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'immunity: a portable capsule claims proven over an unmeasured premise (the word travels without its licence)',
+    file: 'src/ubg/immunity.js',
+    find: '    proven: premiseUnmeasured && provenByPol ? null : provenByPol,',
+    repl: '    proven: provenByPol,',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'gate: report ok:true when it ABSTAINED (a check that never ran reads as a pass)',
+    file: 'src/commands/gate.js',
+    find: '      console.log(JSON.stringify({ ok: null, abstained: err.message }, null, 2));',
+    repl: '      console.log(JSON.stringify({ ok: true, abstained: err.message }, null, 2));',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'apocalypse: let an UNMEASURED premise read as PROVEN again (E-104 — the forbidden equality)',
+    file: 'src/ubg/apocalypse.js',
+    find: "  const premiseUnmeasured = premiseBasis === 'unmeasured';",
+    repl: '  const premiseUnmeasured = false;',
+    test: 'tests/prove.test.js',
+  },
+  {
+    desc: 'premise: label an absent oracle "measured" (an honest state erased at the source)',
+    file: 'src/ubg/premise.js',
+    find: "  if (framework === 'openapi') return 'declared';\n  return 'unmeasured';",
+    repl: "  if (framework === 'openapi') return 'declared';\n  return 'measured';",
+    test: 'tests/prove.test.js',
+  },
+  {
+    desc: 'prove: stop naming the premise as the reason (PARTIAL at 100% coverage with no cause given)',
+    file: 'src/commands/prove.js',
+    find: '    if (verdict.premiseUnmeasured)\n      reasons.unshift(',
+    repl: '    if (false)\n      reasons.unshift(',
+    test: 'tests/prove.test.js',
+  },
+  {
+    desc: 'vscode: offer "Install sparda-mcp" for ANY failure (a wrong remedy delivered with a button)',
+    file: 'extensions/vscode/src/lib.cjs',
+    find: "  if (!cli || cli.source !== 'npx') return false;",
+    repl: '  if (!cli) return false;',
+    test: 'tests/vscode-extension.test.js',
+  },
+  {
+    desc: 'vscode: install sparda-mcp GLOBALLY (the proving version stops being the pinned one)',
+    file: 'extensions/vscode/src/lib.cjs',
+    find: "  return { cmd: 'npm i -D sparda-mcp', from: null };",
+    repl: "  return { cmd: 'npm i -g sparda-mcp', from: null };",
+    test: 'tests/vscode-extension.test.js',
+  },
+  {
+    desc: 'vscode: let the lightbulb offer enforce on an OWNERSHIP finding (a check that cannot fix it)',
+    file: 'extensions/vscode/src/lib.cjs',
+    find: "const ENFORCEABLE = new Set(['UNGUARDED_MUTATION']);",
+    repl: "const ENFORCEABLE = new Set(['UNGUARDED_MUTATION', 'OBJECT_SCOPE_UNPROVEN']);",
+    test: 'tests/vscode-extension.test.js',
+  },
+  {
+    desc: 'release: put `prepublishOnly` back to a bare `vitest run` (the exact hook that let 0.69.0 out)',
+    file: 'package.json',
+    find: '"prepublishOnly": "node scripts/release-gate.mjs"',
+    repl: '"prepublishOnly": "vitest run"',
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: stop comparing HEAD to origin/main (a release cut mid-flight passes again — 0.69.0 exactly)',
+    file: 'scripts/release-checks.mjs',
+    find: '  if (head !== remote)',
+    repl: '  if (false)',
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: read an unreachable npm registry as "version absent" (unmeasured counted as a pass)',
+    file: 'scripts/release-checks.mjs',
+    find: "    return { state: 'unverified' };",
+    repl: "    return { state: 'ok' };",
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: drop the VS Code manifest from the list (the one artefact that ships OUTSIDE the gate)',
+    file: 'scripts/release-checks.mjs',
+    find: "  ['extensions/vscode/package.json', ['version']],",
+    repl: '',
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: check only the first version field of server.json (a half-bump ships)',
+    file: 'scripts/release-checks.mjs',
+    find: "  ['server.json', ['version', 'packages.0.version']],",
+    repl: "  ['server.json', ['version']],",
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-gate: add an env escape hatch (the one release that skips the gate is the one that needed it)',
+    file: 'scripts/release-gate.mjs',
+    find: 'const failures = [];',
+    repl: 'const failures = [];\nif (process.env.SKIP_GATE) process.exit(0);',
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'nestjs: let a non-guard forRoutes middleware attach anyway (a LoggerMiddleware softens a real hole)',
+    file: 'src/ubg/nestjs.js',
+    find: 'if (!proven && !(GUARD_DECORATOR.test(name) || nameLooksLikePrincipal(name)))\n        continue;',
+    repl: 'if (false) continue;',
+    test: 'tests/nest-forroutes-middleware.test.js',
+  },
+  {
+    desc: 'nestjs: fabricate the forRoutes deny-proof (every bound middleware reads as a proven denier)',
+    file: 'src/ubg/nestjs.js',
+    find: 'return Boolean(scan.guardSignals?.deniesWithStatus);',
+    repl: 'return true;',
+    test: 'tests/nest-forroutes-middleware.test.js',
+  },
+  {
+    desc: 'nestjs: ignore the forRoutes method (a POST binding covers the DELETE — cross-verb over-cover)',
+    file: 'src/ubg/nestjs.js',
+    find: "      (target.method === 'all' || target.method === verb) &&",
+    repl: '      (true) &&',
+    test: 'tests/nest-forroutes-middleware.test.js',
+  },
+  {
+    desc: 'nestjs: let a literal forRoutes path over-cover a different literal route (strict-path invariant)',
+    file: 'src/ubg/nestjs.js',
+    find: 'if (ts !== rs) return false; // literal vs literal',
+    repl: 'if (false) return false; // literal vs literal',
+    test: 'tests/nest-forroutes-middleware.test.js',
+  },
+  {
+    desc: 'release-checks: stop verifying the tag is pushed to origin (a local-only tag passes again)',
+    file: 'scripts/release-checks.mjs',
+    find: '  if (remoteAt !== at)',
+    repl: '  if (false)',
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: let a detached HEAD pass without being origin/main (a tag build of ANY commit publishes)',
+    file: 'scripts/release-checks.mjs',
+    find: "  if (branch !== 'main' && !(branch === 'HEAD' && atMainTip))",
+    repl: "  if (branch !== 'main' && !(branch === 'HEAD'))",
+    test: 'tests/release-gate.test.js',
+  },
+  {
+    desc: 'release-checks: report an unreachable origin as an un-pushed tag (rule 13 — could-not-ask told as a measurement)',
+    file: 'scripts/release-checks.mjs',
+    find: '  if (!remoteReachable)',
+    repl: '  if (false)',
+    test: 'tests/release-gate.test.js',
+  },
+  // ── E-106: the ADR-092 fix existed and no call site reached it ─────────────────────
+  {
+    desc: 'premise: a consumer that never measured defaults to "measured" (E-106 — fail toward the stronger word)',
+    file: 'src/ubg/premise.js',
+    find: "  if (premise?.available) return 'measured';\n  return premise?.basis ?? 'unmeasured';",
+    repl: "  if (premise?.available) return 'measured';\n  return premise?.basis ?? 'measured';",
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'immunize: build the capsule with no basis again (the portable proof stops carrying its licence)',
+    file: 'src/commands/immunize.js',
+    find: '  const capsule = buildCapsule(canonical, { premiseBasis: basisFrom(premise) });',
+    repl: '  const capsule = buildCapsule(canonical);',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'immunize: gate CI on a falsy `proven` (fail a build because no oracle was AVAILABLE)',
+    file: 'src/commands/immunize.js',
+    find: '  if (capsule.proven === false && !capsule.surfaceOnly) process.exitCode = 1;',
+    repl: '  if (!capsule.proven && !capsule.surfaceOnly) process.exitCode = 1;',
+    test: 'tests/command-smoke.test.js',
+  },
+  {
+    desc: 'capsule: blank a real NOT-PROVEN to null when the premise is unmeasured (loses a finding in the unsafe direction)',
+    file: 'src/ubg/immunity.js',
+    find: '    proven: premiseUnmeasured && provenByPol ? null : provenByPol,',
+    repl: '    proven: premiseUnmeasured ? null : provenByPol,',
+    test: 'tests/command-smoke.test.js',
+  },
+  {
+    desc: 'genome: sign and ship a contribution without ever asking for the premise (rule 11, on the artifact that TRAVELS)',
+    file: 'src/commands/genome.js',
+    find: '  const capsule = buildCapsule(canonical, { premiseBasis: basisFrom(premise) });',
+    repl: '  const capsule = buildCapsule(canonical);',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'stitch: swallow a service that did not compile (a half join reports "nothing found")',
+    file: 'src/commands/stitch.js',
+    find: '      unread.push({ dir: d, reason: e.message.slice(0, 140) });',
+    repl: '      console.error(`  ✗ ${d}: ${e.message.slice(0, 70)}`);',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'heal: claim "zero protection lost" with no baseline to diff against',
+    file: 'src/commands/heal.js',
+    find: '  const deltaMeasured = fs.existsSync(baselinePath);',
+    repl: '  const deltaMeasured = true;',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
+  {
+    desc: 'timeless: report "zero divergence" over a flight that recorded zero taps (falsify\'s empty-control-set bug, relocated)',
+    file: 'src/commands/timeless.js',
+    find: '    if (!flight.taps.length)',
+    repl: '    if (false)',
+    test: 'tests/unmeasured-is-not-a-pass.test.js',
+  },
 ];
 
-const survived = [];
-for (const m of MUTANTS) {
-  const abs = f(m.file);
-  const orig = fs.readFileSync(abs, 'utf8');
-  if (!orig.includes(m.find)) {
-    console.log(`⚠ target moved — ${m.desc}`);
-    survived.push(`${m.desc} (mutation target not found — update the harness)`);
-    continue;
-  }
-  fs.writeFileSync(abs, orig.replace(m.find, m.repl));
-  let killed = false;
+// THE JOURNAL. Signal handlers are not enough and this was measured, not assumed: the harness
+// spends its whole life inside a BLOCKING `execFileSync`, so a signal that arrives mid-mutant
+// cannot reach JS until the child returns, and a SIGKILL never reaches it at all. Interrupting a
+// run left `src/ubg/nestjs.js` mutated on disk with every handler in place.
+//
+// So the recovery must not depend on the dying process doing anything. The original bytes are
+// written to a journal BEFORE the file is touched, and the NEXT run puts them back. Whatever
+// kills this process — Ctrl-C, a CI timeout, an OOM, the power — the tree heals on the next
+// invocation instead of shipping a dead check inside an unrelated commit (E-108).
+const JOURNAL = f('tests/mutation/.in-flight.json');
+
+function healFromJournal() {
+  if (!fs.existsSync(JOURNAL)) return;
   try {
-    execFileSync('npx', ['vitest', 'run', m.test], { cwd: repo, stdio: 'ignore' });
-  } catch {
-    killed = true; // the test FAILED under mutation → mutant killed (good)
-  } finally {
-    fs.writeFileSync(abs, orig); // ALWAYS restore, even on crash
+    const { file, orig } = JSON.parse(fs.readFileSync(JOURNAL, 'utf8'));
+    fs.writeFileSync(f(file), orig);
+    console.error(
+      `⚠ a previous run was interrupted mid-mutant — restored ${file} before starting.\n`,
+    );
+  } catch (err) {
+    // Loud, and fatal: a journal we cannot apply means a file may still be mutated, and
+    // continuing would run the whole suite against a tree we know is suspect.
+    console.error(`✗ could not apply the mutation journal (${JOURNAL}): ${err.message}`);
+    console.error('  restore by hand (`git checkout -- <file>`) before re-running.');
+    process.exit(1);
   }
-  console.log(killed ? `✓ killed   — ${m.desc}` : `✗ SURVIVED — ${m.desc}`);
-  if (!killed) survived.push(m.desc);
+  fs.rmSync(JOURNAL, { force: true });
 }
 
-if (survived.length) {
-  console.error(
-    `\n✗ ${survived.length}/${MUTANTS.length} mutant(s) SURVIVED — a guarded line has no test that bites:`,
-  );
-  for (const s of survived) console.error(`    - ${s}`);
-  process.exit(1);
+function run() {
+  healFromJournal();
+  const survived = [];
+  // THE RESTORE MUST SURVIVE THE PROCESS DYING. `finally` covers a thrown error; it does not
+  // cover Ctrl-C, a CI timeout, or a SIGTERM — and one of those is how `if (false)` ended up
+  // committed into apocalypse.js inside an unrelated commit (E-108). The mutated file is
+  // registered before it is written, and put back by a signal handler as well.
+  let inFlight = null;
+  const putBack = () => {
+    if (!inFlight) return;
+    try {
+      fs.writeFileSync(inFlight.abs, inFlight.orig);
+      fs.rmSync(JOURNAL, { force: true });
+    } catch {
+      /* the journal survives, so the next run heals it — that is the point of having one */
+    }
+    console.error(`\n⚠ interrupted — restored ${inFlight.file}`);
+    inFlight = null;
+  };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => {
+      putBack();
+      process.exit(130);
+    });
+  }
+  process.on('uncaughtException', (err) => {
+    putBack();
+    console.error(err);
+    process.exit(1);
+  });
+
+  for (const m of MUTANTS) {
+    const abs = f(m.file);
+    const orig = fs.readFileSync(abs, 'utf8');
+    if (!orig.includes(m.find)) {
+      console.log(`⚠ target moved — ${m.desc}`);
+      survived.push(`${m.desc} (mutation target not found — update the harness)`);
+      continue;
+    }
+    inFlight = { abs, orig, file: m.file };
+    // journal FIRST, then mutate — the window where the file is changed and no record of its
+    // original exists must be empty
+    fs.writeFileSync(JOURNAL, JSON.stringify({ file: m.file, orig }));
+    fs.writeFileSync(abs, orig.replace(m.find, m.repl));
+    let killed = false;
+    try {
+      // NOT `npx`: on Windows that is `npx.cmd`, a batch wrapper `execFileSync` cannot start
+      // (ENOENT). This harness is a step of the release gate, so the whole publish died there
+      // — E-101 fixed the gate and missed the thing the gate calls. `process.execPath` is the
+      // same node already running this file: no shell, no PATH lookup, and the vitest the
+      // lockfile pins rather than whatever npx would resolve.
+      execFileSync(process.execPath, [VITEST, 'run', m.test], {
+        cwd: repo,
+        stdio: 'ignore',
+      });
+    } catch {
+      killed = true; // the test FAILED under mutation → mutant killed (good)
+    } finally {
+      fs.writeFileSync(abs, orig); // ALWAYS restore, even on crash
+      fs.rmSync(JOURNAL, { force: true });
+      inFlight = null;
+    }
+    console.log(killed ? `✓ killed   — ${m.desc}` : `✗ SURVIVED — ${m.desc}`);
+    if (!killed) survived.push(m.desc);
+  }
+
+  if (survived.length) {
+    console.error(
+      `\n✗ ${survived.length}/${MUTANTS.length} mutant(s) SURVIVED — a guarded line has no test that bites:`,
+    );
+    for (const s of survived) console.error(`    - ${s}`);
+    process.exit(1);
+  }
+  console.log(`\n✓ all ${MUTANTS.length} mutants killed — the guardian tests bite.`);
 }
-console.log(`\n✓ all ${MUTANTS.length} mutants killed — the guardian tests bite.`);
+
+// Importing this file must not RUN it: `tests/no-mutant-left-behind.test.js` reads `MUTANTS` in
+// the ordinary suite, and without this guard that import would launch all 128 mutants — each of
+// which spawns vitest, recursively. Placed last on purpose: `run()` closes over `JOURNAL`, and
+// calling it above that `const` is a temporal-dead-zone crash.
+const invokedDirectly =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) run();

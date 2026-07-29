@@ -65,8 +65,17 @@ const VERB_DECORATOR =
   /^(?:http)?(get|post|put|patch|delete|options|head|all)(?:mapping)?$/i;
 // cheap file pre-filter: a route decorator or a controller/resolver brand must appear
 // textually before we pay for a full parse (keeps the twenty-scale monorepo fast).
+// A house brand is the norm, not the exception: twenty registers 54 GraphQL resolver
+// classes as `@MetadataResolver` / `@CoreResolver` / `@AdminResolver` and exactly ONE as
+// `@Resolver`. A fixed vocabulary matched 33 of its 6090 files; matching the SUFFIX
+// matches 128 — the other 95 were route-bearing files SPARDA never opened, so their
+// routes produced no route, no skip and no unknown handler (E-092).
+// Deliberately NOT widened to `Mutation|Query|Subscription`: those are also PARAMETER
+// decorators (`@Query('id') id: string`) in ordinary REST controllers, and they buy one
+// extra file out of 6090 — a class that registers a GraphQL operation carries a
+// Resolver-suffixed brand, which is what the suffix already catches.
 const CANDIDATE_RE =
-  /@(?:Controller|RestController|JsonController|Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete|Options|Head|All)(?:Mapping)?)\b/;
+  /@(?:[A-Za-z]*Controller|[A-Za-z]*Resolver|(?:Http)?(?:Get|Post|Put|Patch|Delete|Options|Head|All)(?:Mapping)?)\b/;
 
 // → { routes, globalMiddlewares, helpers, skipped, unknownHandlers, scannedFiles }
 export function extractNest(cwd, entryDir) {
@@ -87,6 +96,12 @@ export function extractNest(cwd, entryDir) {
   // verified (immich: 253 guards, 0 verified). Prove it ONCE here — resolve its canActivate
   // through DI to a real deny — and every auth-named guard on the app earns `verified`.
   const globalGuardDenies = detectGlobalDenyGuard(root, engine);
+  // Middleware bound in a module's `configure()` via `consumer.apply(X).forRoutes(...)`
+  // (ADR-089) — the auth a per-controller decorator scan cannot see. Detected once; matched
+  // per concrete route below. Unreadable bindings are declared, never guessed.
+  const { bindings: consumerBindings, blindspots: consumerBlindspots } =
+    detectConsumerMiddleware(root, engine);
+  for (const b of consumerBlindspots) skipped.push(b);
   // one resolution per decorator DEFINITION, not per use — novu applies the same four
   // composites across 451 routes
   const compositeCache = new Map();
@@ -179,7 +194,7 @@ export function extractNest(cwd, entryDir) {
     traverse(mod.ast, {
       ClassDeclaration(p) {
         const cls = p.node;
-        const resolver = decoratorArg(cls.decorators, 'Resolver');
+        const resolver = resolverBrandOf(cls);
         // Structural admission (ADR-055): a class is a route source if it is a REST
         // controller by decorator (any brand), a GraphQL @Resolver, OR simply carries a
         // method with an HTTP-verb decorator — the last case catches a framework whose
@@ -236,7 +251,7 @@ export function extractNest(cwd, entryDir) {
           // method it delegates to through DI (this.<prop>.<call>())
           const scan = engine.handlerScan(m, di, mod, cls);
 
-          const chain = [
+          const baseChain = [
             ...guards.map(({ name, mod: srcMod }) => {
               const scan = guardStepScan(name, srcMod, false);
               return {
@@ -290,18 +305,35 @@ export function extractNest(cwd, entryDir) {
             });
           }
           const verbs = http.method === 'all' ? NEST_ALL_EXPANSION : [http.method];
-          for (const verb of verbs) {
-            routes.push({
-              method: verb,
-              path: fullPath,
-              sourceFile: rel,
-              sourceLine: m.loc?.start.line ?? 0,
-              params: pathParamsOf(fullPath),
-              chain,
-              description: '',
-              authOptOut: http.optOut === true, // temp — consumed by the posture pass
-            });
-          }
+          // a decorator may register several paths (`@Post(['a','b'])`) — one route each,
+          // exactly as `@All` expands into one route per verb
+          const paths = http.paths
+            ? http.paths.map((pp) => joinPath(prefix, pp))
+            : [fullPath];
+          for (const verb of verbs)
+            for (const routePath of paths) {
+              // Middleware this concrete (verb, path) earns from module forRoutes bindings,
+              // computed per route because a binding matches on method + path, which vary
+              // across the @All / multi-path expansion. Prepended: middleware runs first.
+              const mwSteps = consumerGuardSteps(
+                consumerBindings,
+                verb,
+                routePath,
+                cls.id?.name ?? null,
+                rel,
+                m.loc?.start.line ?? 0,
+              ).filter((s) => !baseChain.some((c) => c.name === s.name));
+              routes.push({
+                method: verb,
+                path: routePath,
+                sourceFile: rel,
+                sourceLine: m.loc?.start.line ?? 0,
+                params: pathParamsOf(routePath),
+                chain: mwSteps.length ? [...mwSteps, ...baseChain] : baseChain,
+                description: '',
+                authOptOut: http.optOut === true, // temp — consumed by the posture pass
+              });
+            }
         }
       },
     });
@@ -353,20 +385,6 @@ function applyAuthPosture(routes) {
 
 // --- decorator readers ------------------------------------------------------
 
-// the first string-literal arg of decorator `@Name(...)`, or undefined if the
-// decorator is absent. Returns { value } (value may be '' for a bare `@Name()`).
-function decoratorArg(decorators, name) {
-  for (const d of decorators ?? []) {
-    const call = d.expression;
-    if (call.type === 'CallExpression' && idName(call.callee) === name) {
-      const a0 = call.arguments[0];
-      return { value: a0?.type === 'StringLiteral' ? a0.value : '' };
-    }
-    if (call.type === 'Identifier' && call.name === name) return { value: '' };
-  }
-  return undefined;
-}
-
 // An auth-opt-OUT flag in a route decorator's options object: `@Get('/x', { skipAuth:
 // true })` (n8n), `{ authenticate: false }`, `{ public: true }`. Its very EXISTENCE in
 // an app is the signal that the app is guarded-BY-DEFAULT (why carry an opt-out unless
@@ -396,13 +414,31 @@ function httpDecorator(decorators) {
       }
     }
     const pathArg = args[0];
-    // a first argument that exists but is not a literal is a path we cannot read —
-    // distinct from no argument at all, which legitimately means "the prefix"
-    const pathDynamic = Boolean(pathArg) && pathArg.type !== 'StringLiteral';
+    // `@Post(['a', 'b'])` is ONE decorator registering TWO routes — Nest serves every
+    // element. Reading only `args[0]` saw an ArrayExpression, judged it "not a literal",
+    // and fell back to the controller prefix: twenty's four array-pathed webhook
+    // controllers all collapsed onto a single phantom `POST /`, and the two findings that
+    // hold its verdict were reported against a route the app does not serve (E-093).
+    // Taking only the FIRST element would be worse than the collapse — it loses a live
+    // endpoint in silence, which the registration invariant forbids (ADR-079).
+    const elements =
+      pathArg?.type === 'ArrayExpression' ? pathArg.elements.filter(Boolean) : null;
+    const literals = (elements ?? (pathArg ? [pathArg] : [])).filter(
+      (e) => e.type === 'StringLiteral',
+    );
+    // a path argument that exists but is not a literal is a path we cannot read —
+    // distinct from no argument at all, which legitimately means "the prefix". In an
+    // array, an unreadable ELEMENT is its own lost route, so the doubt survives even
+    // when its siblings read cleanly.
+    const unreadable = (elements ?? (pathArg ? [pathArg] : [])).filter(
+      (e) => e.type !== 'StringLiteral',
+    );
     return {
       method: m[1].toLowerCase(),
-      path: pathArg?.type === 'StringLiteral' ? pathArg.value : '',
-      ...(pathDynamic ? { pathDynamic: true } : {}),
+      path: literals[0]?.value ?? '',
+      // every path this decorator registers, in source order — one route each
+      paths: literals.length > 1 ? literals.map((e) => e.value) : undefined,
+      ...(unreadable.length ? { pathDynamic: true } : {}),
       optOut,
     };
   }
@@ -435,6 +471,22 @@ function controllerPrefixOf(cls) {
       return call.arguments[0].value;
   }
   return null;
+}
+
+// The class's GraphQL-resolver brand, read by SUFFIX for the same reason
+// `controllerPrefixOf` reads controllers by suffix (ADR-055): the protocol is universal,
+// the decorator name is the house's. `@MetadataResolver(() => WorkspaceEntity)` is a
+// resolver; an exact-name check for `Resolver` saw none of twenty's 54.
+// Returns `{ value }` (the shape the caller already consumes) or undefined.
+function resolverBrandOf(cls) {
+  for (const d of cls.decorators ?? []) {
+    const call = d.expression;
+    const name = call.type === 'CallExpression' ? idName(call.callee) : idName(call);
+    if (!name || !/resolver$/i.test(name)) continue;
+    const a0 = call.type === 'CallExpression' ? call.arguments[0] : null;
+    return { value: a0?.type === 'StringLiteral' ? a0.value : '' };
+  }
+  return undefined;
 }
 
 // A GraphQL operation is the same behavior spine as an HTTP route: @Query/@Subscription
@@ -629,6 +681,266 @@ function returnsFalse(fnNode) {
       found = true;
   });
   return found;
+}
+
+// --- MiddlewareConsumer.forRoutes() (ADR-089) ------------------------------------------
+//
+// The auth that decorator scans miss. A Nest module can gate routes NOT with `@UseGuards`
+// on the controller, but by registering middleware in its own `configure()` method:
+//
+//   export class ArticleModule implements NestModule {
+//     configure(consumer: MiddlewareConsumer) {
+//       consumer.apply(AuthMiddleware).forRoutes(
+//         { path: 'articles/:slug', method: RequestMethod.DELETE }, …);
+//     }
+//   }
+//
+// The controller carries no guard decorator, so a per-method scan reads the mutation as
+// UNGUARDED — a false CRITICAL on a route the framework actually authenticates (measured
+// on nestjs-realworld: 7 hard findings, 4 of them false because AuthMiddleware guards the
+// route from the module, not the controller). This is the middleware twin of the global
+// APP_GUARD detection above: read the binding once, in the module, and attach the guard to
+// every route it PROVABLY targets.
+//
+// SOUNDNESS. Attaching a guard DOWNGRADES a finding, so a binding matched to a route it does
+// not cover would HIDE a hole (Direction 2). Two disciplines keep it honest:
+//   1. the matcher never OVER-covers — a target `:param` covers a route segment (literal or
+//      param), but a target literal never covers a route `:param` (the route serves URLs the
+//      literal target does not), and a shorter target never covers a deeper route. Anything
+//      unreadable (computed path, spread, an `exclude()` we cannot parse) matches NOTHING and
+//      is DECLARED, never guessed — an under-match is a surfaceable false positive, the safe
+//      direction.
+//   2. only an AUTH-NAMED middleware attaches (here as an ASSERTED guard, ADR-063 — trusted
+//      by name, never `verified`); a `LoggerMiddleware` registered via forRoutes gates
+//      nothing and must not soften a critical. Proving the middleware's `use()` actually
+//      denies (→ verified) is the separate, stricter upgrade in `middlewareUseScan`.
+const ASSERTED_MIDDLEWARE_SCAN = {
+  effects: [],
+  returnShapes: [],
+  calls: [],
+  async: false,
+  validatesInput: false,
+  guardSignals: {},
+  assertedGuard: true,
+};
+
+// The deny-proven twin (ADR-089): when a forRoutes middleware's `use()` resolves through DI
+// to a real deny (a 4xx throw / `res.status(401)`), its guard reads VERIFIED — the mutation
+// reaches PROVEN, exactly like a proven APP_GUARD. Behaviour over names: a middleware PROVEN
+// to deny is a guard even if its name reads nothing like one; a `LoggerMiddleware` that only
+// calls next() proves no deny and stays out of the chain.
+const VERIFIED_MIDDLEWARE_SCAN = {
+  effects: [],
+  returnShapes: [],
+  calls: [],
+  async: true,
+  validatesInput: false,
+  guardSignals: { deniesWithStatus: true },
+};
+
+// A verb from a `RequestMethod.X` member expression: `RequestMethod.DELETE` → 'delete',
+// `RequestMethod.ALL` → 'all'. undefined = a method we cannot read (a variable / computed).
+function requestMethodOf(node) {
+  if (node?.type !== 'MemberExpression' || node.property?.type !== 'Identifier')
+    return undefined;
+  const v = node.property.name.toLowerCase();
+  return v === 'all' || NEST_ALL_EXPANSION.includes(v) || v === 'options' || v === 'head'
+    ? v
+    : undefined;
+}
+
+// segments of a path, leading/trailing slashes stripped: '/articles/:slug/' → ['articles',':slug']
+const segsOf = (p) =>
+  String(p ?? '')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .filter(Boolean);
+
+// Does a forRoutes target PATH cover a route PATH, in Nest's path-to-regexp sense, WITHOUT
+// ever over-covering? A target param covers any route segment; a target literal covers only
+// the identical literal (a route param at that position serves URLs the literal misses); a
+// trailing `*` covers the remainder; unmatched depth on either side is no cover.
+function pathCovers(targetPath, routePath) {
+  const t = segsOf(targetPath);
+  const r = segsOf(routePath);
+  for (let i = 0; i < t.length; i++) {
+    const ts = t[i];
+    if (ts === '*' || ts === '(.*)' || ts === '**') return true; // wildcard → covers the rest
+    const rs = r[i];
+    if (rs === undefined) return false; // target reaches deeper than the route
+    if (ts.startsWith(':')) continue; // param target covers any segment (literal or param)
+    if (rs.startsWith(':')) return false; // literal target cannot cover a route param
+    if (ts !== rs) return false; // literal vs literal
+  }
+  return t.length === r.length; // no leftover route segments the target fails to cover
+}
+
+// One forRoutes / exclude argument → a normalized target. `unread` is DECLARED, never treated
+// as covering anything (soundness: an unreadable binding is a blind spot, not a wildcard).
+function parseConsumerTarget(arg) {
+  if (arg.type === 'StringLiteral')
+    return { kind: 'path', path: arg.value, method: 'all' };
+  if (arg.type === 'Identifier') return { kind: 'controller', name: arg.name };
+  if (arg.type === 'ObjectExpression') {
+    let p = null;
+    let method = 'all'; // Nest default when `method` is omitted is RequestMethod.ALL
+    let unread = false;
+    for (const pr of arg.properties) {
+      if (pr.type !== 'ObjectProperty' || pr.key?.type !== 'Identifier') continue;
+      if (pr.key.name === 'path') {
+        if (pr.value.type === 'StringLiteral') p = pr.value.value;
+        else unread = true;
+      } else if (pr.key.name === 'method') {
+        const m = requestMethodOf(pr.value);
+        if (m === undefined) unread = true;
+        else method = m;
+      }
+    }
+    if (unread || p === null) return { kind: 'unread', src: 'route-object' };
+    return { kind: 'path', path: p, method };
+  }
+  return { kind: 'unread', src: arg.type };
+}
+
+// The `.apply(...).forRoutes(...)` (optionally `.exclude(...)`) chain rooted at a forRoutes
+// call: the applied middleware NAMES, the forRoutes TARGETS, and the exclude targets.
+function consumerChainOf(forRoutesCall) {
+  const targets = forRoutesCall.arguments.map(parseConsumerTarget);
+  const applied = [];
+  const excludes = [];
+  let node =
+    forRoutesCall.callee.type === 'MemberExpression' ? forRoutesCall.callee.object : null;
+  while (
+    node &&
+    node.type === 'CallExpression' &&
+    node.callee?.type === 'MemberExpression'
+  ) {
+    const prop = node.callee.property?.name;
+    if (prop === 'apply')
+      for (const a of node.arguments) {
+        const n = idName(a);
+        if (n) applied.push(n);
+        else excludes.push({ kind: 'unread', src: 'apply-arg' }); // unreadable middleware ref
+      }
+    else if (prop === 'exclude')
+      excludes.push(...node.arguments.map(parseConsumerTarget));
+    node = node.callee.object;
+  }
+  return { applied, targets, excludes };
+}
+
+// → { bindings, blindspots }. Each binding: { middlewares:[name], mod, targets, excludes,
+// hasUnread }. Scans module files (textual pre-filter) for every forRoutes chain. The mod is
+// carried so a later deny-proof can resolve the middleware class through its imports.
+function detectConsumerMiddleware(root, engine) {
+  const bindings = [];
+  const blindspots = [];
+  for (const file of walk(root)) {
+    let head;
+    try {
+      head = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (!/forRoutes/.test(head)) continue;
+    const mod = parseModule(file);
+    if (mod.error) continue;
+    const rel = relOf(root, file);
+    walkAst(mod.ast.program, (n) => {
+      if (
+        n.type !== 'CallExpression' ||
+        n.callee?.type !== 'MemberExpression' ||
+        n.callee.property?.name !== 'forRoutes'
+      )
+        return;
+      const { applied, targets, excludes } = consumerChainOf(n);
+      if (!applied.length) return; // a forRoutes with no readable middleware — nothing to attach
+      const hasUnread =
+        targets.some((t) => t.kind === 'unread') ||
+        excludes.some((t) => t.kind === 'unread');
+      if (hasUnread)
+        blindspots.push({
+          reason: `a MiddlewareConsumer binding in ${rel} applies ${applied.join(', ')} through a route/exclude target SPARDA could not read — routes it may cover are left flagged rather than silently credited`,
+          file: rel,
+          risk: 'high',
+        });
+      // Prove the deny ONCE per binding (ADR-089): a middleware whose `use()` resolves to a
+      // real deny reads VERIFIED wherever it is bound; one whose deny we cannot prove stays
+      // asserted-by-name. Resolution follows the middleware's own imports from this module.
+      const denies = new Set();
+      for (const name of applied)
+        if (middlewareDenies(name, mod, engine)) denies.add(name);
+      bindings.push({ middlewares: applied, denies, mod, targets, excludes });
+    });
+  }
+  return { bindings, blindspots };
+}
+
+// Resolve a forRoutes middleware class → its `use()` → prove it can deny (a 4xx throw /
+// `res.status(401)` / `next(err)`), following DI so a delegated deny is seen. The middleware
+// twin of `guardClassDenies`. A functional middleware (a bare function, not a class) has no
+// class to resolve → false, and the caller falls back to the asserted-by-name reading.
+function middlewareDenies(name, mod, engine) {
+  const file = mod.imports.get(name);
+  const gmod = file ? parseModule(file) : mod;
+  if (gmod.error) return false;
+  const cls = classInModule(gmod, name);
+  if (!cls) return false;
+  const hit = methodInClassChain(cls, gmod, 'use');
+  if (!hit) return false;
+  const di = diMapWithMod(cls, hit.mod);
+  const scan = engine.handlerScan(hit.fn, di, hit.mod, cls);
+  return Boolean(scan.guardSignals?.deniesWithStatus);
+}
+
+// The middleware guard steps a route earns from the app's forRoutes bindings. A binding
+// applies to the route iff some target covers it AND no exclude does; an unreadable exclude
+// makes the binding abstain on that route (never attach — the route might be the excluded
+// one). A middleware PROVEN to deny attaches VERIFIED (→ PROVEN); one only auth-NAMED attaches
+// asserted (name-trusted, unverified); anything else — a LoggerMiddleware that proves no deny
+// and reads nothing like a guard — attaches nothing and never softens the critical.
+function consumerGuardSteps(bindings, verb, routePath, controllerName, sourceFile, line) {
+  const steps = [];
+  const seen = new Set();
+  for (const b of bindings) {
+    const excluded = b.excludes.some((t) =>
+      targetCovers(t, verb, routePath, controllerName),
+    );
+    const excludeUnreadable = b.excludes.some((t) => t.kind === 'unread');
+    if (excluded || excludeUnreadable) continue;
+    if (!b.targets.some((t) => targetCovers(t, verb, routePath, controllerName)))
+      continue;
+    for (const name of b.middlewares) {
+      if (seen.has(name)) continue;
+      const proven = b.denies?.has(name);
+      // proof beats name (behaviour over names): a proven denier is a guard whatever its
+      // name; an unproven middleware must be auth-named to attach even asserted.
+      if (!proven && !(GUARD_DECORATOR.test(name) || nameLooksLikePrincipal(name)))
+        continue;
+      seen.add(name);
+      steps.push({
+        name,
+        sourceFile,
+        sourceLine: line ?? 0,
+        fn: null,
+        scan: proven ? VERIFIED_MIDDLEWARE_SCAN : ASSERTED_MIDDLEWARE_SCAN,
+        role: 'middleware',
+      });
+    }
+  }
+  return steps;
+}
+
+// Does a normalized target cover (verb, routePath, controllerName)? Unreadable targets cover
+// nothing — the whole point of declaring them.
+function targetCovers(target, verb, routePath, controllerName) {
+  if (target.kind === 'controller') return target.name === controllerName;
+  if (target.kind === 'path')
+    return (
+      (target.method === 'all' || target.method === verb) &&
+      pathCovers(target.path, routePath)
+    );
+  return false;
 }
 
 // --- composite decorators: `applyDecorators(UseGuards(X), …)` (ADR-084) ---------------

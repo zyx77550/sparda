@@ -77,6 +77,19 @@ describe('every verdict-emitting consumer asks for the premise', () => {
     ['tools/corpus/run.mjs', 'NO_WORD'],
   ]);
 
+  // Every function that turns a compiled graph into a claim someone acts on. A module that
+  // imports one of these and calls it is a grader, and a grader owes the premise.
+  const GRADERS = [
+    { from: 'apocalypse.js', fns: ['verdictOf', 'badgeFor'] },
+    { from: 'immunity.js', fns: ['buildCapsule'] },
+  ];
+
+  const callsGrader = (src, from, fns) =>
+    new RegExp(
+      `import\\s*\\{[^}]*(${fns.join('|')})[^}]*\\}\\s*from\\s*['"][^'"]*${from.replace('.', '\\.')}['"]`,
+      's',
+    ).test(src) && new RegExp(`(${fns.join('|')})\\(`).test(src);
+
   const files = (dir, out = []) => {
     for (const e of fs
       .readdirSync(dir, { withFileTypes: true })
@@ -95,16 +108,19 @@ describe('every verdict-emitting consumer asks for the premise', () => {
       rel: path.relative(root, abs).split(path.sep).join('/'),
       src: fs.readFileSync(abs, 'utf8'),
     }))
-    // "grades a compiled graph" = it IMPORTS the grader and calls it. Keyed on the import
+    // "grades a compiled graph" = it IMPORTS a grader and calls it. Keyed on the import
     // so that `apocalypse.js`, which defines `verdictOf`/`badgeFor`, is not mistaken for a
     // consumer of itself — and so that any future module that defines a grader is excluded
     // for a reason, instead of by name.
-    .filter(
-      (f) =>
-        /import\s*\{[^}]*(verdictOf|badgeFor)[^}]*\}\s*from\s*['"][^'"]*apocalypse\.js['"]/s.test(
-          f.src,
-        ) && /verdictOf\(|badgeFor\(/.test(f.src),
-    );
+    //
+    // REVISED AGAIN (E-106). There are TWO graders, and this rule knew about one. `buildCapsule`
+    // turns a compiled graph into `proven` — the same claim, in the artifact that TRAVELS — and
+    // `immunize` and `genome` called it with no premise for as long as the rule looked only for
+    // `verdictOf`. That is the ADR-083 amendment one level up: the first version scoped the scan
+    // to a directory, this one scoped it to a function name, and both times the gap was exactly
+    // the size of the scope. The lesson is not "add buildCapsule" — it is that the predicate must
+    // name the PROPERTY (turns a graph into a claim), so GRADERS below is the list to extend.
+    .filter((f) => GRADERS.some(({ from, fns }) => callsGrader(f.src, from, fns)));
 
   it('nothing anywhere grades a compiled graph without premiseFor()', () => {
     const offenders = graders
@@ -135,7 +151,9 @@ describe('every verdict-emitting consumer asks for the premise', () => {
       'src/commands/badge.js',
       'src/commands/dossier.js',
       'src/commands/enforce.js',
+      'src/commands/genome.js',
       'src/commands/heal.js',
+      'src/commands/immunize.js',
       'src/commands/prove.js',
       'src/commands/review.js',
       'src/server/stdio.js',

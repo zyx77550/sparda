@@ -82,8 +82,12 @@ export function falsifyGraph(graph, { check = checkGraph } = {}) {
       controls: [],
       flipped: 0,
       holes: [],
-      score: 1,
-      note: 'no protected mutation routes — nothing to falsify',
+      // NOT 1. A score of 1 means "every green depends on its guard, and we checked". Here
+      // nothing was checked, and 1 is the number a reader acts on while the `note` sits
+      // beside it, unread. `null` cannot be misread — it is the only value that carries its
+      // own caveat (ADR-092: the admission goes INSIDE the headline, never next to it).
+      score: null,
+      note: 'no protected mutation routes — nothing to falsify (score UNMEASURED, not 1)',
     };
 
   // Per-route attribution, flood-aware: ablating EVERY guard at once makes UNGUARDED_MUTATION

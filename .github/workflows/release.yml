@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Release Gate
+        run: npm run release:check
+
+      # Read through `env:`, never interpolated into the script body: `${{ secrets.X }}` inside
+      # a `run:` block writes the secret's characters into the shell script on the runner, where
+      # a value containing quotes or backticks is a command, not a string.
+      - name: Check secrets
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$NPM_TOKEN" ] || [ -z "$VSCE_PAT" ]; then
+            echo "UNVERIFIED: NPM_TOKEN or VSCE_PAT is not set — refusing to report a release we cannot perform."
+            exit 1
+          fi
+
+      - name: Publish to NPM
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # `@vscode/vsce`, pinned: the bare `vsce` package is the deprecated old name, and an
+      # unpinned `npx` resolves whatever is newest at publish time — the one moment the toolchain
+      # must not be a moving target.
+      - name: Publish to VS Code Marketplace
+        run: npx --yes @vscode/vsce@3.9.2 publish
+        working-directory: extensions/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

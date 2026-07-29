@@ -21,16 +21,23 @@ import {
   emptyGenome,
   recall,
 } from '../ubg/genome.js';
+import { premiseFor, basisFrom } from '../ubg/premise.js';
 import { atomicWriteFileSync as atomicWrite } from '../server/persistence.js';
 
 const GENOME_FILE = 'sparda-genome.jsonl';
 const KEY_FILE = 'genome.key';
 
 export async function runGenome(opts) {
-  const canonical = canonicalizeGraph(
-    compileUBG(opts.cwd, { write: false, openapi: opts.openapi }).graph,
-  );
-  const capsule = buildCapsule(canonical);
+  const compiled = compileUBG(opts.cwd, { write: false, openapi: opts.openapi });
+  const canonical = canonicalizeGraph(compiled.graph);
+  // The premise matters MORE here than anywhere, and it was the one place that never asked
+  // (E-106). An antibody is a per-behavior claim, so a route the compiler never saw does not
+  // falsify the antibodies that were minted — it means no antibody exists for it. But this
+  // contribution is signed, content-addressed and merged into a file other people pull, and
+  // a genome that silently under-represents an app teaches the world that the surface it
+  // covers IS the app. The gaps are named below rather than counted.
+  const premise = await premiseFor(canonical, compiled.report, { cwd: opts.cwd });
+  const capsule = buildCapsule(canonical, { premiseBasis: basisFrom(premise) });
   const identity = loadOrCreateIdentity(opts.cwd);
   const minted = mintGenome(capsule, identity);
 
@@ -62,6 +69,19 @@ export async function runGenome(opts) {
   console.log(
     `  merged: +${added} new, ${corroborated} corroborated → ${genome.antibodies.length} antibody(ies) in ${GENOME_FILE}`,
   );
+  // What this contribution is NOT. A count of antibodies reads as a measure of the app; it is
+  // a measure of the surface SPARDA had. Gaps are NAMED, because "3 routes missing" is a
+  // number a reader discounts and "GET /api/legacy/purge" is one they go and look at.
+  if (premise.available && premise.gaps.length)
+    for (const g of premise.gaps)
+      console.log(
+        `  ⚠ no antibody for ${g.method} ${g.path} — the ${premise.oracle} oracle serves it, the compiler never saw it`,
+      );
+  else if (capsule.premiseBasis === 'unmeasured')
+    console.log(
+      `  ◐ UNMEASURED PREMISE — no oracle checked this app's route table, so this contribution` +
+        ` covers the surface SPARDA saw, which may not be the app (${premise.reason}).`,
+    );
   // surface any behavior the world now disagrees about — load-bearing signal
   const conflicts = distinctHashes(genome).filter((h) => recall(genome, h).conflict);
   if (conflicts.length)

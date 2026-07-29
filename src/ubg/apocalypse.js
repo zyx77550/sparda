@@ -290,8 +290,21 @@ export function checkGraph(graph) {
       // "confirm intent" — never hidden, never marked safe, never touches PROVEN. The list is the
       // HEAD of the distribution (deliberately precise, not `**/auth/**` blanket: change-password /
       // 2fa / session management are NOT public, and re-labeling those would hide a real hole).
+      //
+      // The list is precise, but its TOKENS are not: `register` also names authenticated management
+      // (`/account/2fa/register`, `/devices/register`), `webhook`/`hook` a subscription CREATE, and
+      // any signature can sit under an authenticated namespace (`/account/…`, `/admin/…`). Because
+      // this re-label carries NO evidence of a gate, the asymmetric error model forbids it from
+      // firing on those: it must ABSTAIN when the path sits in an authenticated area, or it hides
+      // the same unguarded mutation it swears off for change-password, one alternative over (the
+      // 2FA-register / webhook-management class). Abstaining only ADDS criticals — the safe direction.
+      const authenticatedArea =
+        /(^|[:/\- ])(account|accounts|settings|admin|me|profile|2fa|mfa|totp|webhooks?|hooks?|devices?|tokens?|api[_-]?keys?|applications?|integrations?)([/:\- ]|$)/i.test(
+          ep.label,
+        );
       const expectedPublic =
         !credentialGated &&
+        !authenticatedArea &&
         (/(^|[:/\- ])(log-?in|sign-?in|sign-?up|register|log-?out|sign-?out|forgot-?password|reset-?password|forgot|verify-?email|email-?verification|confirm-?email|magic-?link|oauth\d?|openid|sso|saml|health(z|check|-?check)?|livez|readyz|metrics|well-known)([/:\- ]|$)/i.test(
           ep.label,
         ) ||
@@ -410,6 +423,17 @@ export function checkGraph(graph) {
     obligations++;
     if (observables.length && writes.length) {
       let bad = false;
+      // ONE finding per route, not one per effect NODE. A single logical send resolved
+      // through a provider-strategy DI graph becomes many nodes — twenty's
+      // `POST /graphql/sendEmail` fans out to Gmail / Microsoft / IMAP-SMTP / email-group
+      // senders and reported the SAME missing compensation path 12 times, 12 of the app's
+      // 28 high findings. Nothing is dropped: every call is named in the message and kept
+      // in `evidence`, the severity is the strongest of them, and the gate reads exactly
+      // as before. This is `collapseFloods`'s "loss of contrast" argument (ADR-071) at the
+      // ROUTE level — the remediation is per route (add a compensation path), never per
+      // call, so per call was never the honest unit (E-094).
+      const dangerous = [];
+      const generic = [];
       for (const obs of observables) {
         if (obs.meta.compensable) continue;
         if (g.compensators.has(obs.id)) continue; // the undo itself is not a risk
@@ -424,17 +448,29 @@ export function checkGraph(graph) {
         // WITHOUT hiding a hole: the unknown call stays surfaced (advisory), at the honest
         // confidence level (we cannot prove a generic fetch is irreversible), never silenced.
         const knownDangerous = String(obs.meta.target ?? '').startsWith('sdk:');
+        (knownDangerous ? dangerous : generic).push(obs);
+        if (knownDangerous) bad = true;
+      }
+      // A route with BOTH kinds reports once, at the hard severity: the generic calls are
+      // already the weaker claim, and splitting them out would put the same route on two
+      // lines saying the same thing twice.
+      const flagged = dangerous.length ? dangerous : generic;
+      if (flagged.length) {
+        const hard = dangerous.length > 0;
+        const names = [...new Set(flagged.map((o) => o.meta.target ?? o.label))].sort();
+        const list =
+          names.slice(0, 4).join(', ') +
+          (names.length > 4 ? `, +${names.length - 4} more` : '');
         findings.push({
           rule: 'IRREVERSIBLE_OBSERVABLE',
-          severity: knownDangerous ? 'high' : 'info',
-          ...(knownDangerous ? {} : { advisory: true }),
+          severity: hard ? 'high' : 'info',
+          ...(hard ? {} : { advisory: true }),
           entrypoint: ep.id,
-          message: knownDangerous
-            ? `${ep.label} makes an irreversible external call (${obs.meta.target ?? obs.label}) while also mutating state — no compensation path exists if the write fails`
-            : `${ep.label} makes an external call (${obs.meta.target ?? obs.label}) while also mutating state — if that call is irreversible (payment/mail/…), add a compensation path; a generic fetch/read is fine`,
-          evidence: [`${obs.id} (${locOf(obs)})`],
+          message: hard
+            ? `${ep.label} makes ${names.length === 1 ? 'an irreversible external call' : `${names.length} irreversible external calls`} (${list}) while also mutating state — no compensation path exists if the write fails`
+            : `${ep.label} makes ${names.length === 1 ? 'an external call' : `${names.length} external calls`} (${list}) while also mutating state — if any is irreversible (payment/mail/…), add a compensation path; a generic fetch/read is fine`,
+          evidence: flagged.map((o) => `${o.id} (${locOf(o)})`).sort(),
         });
-        if (knownDangerous) bad = true;
       }
       vec.reversibility = bad ? -1 : 1;
     }
@@ -741,7 +777,7 @@ const COVERAGE_COMPLETE = 0.6;
 export function verdictOf(
   findings,
   graph,
-  { coverage, blindHigh = 0, premiseGaps = 0 } = {},
+  { coverage, blindHigh = 0, premiseGaps = 0, premiseBasis = null } = {},
 ) {
   const counts = { critical: 0, high: 0, medium: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -801,12 +837,32 @@ export function verdictOf(
   // from undefined (not measured at all, e.g. heal's partial-graph delta, old semantics
   // kept). An unknown coverage can never carry a complete PROVEN: unknown ≠ 100%.
   const coverageUnknown = coverage === null;
+  // E-104. The premise is the claim that the route set analysed IS the route set the app
+  // serves — Direction 3 — and the ONLY instrument that checks it is an oracle that is not
+  // the analyser. When no oracle ran, that claim is UNVERIFIED, and `PROVEN` asserts it.
+  //
+  // The bug this closes: `premiseFor` reported `{ available: false, gaps: [] }` honestly, and
+  // every consumer then read it through `premiseGaps === 0` — byte-identical to "an oracle ran
+  // and agreed". Measured on our own fixtures: 7 of the 8 that read PROVEN had never had an
+  // oracle run at all, every one of them Express or FastAPI. An honest LABEL is not an honest
+  // SYSTEM; the place a distinction gets flattened is where the lie is told.
+  //
+  // Deliberately a PARTIAL rung and not a PREMISE_GAP: a gap is measured evidence that the
+  // subject was incomplete (blocking), while silence is only the absence of a witness. PARTIAL
+  // already means exactly that — "proved what was seen" — so this neither blocks a deploy nor
+  // invents a fault. It withholds the strongest word, which is the one thing it must do.
+  //
+  // `null` keeps the old semantics for callers with no premise to speak of (heal's regression
+  // delta is a partial graph, not a whole-app proof). `'declared'` is OpenAPI, where the
+  // document analysed IS the route table and a second witness would be the same map twice.
+  const premiseUnmeasured = premiseBasis === 'unmeasured';
   const partial =
     clean &&
     entrypoints > 0 &&
     ((coverage != null && coverage < COVERAGE_COMPLETE) ||
       coverageUnknown ||
       blindHigh > 0 ||
+      premiseUnmeasured ||
       assertedMutations > 0);
   // THE PREMISE GATE. Every other rung above softens a claim about what SPARDA
   // ANALYSED. This one answers a prior question — was the analysis about the whole
@@ -837,6 +893,11 @@ export function verdictOf(
     coverageUnknown,
     premiseGaps,
     premiseUnverified,
+    // Carried so every surface can say WHY the word was withheld. A PARTIAL whose reason is
+    // "nobody checked the route table" reads very differently from one whose reason is "77 %
+    // coverage", and a user who cannot tell them apart cannot act on either.
+    premiseBasis,
+    premiseUnmeasured,
     // The CI gate. A premise gap belongs here and not only in the verdict word: an
     // app whose route surface we demonstrably did not have cannot be called safe, and
     // a green CI over it would reproduce the exact failure this whole audit removed —

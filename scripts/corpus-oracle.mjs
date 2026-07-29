@@ -42,7 +42,7 @@ import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { checkGraph, verdictOf, verdictState } from '../src/ubg/apocalypse.js';
 import { surveyBlindspots } from '../src/ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../src/ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../src/ubg/premise.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT = path.join(here, '..', 'corpus.snapshot.json');
@@ -82,6 +82,7 @@ async function metricsOf(appDir) {
     coverage: b.coverage.ratio,
     blindHigh: b.byRisk.critical + b.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
   const verdict = verdictState(v);
   const kind = (k) =>
@@ -110,6 +111,7 @@ async function metricsOf(appDir) {
     // but a reader deserves to know how strong the check behind a clean premise was.
     premiseProbed: premise.available ? premise.probed : 0,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
     findings: hard.length,
     advisories: findings.length - hard.length,
     findingsByRule: Object.fromEntries(Object.entries(byRule).sort()),

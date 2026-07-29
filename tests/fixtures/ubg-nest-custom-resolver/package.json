@@ -1,0 +1,1 @@
+{ "name": "ubg-nest-custom-resolver", "version": "0.0.0", "dependencies": { "@nestjs/common": "^10.0.0", "@nestjs/graphql": "^12.0.0" } }

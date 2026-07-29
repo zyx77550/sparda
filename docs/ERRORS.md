@@ -1783,3 +1783,476 @@ byRisk.high` from the same `surveyBlindspots` it already computes — single sou
 - **Not fixed here.** Reading a decorator that applies its effects by direct invocation
   inside an arrow is a distinct shape from `applyDecorators`, and it must ship with its own
   fixture and mutant rather than being bolted onto this one.
+
+## E-092 — the file pre-filter matched a VOCABULARY, so 75 % of twenty was never opened
+
+- **Symptom:** twenty read `NOT_PROVEN` with 14 findings, and the brief was "one rule
+  stands between it and a clean verdict". The measurement inverted the brief:
+
+  | | before | after |
+  |---|---|---|
+  | files parsed (of 6090) | **33** | 128 |
+  | routes | **147** | **579** |
+  | guards / verified | 441 / 157 | 1868 / 583 |
+  | findings (high) | 14 (2) | 65 (28) |
+
+  SPARDA was seeing **25 % of the app**. "One rule" was an artefact of near-total blindness.
+- **Cause:** `CANDIDATE_RE` listed decorator names —
+  `@(Controller|RestController|JsonController|Resolver|…)`. twenty registers **54** GraphQL
+  resolvers as `@MetadataResolver` / `@CoreResolver` / `@AdminResolver` and exactly **one**
+  as `@Resolver`. A house brand is the norm, not the exception. The class-admission check
+  had the same defect (`decoratorArg(cls.decorators, 'Resolver')`, exact name).
+- **Why nothing complained:** a file that is never OPENED produces no route, no skipped
+  entry and no unknown handler. It is the one shape of loss that no self-reported coverage
+  number can show — SOUNDNESS Direction 3, and the reason the premise oracle exists.
+- **Fix:** match the SUFFIX (`[A-Za-z]*Controller`, `[A-Za-z]*Resolver`), exactly as
+  `controllerPrefixOf` already did for controllers (ADR-055 — recognise the protocol, not
+  the brand). Deliberately NOT widened to `Mutation|Query|Subscription`: those are also
+  PARAMETER decorators (`@Query('id') id: string`) in ordinary REST controllers, and on
+  twenty they buy one extra file out of 6090.
+- **Cost:** 33 → 128 files parsed, 4.0 s for the whole 6090-file monorepo. No budget issue.
+- **What it surfaced (the point):** `POST /graphql/deleteCurrentWorkspace` — a real saga
+  hole. It cancels the customer's Stripe subscription (irreversible, outside any
+  transaction) and then soft-deletes the workspace. If the write fails, the customer has
+  no subscription and a live workspace. It sat in `workspace.resolver.ts` under
+  `@MetadataResolver`, in a file SPARDA had never opened.
+
+## E-093 — `@Post(['a','b'])` collapsed four controllers onto a phantom `POST /`
+
+- **Symptom:** the two `high` findings holding twenty's verdict were reported against
+  `POST /` — a route the app does not serve.
+- **Cause:** `httpDecorator` read `args[0]`, found an `ArrayExpression`, judged it "not a
+  string literal" and fell back to the controller prefix. Nest serves **every element** of
+  the array; twenty has four such controllers, including
+  `@Post(['cloudflare/custom-hostname-webhooks', 'webhooks/cloudflare'])` — two live URLs
+  from one decorator.
+- **Fix:** one route per element. **Not** `elements.find(isStringLiteral)`: reading the
+  first path and dropping the rest loses a live endpoint in silence, which is the
+  registration invariant (ADR-079) violated by the very change meant to honour it. A
+  mixed array (one readable element, one not) routes the readable one and DECLARES the
+  other at high risk.
+- **Result:** the findings now name their real routes — `POST /webhooks/stripe` — instead
+  of a URL that does not exist.
+
+## E-094 — one saga hole, reported twelve times
+
+- **Symptom, measured on twenty:** 28 high findings across **14 routes**, and ONE route
+  carried **12 of them**. `POST /graphql/sendEmail` resolves, through a provider-strategy
+  DI graph, into Gmail / Microsoft / IMAP-SMTP / email-group senders. Each leaf is its own
+  effect node, and `IRREVERSIBLE_OBSERVABLE` emitted one finding per node — so **43 % of
+  the app's high findings were a single problem counted twelve times.**
+- **Why the existing collapse missed it:** `collapseFloods` (ADR-071) folds a rule that
+  fires across MANY ROUTES into one codebase-wide summary. It has no notion of the same
+  rule firing many times on ONE route, which is what a DI fan-out produces.
+- **Fix:** one finding per (route, rule). Severity is the strongest of the collapsed set,
+  every call is named in the message, and every node stays in `evidence`. The remediation
+  for this rule is per ROUTE — wrap the send and the write, or add an undo — never per
+  leaf, so per leaf was never the honest unit.
+- **It is a CONTRAST fix, not a suppression,** and the distinction is what the tests pin:
+  the same routes stay flagged at the same severity and the gate reads exactly as before.
+  Verified on twenty — the 14 flagged routes before and after are **identical**; only the
+  count changed, 28 → 14. nocodb 22 → 13.
+- **The rung that had to survive it:** innate immunity (ADR-072). A generic external call
+  is an advisory `info`; collapsing several of them may not manufacture a `high`. A route
+  with both kinds reports once at the hard severity, because splitting them would put the
+  same route on two lines saying the same thing twice. Killing mutant included.
+
+## E-095 — PR #30 merged only half of itself
+
+- **Symptom:** PR #30 carried two commits; the merge landed only `ed41931` (ADR-084).
+  `80591a9` (ADR-085) stayed on the branch. `main` still read twenty at 147 routes / 2
+  high, and the suite at 1111 instead of 1119.
+- **Cause:** the merge was requested against a PR head GitHub had not yet refreshed after
+  the push — the merge commit's parent is the OLD head.
+- **How it was caught:** by re-measuring after the merge instead of trusting it.
+  `git merge-base --is-ancestor 80591a9 origin/main` → **no**. A "merged" report is a
+  claim like any other and deserves the same verification as a green test run.
+- **Fix:** cherry-picked onto the current `main`, re-verified (1119 tests, twenty at 579
+  routes / 28 high) and merged as PR #31.
+- **The habit worth keeping:** after any merge, check that the commit you care about is an
+  ancestor of the branch you merged into. It costs one command.
+
+## E-096 — v0.69.0 shipped a commit nobody had reviewed, and every check was green
+
+- **Symptom:** for four hours, `sparda-mcp@0.69.0` on npm analysed a NestJS app with house
+  decorator brands (`@MetadataResolver`, `@CoreResolver`) at a quarter of its size — 147 of
+  579 routes, with no signal that anything was missing. The repository did not have that
+  bug: ADR-085 had removed it, and ADR-086 was in flight behind it.
+- **Root cause:** the release was cut BETWEEN two pull requests. The published tree carried
+  ADR-084 and neither of the two after it. Nothing regressed; the wrong commit was chosen.
+- **Why nothing caught it:** `prepublishOnly` ran `vitest run`, and it was green — green at
+  the commit that was published, correctly. A suite is a statement about a TREE. A release
+  is a statement about a PUBLISHED ARTEFACT. Everything that distinguishes the two was
+  unchecked: no CHANGELOG entry for 0.69.0, no tag pushed since v0.68.0 (two releases with
+  nothing to check out), and no comparison of HEAD against `origin/main`.
+- **Fix:** `scripts/release-gate.mjs` (ADR-087) on `prepublishOnly`, with the decisions
+  split into `scripts/release-checks.mjs` as pure functions so each one can be handed the
+  exact state 0.69.0 was released from and required to refuse it. Five killing mutants,
+  including one that puts `prepublishOnly` back to a bare `vitest run`.
+- **Rule:** **a green suite licenses a COMMIT, never a RELEASE.** Anything that can differ
+  between the tree you tested and the bytes you publish — which commit, which tag, which
+  manifest, which changelog entry — is unverified until something checks it. This is the
+  project's own contract (`"could not measure" ≠ "measured nothing wrong"`) applied one
+  level above the code it was written for.
+- **The trap inside the fix:** the first version of the test asserted the gate had no escape
+  hatch by grepping its source for `--force`. It failed immediately — the gate's own header
+  says the word, in order to refuse it. A hatch is not a STRING, it is an INPUT: the
+  assertion is now that the gate reads no `process.argv` and exactly one environment
+  variable, one that can only make it stricter. **A property worth testing is worth testing
+  as behavior; grepping source for a word tests the wording.**
+
+## E-097 — every DI hop into a workspace package died on the barrel, in silence
+
+- **Symptom:** novu read `PARTIAL` with **0 findings**, 52 db writes and 14.8 % coverage.
+  The real number of writes its routes perform is 132.
+- **Root cause:** `@novu/dal` and `@novu/application-generic` resolve to their entry file,
+  which is a barrel — `export * from './repositories/…'` sixty times, zero class
+  declarations. `classInModule` only finds a class DECLARED in the module handed to it, so
+  `classBundle` returned null. Measured: **1479 of novu's 2039 constructor-DI hops**
+  resolved to nothing, `PinoLogger` (307) and the repository classes at the top.
+- **Why nothing complained:** an unresolved DI hop leaves no trace — no effect, no skip, no
+  blind spot. A route whose behavior lives entirely behind the barrel therefore resolved to
+  ZERO behavior, and a route with zero behavior has nothing to flag: it read `SURFACE` at
+  coverage `unknown` (0/0), not `blind`. Same family as E-092 (a file never opened produces
+  no route, no skip, no unknown handler) and E-091 one level down.
+- **Fix:** `resolveExportedClass` in `extract.js` — the class twin of
+  `resolveExportedFunction`, which had crossed barrels since the `lib/auth/index.ts` era.
+  Wired into `classBundle`, memoized per (module, class). Fixture + 2 killing mutants.
+- **Measured:** novu PARTIAL → NOT_PROVEN, writes 52 → 132, reads 792 → 1464, findings
+  0 → 4. twenty / immich / nocodb / ghostfolio byte-identical (immich is the control: same
+  framework, no unbuilt workspace barrels).
+- **Rule:** **every lookup that crosses a module boundary must cross barrels too.** A
+  monorepo package entry point is a barrel and nothing else; a resolver that stops there
+  stops at the edge of every workspace package. When one such lookup learns the trick, ask
+  immediately which of its siblings did not — the function twin was right and the class
+  twin was wrong for months, in the same file, forty lines apart.
+
+## E-098 — the corpus snapshot went stale for four releases and nothing said so
+
+- **Symptom:** while isolating E-097, cal.com drifted (`routes 175 → 177`,
+  `coverage 93.6 → 94.3`) — with the change **and without it**. The drift was not mine.
+- **Root cause:** cal.com's baseline was taken on 2026-07-22. ADR-084, ADR-085 and ADR-086
+  all landed after that, and every one of them changed how routes are counted. None of
+  those sessions had a cal.com clone, so the oracle printed
+  `SKIP cal.com (not present under SPARDA_CORPUS)` and the change shipped unmeasured on it.
+- **This is not a bug in the oracle.** Skipping an absent app and SAYING SO is correct —
+  the alternative is pretending to have measured it. The gap is that "SKIP" is a per-run
+  notice that nothing accumulates: seven apps skipped over four releases leave no standing
+  record that the snapshot no longer describes `main`.
+- **Fix:** all six clonable giants pinned to their baselined commits and re-measured in one
+  run, so every number in `corpus.snapshot.json` is attributable to a tree that exists.
+  (dub could not be cloned in this environment and remains unmeasured — stated, not hidden.)
+- **Rule:** **a skipped check is a debt, not a pass.** Before a release, re-measure the
+  WHOLE corpus, not the apps that happen to be on disk — and when an app cannot be measured
+  at all, say which one and why, in the release record rather than in scrollback.
+
+## E-099 (OPEN) — a deep blind spot names the route's FILE with another file's LINE
+
+- **Symptom:** twenty reports 139 high blind spots. Every one of them that resolved through
+  a DI hop points at a line that has nothing to do with it. Worked example: the blind spot
+  reads `application-development.resolver.ts:21` — an `import` statement — while the
+  `fs_write` it describes is `this.fileStorageService.writeFile(…)` at
+  `application-development.service.ts:202`. Same shape on novu:
+  `activity.controller.ts:145` carrying `driver: buildInteractionTrendChart`, a symbol that
+  exists only in the use case two files away.
+- **Cause:** the effect node's `loc.file` is the ENTRYPOINT's declaring file, while
+  `loc.line` comes from the body actually scanned. The two halves of the location are taken
+  from different files, so they are individually right and jointly meaningless.
+- **Why it matters more than it looks:** the blind-spot ledger is the honesty organ — it is
+  what SPARDA offers INSTEAD of a proof. A ledger of 139 entries whose locations do not
+  point at the code is not usable, so the honest answer degrades to an unusable one, which
+  is how an honest tool gets ignored. It also made twenty's "139 high blind spots" read as
+  a research problem rather than a reporting one.
+- **Not fixed here** — recorded with the reproduction rather than half-fixed. The fix is to
+  carry the DECLARING file alongside the line through the resolver's merge, the same way
+  `helpers` already records `sourceFile` + `sourceLine`.
+- **What twenty's 139 actually are**, once located properly: 55 `fs_write` and 41
+  `http_call` with computed targets, 34 `db_write` with an unresolved table (19 through a
+  TypeORM `queryRunner`), 7 blind mutations, 2 skipped surfaces. Unlike novu's, these are
+  genuine residual imprecision — SPARDA saw the write and cannot name what it touches — not
+  a resolution bug. Closing them is symbolic target resolution, a project, not a patch.
+
+## E-100 — ADR-089 shipped unmeasured on the corpus, and the corpus was red on main
+
+- **Symptom:** `SPARDA_CORPUS=… node scripts/corpus-oracle.mjs` exited 1 on `main` right after
+  PR #35 merged: **twenty `dbWrites` 813 → 812**, **nocodb `coverage` 47.7 → 47.6**. Since the
+  gate runs the oracle, `npm run release:check` would have blocked on it.
+- **Cause:** ADR-089 (`MiddlewareConsumer.forRoutes()`) was measured on
+  `lujakob/nestjs-realworld-example-app` — a real and well-chosen target, but **not one of the
+  seven corpus apps**, five of which are NestJS. The oracle prints `SKIP` for apps that are not
+  cloned, so the change landed with its effect on the giants simply not taken. E-098 again, one
+  release later: **a skipped check is a debt, not a pass.**
+- **Verified, not assumed.** The drift is a node-ordinal artefact, not a lost effect. Guard
+  steps are PREPENDED to the chain, so every later node's ordinal shifts and two resolution
+  paths that used to produce distinct ids now collide. Three measurements, same clone, same
+  pinned commit, `nestjs.js` permuted:
+  - **509 distinct `file:line` write locations before AND after** — no write left the graph;
+  - **476 routes carry writes before AND after, with identical per-route counts** — no route
+    lost a write;
+  - **31 findings both ways** — nothing stopped being flagged.
+  Only the multiplicity at `auth.resolver.ts:132` (7 → 5) and `:194` (3 → 4) moved.
+- **Fix:** snapshot re-baselined with that verification as the justification, not with a shrug.
+- **Rule:** a change to an EXTRACTOR is measured on the corpus before it merges, even when a
+  smaller repository reproduces the bug more clearly. The small app proves the fix; the corpus
+  proves the absence of collateral.
+
+## E-101 — the release gate could not run on Windows
+
+- **Symptom:** `npm publish` on Windows died in the gate at `suite green` with
+  `spawnSync npx ENOENT`; naming `npx.cmd` explicitly then gave `EINVAL`.
+- **Cause:** `npx` on Windows is `npx.cmd`, a batch wrapper. `execFileSync` starts real
+  executables, not shell scripts, so it cannot launch it either way. `git` and `node` were
+  never affected — they are real binaries on every platform.
+- **First fix, and why it was narrowed:** `shell: process.platform === 'win32'` on the shared
+  `run()` helper. It works, but it puts EVERY call through `cmd.exe`, where each argument is
+  re-parsed — including `npm view ${pkg.name}@${version}`, whose two halves come from a file in
+  the tree. A blanket shell puts the repo's own JSON on a command line inside the one script
+  whose entire job is to be trustworthy.
+- **Final fix:** `npx` is gone. The suite and the mutation harness run through
+  `process.execPath` — an absolute path to the same node already executing the gate, no shell,
+  no PATH lookup. A shell remains for `npm` alone (`NEEDS_SHELL`), which genuinely needs one on
+  Windows. Both pinned by tests.
+- **Bonus the platform bug exposed:** `npx vitest` resolves whatever npx finds. The gate could
+  green a release against a different test runner than the lockfile pins. It now runs
+  `node_modules/vitest/vitest.mjs` — the vitest this repo installed.
+- **Rule:** reach for a shell at the narrowest scope that fixes the problem. "It works now" and
+  "it is still the same command" are different claims, and a gate has to make both.
+- **Honest limit:** this was verified on Linux. The Windows path is argued from the platform's
+  behaviour, not measured here — the next publish from Windows is the real test.
+
+## E-102 — the Windows fix missed the thing the gate CALLS, and npm hid the reason
+
+- **Symptom:** after E-101, `npm publish` on Windows still failed. The npm debug log showed
+  only `command failed … exit 1` for `node scripts/release-gate.mjs` — **no indication of which
+  check failed**, because npm's log file never contains the child's output.
+- **Cause:** E-101 removed `npx` from `release-gate.mjs` and stopped there.
+  `tests/mutation/run.mjs` — which the gate runs as its `mutants dead` step — still spawned
+  `execFileSync('npx', ['vitest', …])`. Same ENOENT, one level down. **A step is only as
+  portable as what it spawns**, and the fix was applied to the caller instead of to the family.
+- **Fix:** the harness runs `process.execPath` with `node_modules/vitest/vitest.mjs`, exactly
+  as the gate now does. A test asserts that nothing the gate runs contains `npx` either.
+- **The second, larger bug this exposed.** A blocked publish was *unreadable after the fact*.
+  The gate printed its verdict, npm captured it, and the log the operator keeps had none of it
+  — so from where the user stands, the gate said "no" and gave no reason. That is the exact
+  shape of silence this project exists to refuse, performed by the gate on its own operator.
+  The verdict is now also WRITTEN to `.sparda-release-gate.log` (gitignored, or the next run
+  would fail its own "working tree is clean" check).
+- **Rule:** when a fix is about the ENVIRONMENT rather than the logic, grep for the pattern
+  across the repo before calling it done — the platform does not care which file the call is
+  in. And any gate that can refuse must leave its reasons somewhere that outlives the terminal.
+
+## E-103 — the gate built a command line out of the repository it was judging
+
+- **Symptom:** every gate run on Windows printed
+  `DEP0190 DeprecationWarning: Passing args to a child process with shell option true can lead
+  to security vulnerabilities, as the arguments are not escaped, only concatenated.`
+- **Cause:** the `npm view ${pkg.name}@${version}` check. npm is `npm.cmd` on Windows, so it
+  needed `shell: true` — and under a shell, Node concatenates arguments rather than escaping
+  them. Both halves of that string are read from `package.json`, a file in the tree. **The one
+  script whose entire job is to be trustworthy was assembling a command line out of the
+  repository it was judging.** Node was right to complain; E-101 had narrowed the shell to this
+  single call and treated that as sufficient, when the call itself was the problem.
+- **Fix:** the question is answered over HTTP. `HEAD https://registry.npmjs.org/<name>/<version>`
+  — 200 published, 404 absent, anything else UNMEASURED. `encodeURIComponent` on the name, so a
+  scoped package cannot split the path and make the registry answer about something else.
+- **What it removed, beyond the warning:** the gate now spawns **no shell on any platform**, and
+  no longer depends on `npm` being resolvable at all. `git` and `node` are the only two programs
+  it starts, and both are real executables everywhere. Pinned by a test that greps for `shell:`
+  and for `npm` and requires neither.
+- **Rule:** when a platform forces a shell, ask whether the command is needed at all. Narrowing
+  the blast radius is the second-best answer; not spawning is the first. A check that is really
+  an HTTP question should be an HTTP question.
+
+## E-104 (FIXED — ADR-091) — `PROVEN` was reachable on an app whose premise was never measured
+
+- **Found by:** an independent agent auditing `docs/BRIEF-FOR-A-STRONGER-MIND.md`. Its code
+  was lost to a usage limit before it could be pushed; the reproduction below is ours, and it
+  confirms the claim exactly.
+- **Symptom, measured on our own fixtures:** of the **8 fixtures that read `PROVEN`, 7 have
+  `premise.available === false`** — the oracle never ran. Reason on all seven:
+  `runtime oracle not requested (--probe)`.
+
+  ```
+  ubg-proven              express   premise NOT measured → PROVEN
+  ubg-cqrs-command        express   premise NOT measured → PROVEN
+  ubg-typelock-verified   express   premise NOT measured → PROVEN
+  ubg-object-scope        express   premise NOT measured → PROVEN
+  ubg-ownership-assert    express   premise NOT measured → PROVEN
+  ubg-express-weird-entry express   premise NOT measured → PROVEN
+  ubg-fastapi-deep        fastapi   premise NOT measured → PROVEN
+  ```
+
+- **Mechanism.** `premiseFor` correctly reports `{ available: false, gaps: [] }` when no oracle
+  ran — the label is honest. But the next line erases the distinction:
+
+  ```js
+  export function withPremiseGaps(report, premise) {
+    if (!premise?.gaps?.length) return report;   // available:false ⇒ gaps:[] ⇒ report UNCHANGED
+  ```
+
+  An oracle that **did not run** and an oracle that **ran and found nothing** produce a
+  byte-identical downstream state. The verdict is then computed as if Direction 3 had been
+  verified. **This is rule 7 of the contract — "could not measure ≠ measured nothing wrong" —
+  violated in the single highest-stakes place SPARDA has: the word `PROVEN`.**
+- **Why nobody noticed.** All seven corpus giants are `CONVENTION_ROUTED` (nestjs/nextjs), so
+  their premise IS measured on every run — `premiseOracle: "convention"` is pinned in the
+  snapshot. The hole is exactly in the frameworks the corpus does not contain and the fixtures
+  do: **Express and FastAPI**, i.e. the most common backends SPARDA is pointed at. The regression
+  net and the field are blind in complementary places.
+- **NOT a bug in the labelling, and not fixed by touching `premise.js` alone.** The independent
+  audit reported the same word leaking through `review`, `dossier`, `enforce`, `badge`,
+  `polarity`, `immunity`, `speculate` and `genome`. Any fix must reach every surface that
+  pronounces a verdict, or the branch is green while the word still escapes (ADR-083's rule,
+  applied to a new axis).
+- **The shape of the fix, as proposed and as we would keep it:** asymmetric and non-blocking.
+  An UNMEASURED premise degrades `PROVEN` → `PARTIAL` only — never a gate failure, because
+  PARTIAL already means "proved what was seen" and that is the honest word. A MEASURED premise
+  with real gaps stays `PREMISE_GAP` and stays blocking. OpenAPI keeps an explicit "declared
+  premise" status, since there the specification analysed *is* the subject of the proof.
+- **Expected blast radius, stated before anyone starts:** those 7 fixtures move
+  `PROVEN → PARTIAL`, so every test asserting `PROVEN` on an Express/FastAPI fixture without
+  `--probe` turns red. That is the fix working, not the fix breaking. Corpus verdicts should be
+  **unchanged** (all seven are convention-routed and measured) — and that must be shown by a
+  full A/B, not assumed.
+- **Rule:** an honest LABEL is not an honest SYSTEM. `available:false` was reported correctly
+  and then consumed by a line that could not tell it from `available:true, gaps:0`. When a
+  distinction matters, follow it to every consumer — the place it gets flattened is where the
+  lie is told.
+
+**Fixed** in ADR-091. The premise now carries a `basis` — `measured` / `declared` (OpenAPI) /
+`unmeasured` — and `unmeasured` is a PARTIAL rung in `verdictOf`. Measured after: fixtures
+reading `PROVEN` 8 → 1 (that one measured), `PROVEN` over an unmeasured premise **7 → 0**,
+corpus **0 drift**. `enforce` announces `PARTIAL (ENFORCED)` when nothing measured the premise,
+while its rollback decision stays premise-blind — the edit is licensed by the delta, the word
+by the oracle, and conflating the two is what produced this entry.
+
+## E-105 — the same lie in four more places, found by auditing the RULE instead of the suspects
+
+- **Symptom:** none, and that is the entry. Four surfaces reported a positive headline over a
+  measurement that never happened — `falsify` `score: 1` with zero controls, `gate` `ok: true`
+  while abstaining, `speculate` and `immunize` printing `✓ PROVEN` from a frozen capsule whose
+  premise nobody measured.
+- **How they were found.** Not by suspicion. By taking rule 7 — "could not measure ≠ measured
+  nothing wrong" — and enumerating every place a measurement can be ABSENT, then checking
+  whether the absence stayed distinguishable downstream. Four commands, one hour. The same
+  method that found E-104, applied to the rule rather than to a hunch.
+- **The shape, which is the real finding.** In every case the honest field was PRESENT —
+  `note`, `abstained`, `(by lookup)`, `available: false`. The admission was placed BESIDE the
+  headline instead of INSIDE it, and the headline is what a reader acts on, a dashboard graphs,
+  and a CI job branches on.
+- **A test had CODIFIED one of them.** `tests/falsify.test.js` carried a case literally named
+  *"an app with no protected mutation routes has nothing to falsify (vacuously 1)"*, asserting
+  `score === 1`. The suite was defending the bug. That is how long a lie survives once it is
+  written down as an expectation.
+- **Fix:** ADR-092 — `null` in the headline, capsules carrying their basis of measurement,
+  `=== null` checked FIRST so a falsy collapse cannot re-tell the lie in the safe direction.
+- **Rule:** when you find one instance of a contract violation, **audit the CONTRACT, not the
+  neighbourhood.** A bug found by suspicion gives you one bug; a bug found by enumerating the
+  rule gives you the family — and the enumeration is cheap enough to be routine. It is now
+  mechanized in `tests/unmeasured-is-not-a-pass.test.js` so it is a check rather than a memory.
+
+## E-106 — the fix for E-105 was tested, and wired to nothing
+
+- **Symptom:** none, again — and this time not even a wrong output. `sparda immunize` on any
+  Express app printed `✓ PROVEN` exactly as it had before ADR-092, because the three-state
+  `proven` the ADR introduced was **unreachable**. All four call sites in `src/commands/`
+  called `buildCapsule(canonical)` bare, so `premiseBasis` was always its default `null`, so
+  the `premiseUnmeasured` branch never fired and the `◑ UNMEASURED PREMISE` message `immunize`
+  prints could not be produced by any input.
+- **`prove` and `dossier` had the value in scope.** `prove` computes the premise, uses it for
+  the verdict word two lines above, and then builds the capsule without it. `dossier` calls
+  `buildCapsule` three lines *before* it computes the premise at all — ordering alone hid it.
+- **The green row.** `tests/unmeasured-is-not-a-pass.test.js` asserted
+  `buildCapsule(g, { premiseBasis: 'unmeasured' }).proven === null` and passed from the day it
+  was written. It was true. It was also useless: **constructing the UNMEASURED state by hand
+  proves the field can hold it, and says nothing about whether any caller ever puts it there.**
+  A registry of honest states, over a dead wire.
+- **How it was found.** By continuing the same audit onto the surfaces E-105 had not covered
+  (`stitch`, `mirror`, `timeless`, `heal`, `genome`) — and reading, for each one, not "does it
+  lie" but "which call path produces its UNMEASURED state". `genome` had none: it grades a
+  compiled graph, signs the result with Ed25519 and merges it into a file other people pull,
+  and it had never called `premiseFor` at all. Following that back found the other three.
+- **Why the ADR-083 rule did not catch it.** It did its job and the job was too narrow. The
+  structural guard scans for consumers of `verdictOf`/`badgeFor`. `buildCapsule` is a **second
+  grader** — it turns a compiled graph into `proven`, the same claim in the artifact that
+  travels — and the rule could not see it. The first version of that rule was scoped to a
+  directory and the amendment widened it to the repo; this one was scoped to a *function name*.
+  **Both times the gap was exactly the size of the scope.**
+- **A second bug, found while fixing the first.** ADR-092 wrote
+  `proven: premiseUnmeasured ? null : …`, which blanks a genuine `false` to `null`. The premise
+  bounds the route *set*; a route missing from the graph cannot rescue one that is in it and
+  exposed, so a NOT-PROVEN verdict needs no premise. Blanking it turns "this app has an
+  unguarded mutation" into "we don't know" — the same lie, pointed the other way. Only the
+  positive is withheld now.
+- **And a third:** `immunize` gated CI with `if (!capsule.proven …)`. `null` is falsy, so the
+  moment the fix worked it would have failed builds because no oracle was *available* —
+  precisely what `premise.js` forbids in those words. `=== false` now.
+- **Fix:** ADR-093. `basisFrom(premise)` is the single source of the basis (nine hand-rolled
+  copies of the same ternary are gone, and its default is `'unmeasured'` so a caller who forgets
+  falls toward the weaker word); all four capsule call sites pass it; `immunize` and `genome`
+  call `premiseFor`; the structural rule now names the *property* (turns a graph into a claim)
+  with `GRADERS` as the list to extend.
+- **Rule:** **a test that constructs the honest state by hand is half a test.** Every row in
+  the registry owes two assertions — EXPRESSIBLE (the field can hold it) and REACHABLE (a real
+  call path produces it). Without the second, a green suite certifies a wire that is not
+  connected, which is the same failure this project exists to refuse, committed by its own
+  regression net.
+
+## E-107 — the gate certified a tag that only existed on one machine
+
+- **Symptom:** `✓ v0.71.0 exists and points at HEAD`, over a tag no one else could fetch. The
+  push had been refused by the environment; the gate never asked. Every word it printed was
+  true, and it certified nothing.
+- **Why it read green.** The check was `git rev-list -n 1 v<version>` — a purely LOCAL question.
+  "The tag exists" and "the tag is published" are different claims, and only the second one is
+  what a release means. That is the v0.69.0 gap again, one artefact over: the local view and the
+  published view diverging with nothing looking at the seam.
+- **Fix:** ADR-094 — `remoteAt` from `git ls-remote --tags origin <tag>`, compared to the local
+  commit, with the `^{}` dereferenced line preferred so an annotated tag compares commit to
+  commit.
+- **And the fix had the rule-13 bug in it** (fixed in ADR-095): `ls-remote` failing and
+  `ls-remote` returning nothing were collapsed into one message, so an unreachable network read
+  as "your tag is not pushed" — sending the operator to hunt for a tag that was already there.
+  Both block; only one of them is a measurement.
+- **Rule:** a check that reads only local state can only certify local state. Before trusting
+  one, ask which machine's answer it is.
+
+
+
+## E-108 — a mutation-testing residue was committed into the verdict engine
+
+- **Symptom:** none, and no test could have had one. `src/ubg/apocalypse.js` sat on `main`
+  carrying
+
+      if (false)
+        routes.push({ id: ep.id, ... }); // guarded, but by trust only
+
+  inside `assertedOnlyMutationRoutes`. With that line dead, `assertedMutations` is always 0, the
+  PARTIAL rung never fires, and **a route guarded only by an UNVERIFIED guard reads `PROVEN`** —
+  the exact false-PROVEN generator ADR-070 exists to remove. It arrived inside a commit whose
+  stated scope was release automation, and was caught by a human reading the diff.
+- **Nobody wrote it.** `if (false)` is BYTE-FOR-BYTE the `repl` of a mutant that has lived in
+  `tests/mutation/run.mjs` since ADR-070 (`find: 'if (!guards.some((n) => n.meta.verified ===
+  true))'`). The same commit ALSO adds a new mutant to that harness — so the harness was being
+  run in that session. This is a residue, not a decision, and that distinction is the whole
+  entry: you do not fix it by telling anyone to be more careful.
+- **Mechanism.** The harness mutates a file, runs one test, restores in a `finally`. `finally`
+  covers a thrown error; it does not cover a killed process. Ctrl-C, a CI timeout, an OOM — the
+  mutated file stays on disk and the next `git add -A` commits it.
+- **Why the suite could not see it.** A mutant that SURVIVES is, by construction, a mutation no
+  test detects. The suite was green because the mutation was one the suite is blind to. The only
+  thing that would have caught it is `npm run mutation` — which reports `⚠ target moved →
+  SURVIVED` — and that takes ten minutes and is not what anyone runs before a `git commit -a`.
+- **Reproduced during the fix, by accident, which is the best evidence available.** A SIGKILL
+  mid-run left `src/ubg/llm-resolve.js` mutated **with signal handlers already installed**: the
+  harness lives inside a BLOCKING `execFileSync`, so a signal cannot reach JS until the child
+  returns and a SIGKILL never reaches it at all. The new suite-level guard named the exact mutant
+  on its first run.
+- **Fix:** ADR-095 — a journal written before the file is touched and replayed by the next run
+  (recovery that does not depend on the dying process), signal handlers for the polite exits, and
+  `tests/no-mutant-left-behind.test.js` in the ordinary suite, which asks the question the
+  harness cannot ask itself: is a mutation sitting in the tree right now?
+- **Rule:** **a cleanup that only runs when the program is healthy is not a cleanup.** Write the
+  intent to durable storage before the risky action and heal from it on the next start. And when
+  a tool can leave the repository in a wrong state, detecting that state belongs in the fast
+  suite, not in the tool's own slow mode.

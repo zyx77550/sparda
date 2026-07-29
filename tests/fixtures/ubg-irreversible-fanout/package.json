@@ -1,0 +1,1 @@
+{ "name": "ubg-irreversible-fanout", "version": "0.0.0", "dependencies": { "@nestjs/common": "^10.0.0" } }

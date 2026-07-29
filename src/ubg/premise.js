@@ -181,18 +181,53 @@ export async function premiseFor(graph, report, { cwd, probe = false } = {}) {
   if (!wanted)
     return {
       available: false,
+      basis: basisOf(report.framework),
       gaps: [],
       probed: 0,
       reason: PROBEABLE.has(report.framework)
         ? 'runtime oracle not requested (--probe)'
         : `no oracle for ${report.framework}`,
     };
-  return verifyPremise(graph, {
+  const verified = await verifyPremise(graph, {
     framework: report.framework,
     entryFile: report.entry,
     cwd,
     unknownHandlers: report.unknownHandlers,
   });
+  return {
+    ...verified,
+    basis: verified.available ? 'measured' : basisOf(report.framework),
+  };
+}
+
+// On what BASIS do we hold the premise — that the route set analysed is the route set the
+// app serves? Three answers, and collapsing the last two is E-104:
+//
+//   'measured'   — an oracle that is not the analyser enumerated the surface and agreed.
+//   'declared'   — there is nothing to cross-check against because the artefact analysed IS
+//                  the route table. An OpenAPI document does not have a premise behind it;
+//                  it is the premise. Demanding a second witness for it would be demanding
+//                  that a map be verified against itself.
+//   'unmeasured' — no oracle ran. NOT the same as "an oracle ran and found nothing", and the
+//                  whole point of naming this state is that the verdict must be able to tell
+//                  the difference (E-104: `PROVEN` was reachable on 7 of our 8 proving
+//                  fixtures with no oracle ever having run).
+export function basisOf(framework) {
+  if (framework === 'openapi') return 'declared';
+  return 'unmeasured';
+}
+
+// The basis of a premise RESULT, as every consumer needs it. `premiseFor` already computes
+// it; NINE call sites re-derived it by hand anyway — the same ternary, copied, which is nine
+// chances to get it subtly wrong and one more shape to keep in sync.
+//
+// The default is the load-bearing part: a caller that has NO premise object at all — because
+// it never asked — gets 'unmeasured', not 'measured' and not `null`. Forgetting to measure
+// must fail toward the weaker word, never toward silence. That is the whole of E-106 in one
+// default value.
+export function basisFrom(premise) {
+  if (premise?.available) return 'measured';
+  return premise?.basis ?? 'unmeasured';
 }
 
 // Fold the gaps into the report the blind-spot ledger reads. Every caller did these two

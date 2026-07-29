@@ -125,8 +125,12 @@ export async function runGate(opts) {
   try {
     ({ graph, report } = compileUBG(opts.cwd, { write: false }));
   } catch (err) {
+    // `ok` is DELIBERATELY absent, not `true`. Abstaining is right — the agent is mid-edit and
+    // a false alarm here is worse than silence — but a consumer reading `ok` must not be able
+    // to read a pass out of a check that never ran. The gate still exits 0; it just refuses to
+    // say the word (ADR-092).
     if (opts.json)
-      console.log(JSON.stringify({ ok: true, abstained: err.message }, null, 2));
+      console.log(JSON.stringify({ ok: null, abstained: err.message }, null, 2));
     else if (!hook)
       say(
         `⏳ GATE ABSTAINED — the tree does not compile yet (${err.message}). Fix it, then re-check.`,

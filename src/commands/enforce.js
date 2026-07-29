@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from '@babel/parser';
 import { compileUBG } from '../ubg/compile.js';
+import { premiseFor } from '../ubg/premise.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import {
   checkGraph,
@@ -141,11 +142,35 @@ function applyEdits(src, plan, principal, shimBody) {
   return out;
 }
 
+// The DELTA verdict: same app, before and after the synthesized check. Deliberately
+// premise-blind — the premise is identical on both sides, so it cannot discriminate, and
+// enforce V1 is Express-only where no boot-free oracle exists. Gating the rollback decision
+// on it would not make enforce safer, it would make enforce impossible.
+//
+// What the premise DOES license is the WORD. Those are two different questions and E-104 is
+// what happens when one answer is used for both: the edit is justified by the delta, the
+// announcement by the oracle. See `announcedState` below.
 function compileVerdict(cwd) {
-  const canonical = canonicalizeGraph(compileUBG(cwd, { write: false }).graph);
+  const { graph, report } = compileUBG(cwd, { write: false });
+  const canonical = canonicalizeGraph(graph);
   const { findings } = checkGraph(canonical);
   const verdict = verdictOf(findings, canonical, {});
-  return { canonical, findings, verdict, state: verdictState(verdict) };
+  return { canonical, report, findings, verdict, state: verdictState(verdict) };
+}
+
+// The word this command is allowed to print, once the edit has proven itself.
+//
+// Before E-104 this was the literal string 'PROVEN (ENFORCED)', announced unconditionally on
+// every successful run — on Express, the only framework enforce V1 supports, and one with no
+// boot-free oracle. So the strongest word SPARDA has was printed on an app whose route table
+// nobody had checked, every single time.
+//
+// The synthesized check really was verified on the recompiled graph; that part was never a
+// lie. What was missing is that a verified guard over an UNVERIFIED ROUTE SET does not add up
+// to PROVEN — Direction 3 is a claim about the subject, not the proof.
+async function announcedState(cwd, canonical, report) {
+  const premise = await premiseFor(canonical, report, { cwd });
+  return premise.available ? 'PROVEN (ENFORCED)' : 'PARTIAL (ENFORCED)';
 }
 
 export function readEnforceManifest(cwd) {
@@ -272,13 +297,14 @@ export async function runEnforce(opts) {
     JSON.stringify(manifest, null, 2) + '\n',
   );
 
+  const announced = await announcedState(cwd, after.canonical, after.report);
   if (opts.json)
     console.log(
       JSON.stringify(
         {
           enforced: manifest.routes,
           files: Object.keys(manifest.files),
-          verdict: 'PROVEN (ENFORCED)',
+          verdict: announced,
         },
         null,
         2,
@@ -287,7 +313,11 @@ export async function runEnforce(opts) {
   else {
     for (const t of targets) log(`  ✓ enforced ${t.label}`);
     log(
-      `\n✓ PROVEN (ENFORCED) — ${targets.length} route(s) now carry a boundary check SPARDA verified on the recompiled graph.\n  Revert any time: sparda enforce --revert (byte-for-byte).`,
+      `\n✓ ${announced} — ${targets.length} route(s) now carry a boundary check SPARDA verified on the recompiled graph.` +
+        (announced.startsWith('PARTIAL')
+          ? `\n  Not PROVEN: no oracle checked this app's route table, so Direction 3 is unverified. Run with --probe to measure it.`
+          : '') +
+        `\n  Revert any time: sparda enforce --revert (byte-for-byte).`,
     );
   }
 }

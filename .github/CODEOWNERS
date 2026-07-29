@@ -1,5 +1,0 @@
-# CODEOWNERS for SPARDA open core
-.github/ @zyx77550
-package.json @zyx77550
-templates/ @zyx77550
-src/server/ @zyx77550

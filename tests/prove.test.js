@@ -26,11 +26,25 @@ function capture(run) {
 }
 
 describe('prove — the whole trust verdict in one gesture', () => {
-  it('a clean app: PROVEN, a seal, exit 0', async () => {
+  it('a clean app whose PREMISE was never measured: PARTIAL, and it says why (E-104)', async () => {
+    // This fixture is Express: no boot-free oracle, and `prove` here does not pass --probe,
+    // so NOTHING checked that the route table analysed is the one the app serves. Direction 3
+    // is unverified, and `PROVEN` asserts it — so the word is withheld.
+    //
+    // It used to read a bare ✓ PROVEN. Seven of our eight proving fixtures did, every one of
+    // them Express or FastAPI, because `{ available: false, gaps: [] }` reached the verdict
+    // through `premiseGaps === 0` — indistinguishable from an oracle that ran and agreed.
     const { out, exit } = await capture(() => runProve({ cwd: fix('ubg-proven') }));
-    expect(out).toMatch(/✓ PROVEN/);
+    expect(out).toMatch(/PROVEN \(PARTIAL\)/);
+    // The REASON must name the premise, and must lead with it. "PARTIAL: 100% of the surface
+    // resolved" is a true sentence that sends the reader to the wrong remedy.
+    expect(out).toMatch(/route table was never checked by an oracle/);
+    expect(out).toMatch(/PARTIAL: the route table/);
     expect(out).toMatch(/seal seal_[0-9a-f]{16}/);
     expect(out).toMatch(/capsule 1 B/);
+    // NOT a gate failure. An unmeasured premise is the absence of a witness, not evidence of
+    // a fault — PARTIAL already means "proved what was seen", and blocking a deploy on it
+    // would invent a problem rather than withhold a claim.
     expect(exit).toBeUndefined(); // exit 0
   });
 
@@ -47,9 +61,15 @@ describe('prove — the whole trust verdict in one gesture', () => {
   it('--json emits the assembled summary', async () => {
     const { out } = await capture(() => runProve({ cwd: fix('ubg-proven'), json: true }));
     const j = JSON.parse(out);
-    expect(j.verdict).toBe('PROVEN');
+    expect(j.verdict).toBe('PARTIAL');
+    // A machine consumer must be able to tell WHICH kind of "not proven" this is. Coverage
+    // here is 100% and there are no findings — reading `verdict` alone would suggest a
+    // thorough analysis being merely cautious, when the truth is that nothing checked the
+    // route table. `basis` is what makes the two distinguishable (E-104).
+    expect(j.premise).toMatchObject({ verified: false, basis: 'unmeasured' });
+    expect(j.premise.reason).toMatch(/--probe/);
+    expect(j.coverage).toBe(1); // the point: 100% coverage, and still not PROVEN
     expect(j.seal).toMatch(/^seal_/);
-    expect(j.coverage).toBeGreaterThan(0);
     expect(Array.isArray(j.findings)).toBe(true);
   });
 });

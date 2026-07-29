@@ -65,7 +65,9 @@ export async function runSpeculate(opts) {
           (result.novel.length ? ` · ${result.novel.length} novel need full proof` : '')
       : result.novel.length
         ? `· ${result.novel.length} novel shape(s) need the full prover — run \`sparda apocalypse\``
-        : `✓ PROVEN (by lookup) — every route settled from the frozen capsule, zero prover work`,
+        : capsule?.proven === null
+          ? `◑ UNMEASURED PREMISE (by lookup) — every route settled from the frozen capsule, but nothing ever checked that capsule's route table`
+          : `✓ PROVEN (by lookup) — every route settled from the frozen capsule, zero prover work`,
   );
   if (result.rejected.length) process.exitCode = 1;
   return { result };

@@ -1,8 +1,8 @@
 {
   "name": "sparda-mcp",
-  "version": "0.69.0",
+  "version": "0.71.1",
   "mcpName": "io.github.zyx77550/sparda-mcp",
-  "description": "AI writes. SPARDA proves. A deterministic, offline gate that catches when an AI edit removes a guard, exposes a route, or breaks an invariant — no API key, right in the agent edit loop.",
+  "description": "AI writes. SPARDA proves. A deterministic, offline gate that catches when an AI edit removes a guard, exposes a route, or breaks an invariant \u2014 no API key, right in the agent edit loop.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "prepublishOnly": "vitest run",
+    "prepublishOnly": "node scripts/release-gate.mjs",
     "corpus": "node scripts/corpus-oracle.mjs",
     "corpus:update": "node scripts/corpus-oracle.mjs --update",
     "test:router": "node tests/router-selftest.cjs",
@@ -29,7 +29,9 @@
     "format:check": "prettier --check \"**/*.{js,cjs,mjs}\"",
     "bench:check": "node bench/check-readme.mjs",
     "mutation": "node tests/mutation/run.mjs",
-    "wedge": "node bench/wedge.mjs"
+    "wedge": "node bench/wedge.mjs",
+    "release:check": "node scripts/release-gate.mjs",
+    "publish:vscode": "cd extensions/vscode && npx --yes @vscode/vsce@3.9.2 publish"
   },
   "files": [
     "src",

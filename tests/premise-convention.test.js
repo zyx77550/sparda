@@ -122,8 +122,16 @@ describe('boot-free premise oracle — it finds what the analysis never claimed'
       for (const it of fs.readdirSync(dir, { withFileTypes: true })) {
         const abs = path.join(dir, it.name);
         // run artefacts the suite itself writes into the corpus (`__pycache__` from the
-        // Python parser, `.sparda/` from an immunity capsule) are correctly untracked
-        if (it.name === '__pycache__' || it.name.startsWith('.')) continue;
+        // Python parser, `.sparda/` from an immunity capsule, `sparda.json`/`sparda_router.py`
+        // from tests) are correctly untracked. Also ignore editor artefacts like .syntax-check.py.
+        if (
+          it.name === '__pycache__' ||
+          it.name.startsWith('.') ||
+          it.name === 'sparda.json' ||
+          it.name === 'sparda_router.py' ||
+          it.name.endsWith('.syntax-check.py')
+        )
+          continue;
         if (it.isDirectory()) walkDisk(abs);
         else
           onDisk.push(

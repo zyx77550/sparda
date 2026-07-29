@@ -9,7 +9,7 @@ import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, verdictState, badgeFor } from '../ubg/apocalypse.js';
 import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../ubg/premise.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { fingerprintGraph } from '../ubg/fingerprint.js';
 import { suggestAppDirs } from '../detect.js';
@@ -39,8 +39,12 @@ export async function runProve(opts) {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
-  const capsule = buildCapsule(canonical);
+  // The capsule is graded on the SAME basis as the verdict. It shipped without one (E-106):
+  // `prove` computed the premise two lines above, used it for the verdict word, and then
+  // built a portable capsule that re-asserted `proven: true` with no licence at all.
+  const capsule = buildCapsule(canonical, { premiseBasis: basisFrom(premise) });
   const prints = fingerprintGraph(canonical);
   // one app-level seal: a content address over every route's behavior hash — the same
   // behavior, in any repo, yields the same seal (the genome's join key, made visible).
@@ -77,7 +81,14 @@ export async function runProve(opts) {
           probed: premise.probed,
           gaps: premise.gaps.length,
         }
-      : { verified: false, reason: premise.reason },
+      : {
+          verified: false,
+          // 'unmeasured' (no oracle ran) vs 'declared' (OpenAPI — the document analysed IS
+          // the route table). A machine consumer that cannot tell those apart is in exactly
+          // the position E-104 put the verdict in.
+          basis: premise.basis ?? 'unmeasured',
+          reason: premise.reason,
+        },
     findings: findings.map((f) => ({
       rule: f.rule,
       severity: f.severity,
@@ -147,6 +158,15 @@ export async function runProve(opts) {
       );
     if (summary.blindHigh > 0)
       reasons.push(`${summary.blindHigh} high-risk blind spot(s)`);
+    // FIRST, because it is the only rung that is about the SUBJECT rather than the proof.
+    // A reader told "PARTIAL: 100% of the surface resolved" and nothing else concludes the
+    // analysis was thorough and the word merely cautious. The truth was that no oracle ever
+    // checked whether the surface analysed was the app's — and that is a different sentence,
+    // with a different remedy (E-104).
+    if (verdict.premiseUnmeasured)
+      reasons.unshift(
+        `the route table was never checked by an oracle — no boot-free oracle for this framework, and --probe was not used, so Direction 3 is UNVERIFIED (not a finding: an unmeasured premise, which PROVEN would assert)`,
+      );
     if (verdict.coverageUnknown)
       reasons.push(
         `coverage is UNKNOWN (0 behaviors resolved out of 0 seen — no measurement, not a pass)`,

@@ -102,7 +102,13 @@ async function gate(opts, id, flight, healDir) {
   const staticFindings = checkGraph(fixedGraph).findings;
   let regressions;
   const baselinePath = path.join(healDir, 'baseline.json');
-  if (fs.existsSync(baselinePath)) {
+  // "nothing protected got removed" is a DELTA, and a delta needs two sides. `--check` can be
+  // run without the diagnose phase ever having frozen `baseline.json` — and then `diffGraphs`
+  // never runs, so no removed guard can possibly be detected. The old verdict line said
+  // "zero protection lost" either way: a property nothing had measured, asserted as an
+  // outcome. Tracked, so the headline can be qualified rather than the check silently skipped.
+  const deltaMeasured = fs.existsSync(baselinePath);
+  if (deltaMeasured) {
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
     regressions = diffGraphs(baseline, fixedGraph).findings;
     // pre-existing static findings are not the fix's fault — only NEW ones gate
@@ -131,14 +137,31 @@ async function gate(opts, id, flight, healDir) {
   console.log(
     `  ${apocalypse.safe ? '✓' : '✗'} apocalypse: ${regressions.length === 0 ? 'no new findings' : regressions.map((f) => f.rule).join(', ')}`,
   );
+  if (!deltaMeasured)
+    console.log(
+      `  ◐ guard delta UNMEASURED — no baseline.json in .sparda/heal/${id}/;` +
+        ` run \`sparda heal ${id}\` first so the pre-fix graph is frozen`,
+    );
 
   const ok = healing.healed && laws.ok && apocalypse.safe;
-  const report = { id, healed: healing, laws: laws.checks, regressions, ok };
+  const report = {
+    id,
+    healed: healing,
+    laws: laws.checks,
+    regressions,
+    deltaMeasured,
+    ok,
+  };
   atomicWrite(path.join(healDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');
 
   if (ok) {
+    // The claim is trimmed to what was actually measured. Without a baseline the fixed tree
+    // was still graded — every static finding gated, which is STRICTER — but "zero protection
+    // lost" specifically requires the before/after diff, so it is not said.
     console.log(
-      `✓ HEALED & PROVEN — same recorded inputs, correct output, zero law broken, zero protection lost. Ship it.`,
+      deltaMeasured
+        ? `✓ HEALED & PROVEN — same recorded inputs, correct output, zero law broken, zero protection lost. Ship it.`
+        : `◐ HEALED, PARTIALLY PROVEN — same recorded inputs, correct output, zero law broken, no static finding. Whether a guard was REMOVED is unmeasured: no pre-fix graph was frozen.`,
     );
   } else {
     console.log(

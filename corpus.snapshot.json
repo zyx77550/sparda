@@ -26,22 +26,22 @@
     }
   },
   "novu": {
-    "verdict": "PARTIAL",
+    "verdict": "NOT_PROVEN",
     "routes": 451,
     "premiseOracle": "convention",
     "premiseProbed": 365,
     "premiseGaps": 0,
-    "findings": 0,
-    "advisories": 25,
+    "findings": 4,
+    "advisories": 15,
     "findingsByRule": {
-      "IRREVERSIBLE_OBSERVABLE": 16,
-      "UNGUARDED_MUTATION": 9
+      "IRREVERSIBLE_OBSERVABLE": 6,
+      "UNGUARDED_MUTATION": 13
     },
-    "dbWrites": 52,
-    "dbReads": 792,
+    "dbWrites": 132,
+    "dbReads": 1464,
     "guards": 782,
     "guardsVerified": 411,
-    "coverage": 14.8,
+    "coverage": 15.1,
     "_pinned": {
       "commit": "00e7b5c",
       "date": "2026-07-27"
@@ -49,7 +49,7 @@
   },
   "cal.com": {
     "verdict": "NOT_PROVEN",
-    "routes": 175,
+    "routes": 177,
     "premiseOracle": "convention",
     "premiseProbed": 1,
     "premiseGaps": 0,
@@ -65,7 +65,7 @@
     "dbReads": 99,
     "guards": 436,
     "guardsVerified": 252,
-    "coverage": 93.6,
+    "coverage": 94.3,
     "_pinned": {
       "commit": "3894f37",
       "date": "2026-07-22"
@@ -73,22 +73,22 @@
   },
   "twenty": {
     "verdict": "NOT_PROVEN",
-    "routes": 147,
+    "routes": 579,
     "premiseOracle": "convention",
     "premiseProbed": 122,
     "premiseGaps": 0,
-    "findings": 2,
-    "advisories": 12,
+    "findings": 14,
+    "advisories": 17,
     "findingsByRule": {
-      "IRREVERSIBLE_OBSERVABLE": 14
+      "IRREVERSIBLE_OBSERVABLE": 31
     },
-    "dbWrites": 266,
-    "dbReads": 28,
-    "guards": 441,
-    "guardsVerified": 157,
-    "coverage": 81.6,
+    "dbWrites": 812,
+    "dbReads": 90,
+    "guards": 1868,
+    "guardsVerified": 583,
+    "coverage": 77,
     "_pinned": {
-      "commit": "e631c986",
+      "commit": "590ae069",
       "date": "2026-07-27"
     }
   },
@@ -116,20 +116,20 @@
   },
   "nocodb": {
     "verdict": "PREMISE_GAP",
-    "routes": 358,
+    "routes": 566,
     "premiseOracle": "convention",
     "premiseProbed": 78,
     "premiseGaps": 1,
-    "findings": 14,
+    "findings": 13,
     "advisories": 0,
     "findingsByRule": {
-      "IRREVERSIBLE_OBSERVABLE": 14
+      "IRREVERSIBLE_OBSERVABLE": 13
     },
     "dbWrites": 64,
     "dbReads": 5,
     "guards": 899,
     "guardsVerified": 9,
-    "coverage": 40.3,
+    "coverage": 47.6,
     "_pinned": {
       "commit": "64bf196",
       "date": "2026-07-24"

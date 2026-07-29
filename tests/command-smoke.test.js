@@ -177,11 +177,19 @@ describe('runImmunize (wrapper)', () => {
     expect(result.capsule.proven).toBe(false);
   });
 
-  it('writes a capsule to .sparda/immunity.json and prints summary', async () => {
+  it('writes a capsule, and withholds PROVEN while no oracle has checked the premise', async () => {
+    // This test used to assert `✓ PROVEN` here, and that assertion was the suite defending
+    // E-106: the fixture is Express, the runtime oracle is opt-in (`--probe`), so nothing ever
+    // checked that these are the app's routes. The polarity IS clean — that is why the word is
+    // WITHHELD rather than denied, and why the exit code stays 0: SPARDA never fails a build
+    // for a measurement that was not available to it.
     const { result, out, exitCode } = await run(runImmunize, { cwd: PROVEN_APP });
     expect(exitCode).toBe(0);
     expect(out).toContain('IMMUNITY CAPSULE');
-    expect(out).toContain('✓ PROVEN');
+    expect(out).toContain('UNMEASURED PREMISE');
+    expect(out).not.toContain('✓ PROVEN');
+    expect(result.capsule.proven).toBeNull();
+    expect(result.capsule.premiseBasis).toBe('unmeasured');
     expect(result.capsule.surfaceOnly).toBe(false);
     expect(fs.existsSync(result.outPath)).toBe(true);
   });

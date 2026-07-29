@@ -26,6 +26,7 @@ import {
   methodInClassChain,
   computeThisSymbols,
   resolveExportedFunction,
+  resolveExportedClass,
   collectRepoFields,
   collectReqDerived,
   reqParamName,
@@ -156,6 +157,7 @@ function seedTaint(fn, args, callerReq) {
 // live here, scoped to the run.
 export function createResolver({ cwd, scannedFiles, helpers }) {
   const classBundles = new Map(); // memo: per (class file, class.method[, symbols])
+  const classLookups = new Map(); // memo: per (module, class name) — barrel walks
   const rel = (abs) => relOf(cwd, abs);
 
   // ---- member-call following (imports, instantiated services, this/super) ----
@@ -411,9 +413,22 @@ export function createResolver({ cwd, scannedFiles, helpers }) {
     const file = mod.imports.get(className);
     const clsMod = file ? parseModule(file) : mod;
     if (clsMod.error) return null;
-    const cls = classInModule(clsMod, className);
-    if (!cls) return null;
-    return classMethodBundle(cls, clsMod, methodName, depth, stack, thisSymbols);
+    const hit = classThroughBarrels(clsMod, className);
+    if (!hit) return null;
+    return classMethodBundle(hit.cls, hit.mod, methodName, depth, stack, thisSymbols);
+  }
+
+  // A class is looked up THROUGH barrels: declared here, or re-exported from a module
+  // this one re-exports. A monorepo package entry point is a barrel and nothing else, so
+  // without this every DI hop into a workspace package resolves to nothing at all —
+  // silently, since an unresolved hop leaves no trace of its own. Memoized per (module,
+  // class): a sixty-line barrel is otherwise re-walked once per hop.
+  function classThroughBarrels(clsMod, className) {
+    const key = `cls:${clsMod._file ?? ''}#${className}`;
+    if (classLookups.has(key)) return classLookups.get(key);
+    const hit = resolveExportedClass(clsMod, className);
+    classLookups.set(key, hit);
+    return hit;
   }
 
   // The fully-resolved scan of `<topCls>.<methodName>` — its body plus everything

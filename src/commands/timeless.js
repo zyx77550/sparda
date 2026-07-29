@@ -77,9 +77,23 @@ async function replay(opts, id) {
     `TIMELESS — replaying ${flight.request.method} ${flight.request.url} (${flight.taps.length} taps virtualized)`,
   );
   if (result.match) {
-    console.log(
-      `✓ byte-identical replay — status ${result.actual.status}, every tap consumed, zero divergence`,
-    );
+    // A flight with ZERO taps passes `match` on the response alone: `leftover` and
+    // `divergences` are empty because there was nothing to consume and nothing to diverge
+    // from. "every tap consumed, zero divergence" over an empty tap set is the falsify bug's
+    // shape — a perfect score for a control set of size 0. It matters practically: a flight
+    // recorded before `box.wrapClient(db)` was installed captures no taps, so the replay hit
+    // the LIVE dependency and the match says the environment answered the same way today,
+    // not that the code is unchanged.
+    if (!flight.taps.length)
+      console.log(
+        `◐ response identical (status ${result.actual.status}) — but 0 taps were recorded, so` +
+          ` NOTHING was virtualized: determinism is UNMEASURED. Wrap your clients` +
+          ` (\`box.wrapClient(db)\`) and re-record to make this a proof.`,
+      );
+    else
+      console.log(
+        `✓ byte-identical replay — status ${result.actual.status}, all ${flight.taps.length} tap(s) consumed, zero divergence`,
+      );
   } else {
     if (!result.statusMatch)
       console.log(

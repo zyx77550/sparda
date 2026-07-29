@@ -20,3 +20,11 @@ scratch/
 mcp-publisher.exe
 mcp-publisher.tar.gz
 tools/corpus/.tmp/
+tools/fuzzer/bilan-fuzzing-ia.json
+
+# the release gate writes its verdict here so a blocked publish is recoverable
+# after npm has swallowed the output; it must never make the tree look dirty
+.sparda-release-gate.log
+
+# mutation harness crash journal — restored by the next run (E-108)
+tests/mutation/.in-flight.json

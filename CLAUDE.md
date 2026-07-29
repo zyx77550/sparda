@@ -17,6 +17,18 @@ intelligence from the client's own LLM (MCP sampling), storage from
 3. Before touching code that failed before, check `docs/ERRORS.md`.
 4. Big-picture questions (tiers, rounds, monetization) → `ROADMAP.md`.
 
+**🚢 PUBLISHING ANYTHING? Read `docs/MASTER-PLAN-RELEASE.md` first, in full.**
+npm, the VS Code Marketplace, the MCP registry, a tag — all four go through
+that playbook, in that order. Every step in it has already been done wrong
+once and carries the error number to prove it. Do not improvise a release.
+
+**Offload, don't memorise.** Your context is finite and this project's history
+is not. Durable facts go INTO the docs (`ERRORS.md`, `DECISIONS.md`,
+`HANDOFF.md`, the Obsidian vault); old facts come OUT of them by grep, never
+by reconstruction. Do not read `DECISIONS.md` or `ERRORS.md` whole — they are
+100+ entries each, and saturating your own context is how confident wrong
+process decisions get made.
+
 **Before ending a session that changed anything:** update `docs/HANDOFF.md`
 and append a session record in `docs/sessions/` (use `TEMPLATE.md`).
 This is how context survives between sessions — never skip it.
@@ -25,7 +37,9 @@ This is how context survives between sessions — never skip it.
 
 ```bash
 npm test                       # vitest, full suite — must be green before any push
-npm run mutation               # 77 mutants — all must die before any push (rule 11)
+npm run mutation               # 128 mutants — all must die before any push (rule 12)
+npm run release:check          # the RELEASE gate (ADR-087) — green suite ≠ releasable
+                               # full procedure: docs/MASTER-PLAN-RELEASE.md
 npx vitest run -t "quarantine" # single test by name
 node src/index.js init|dev|sync|hook|remove|doctor   # the CLI, from a target app dir
 ```
@@ -67,12 +81,28 @@ router's HTTP endpoints (`/mcp/tools|invoke|stats|events`). Details and the
    of finding them (ADR-082).
 11. **A guarantee is universal or it is false.** ANY module that grades a compiled
    graph MUST call `premiseFor` — a command, the MCP tool, a bench, the corpus
-   oracle. An organ reachable from some consumers buys confidence it has not
-   earned, and a rule that scans only the directory where the last such bug was
-   found repeats the same mistake one level up (ADR-083 + amendment).
+   oracle. "Grades" means it calls anything in `GRADERS`
+   (`tests/premise-wired-everywhere.test.js`): `verdictOf`, `badgeFor`, **and
+   `buildCapsule`** — the capsule states `proven` in the artifact that TRAVELS.
+   An organ reachable from some consumers buys confidence it has not earned, and
+   a rule scoped to one directory — or to one function name — repeats the same
+   mistake one level up; both times the gap was the size of the scope
+   (ADR-083 + amendment, ADR-093).
 12. Tests green (`npm test`) **and** mutants dead (`npm run mutation`) before
    commit; new behavior ships with tests, new soundness-critical lines ship
    with a killing mutant.
+13. **Put the admission INSIDE the number, never beside it.** Anything a reader acts
+   on — a score, a verdict word, an `ok`, a percentage — must be able to say "I don't
+   know" IN ITSELF (`null`, never `0`/`false`/`1`-with-a-note). Five leaks had the
+   honest field present and the headline lying (SOUNDNESS 3d, ADR-092). New headline
+   field → new row in `tests/unmeasured-is-not-a-pass.test.js`, and the row owes TWO
+   assertions: EXPRESSIBLE (the field can hold `null`) **and REACHABLE** (a real call
+   path produces it). ADR-092 was tested and wired to nothing for a whole release
+   because only the first was checked (E-106, SOUNDNESS 3e).
+14. **A green suite licenses a COMMIT, never a RELEASE.** Publishing goes through
+   `npm run release:check` — which commit, which tag, which manifests, which
+   CHANGELOG entry are all unverified until something checks them, and v0.69.0
+   shipped a half-state with every test passing (ADR-087, E-096). No escape hatch.
 
 ## Conventions
 

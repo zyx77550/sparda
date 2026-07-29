@@ -10,7 +10,7 @@ import path from 'node:path';
 import { compileUBG } from '../ubg/compile.js';
 import { canonicalizeGraph } from '../ubg/schema.js';
 import { checkGraph, verdictOf, verdictState } from '../ubg/apocalypse.js';
-import { premiseFor, withPremiseGaps } from '../ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../ubg/premise.js';
 import { surveyBlindspots, coveragePct } from '../ubg/blindspots.js';
 import { buildCapsule } from '../ubg/immunity.js';
 import { AXES, POLARITY_SYMBOL, exposedAxes } from '../ubg/polarity.js';
@@ -20,7 +20,6 @@ export async function runDossier(opts) {
   const compiled = compileUBG(opts.cwd, { write: false, openapi: opts.openapi });
   const canonical = canonicalizeGraph(compiled.graph);
   const { findings, polarity } = checkGraph(canonical);
-  const capsule = buildCapsule(canonical);
   // the public report — same rule as the badge: it must not describe an app SPARDA
   // never fully had
   const premise = await premiseFor(canonical, compiled.report, {
@@ -35,7 +34,11 @@ export async function runDossier(opts) {
     coverage: blindspots.coverage.ratio,
     blindHigh: blindspots.byRisk.critical + blindspots.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
+  // built AFTER the premise, deliberately: the old ordering put `buildCapsule` three lines
+  // above the only value that licenses it, which is how the capsule stayed ungraded (E-106).
+  const capsule = buildCapsule(canonical, { premiseBasis: basisFrom(premise) });
 
   const data = {
     app: path.basename(path.resolve(opts.cwd)) || 'app',

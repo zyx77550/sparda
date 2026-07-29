@@ -8,8 +8,135 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > and `docs/HANDOFF.md`; this file resumes structured entries at 0.13.3.
 
 ## [Unreleased]
-Generate-and-check closed as a loop (ADR-075) + the PROVEN-ENFORCED tier (ADR-076). No new
-runtime dependency (still four).
+
+## [0.71.1]
+
+### Fixed
+
+- **A mutation-testing residue had disabled a soundness check on `main`** (ADR-095, E-108).
+  `src/ubg/apocalypse.js` carried `if (false)` where `assertedOnlyMutationRoutes` decides whether
+  a route is guarded by trust alone — so `assertedMutations` was always 0, the PARTIAL rung never
+  fired, and **a route protected only by an unverified guard read `PROVEN`**. Nobody wrote it:
+  the string is byte-for-byte a mutant's replacement text, left behind when the mutation harness
+  was killed mid-run and swept into an unrelated commit. The harness now journals the original
+  bytes before touching a file and heals from that journal on its next start, and
+  `tests/no-mutant-left-behind.test.js` fails the ORDINARY suite if any mutation is sitting in
+  the tree — a check that costs milliseconds, where noticing it otherwise costs ten minutes and
+  a code review.
+- **The release workflow could never have published anything.** `actions/checkout` on a tag push
+  produces a DETACHED HEAD, `git rev-parse --abbrev-ref HEAD` answers the literal `HEAD`, and the
+  gate refused it as "not on main" — its first run would have died there. A detached HEAD is now
+  accepted only when it is byte-identical to `origin/main`, which is the property the branch name
+  was ever a proxy for; a detached checkout of any other commit is still refused.
+- **An origin the gate could not REACH no longer reads as an un-pushed tag** (ADR-095). Both
+  still block — a gate that cannot verify must not certify — but the unreachable case says
+  `UNVERIFIED` instead of sending you to look for a tag that is already there.
+- `docs/DECISIONS.md` was no longer valid UTF-8: the ADR-094 heading carried a Windows-1252
+  em-dash byte and a stray carriage return that ate a letter of its own title.
+
+### Added
+
+- **A GitHub Actions release workflow**, fired by a `v*` tag push and gated on
+  `npm run release:check` — which finally puts `vsce publish` behind the same door as
+  `npm publish`. The VS Code extension had been shipping with nothing verified but its version
+  number, which is how a stub reached the Marketplace at 0.70.0. Secrets are read through `env:`
+  rather than interpolated into the shell, and `@vscode/vsce` is version-pinned, here and in
+  `npm run publish:vscode`, so the publishing toolchain is not a moving target.
+- **The release gate verifies the tag is PUSHED**, not merely present locally (ADR-094, E-107).
+
+## [0.71.0] - 2026-07-28
+
+### Added
+
+- **VS Code: install the engine from the error that reports it missing** (ADR-090). The
+  notification carries an **Install sparda-mcp** button; it runs in a visible terminal, with the
+  package manager the lockfile names, always as a dev dependency, and the workspace re-proves
+  itself when the binary appears. The button is shown only when installing is genuinely the
+  remedy — a misconfigured `sparda.command` reports what actually failed instead.
+- **VS Code: the status bar is a menu**, built from the current state so the first item is the
+  useful one; a native three-step walkthrough; and lightbulbs on findings that EXPLAIN rather
+  than claim to fix. The only write-adjacent code action is `enforce`, on unguarded mutations
+  only and always a dry run — the one "fix" that re-derives its own result and reverts
+  byte-for-byte if the recompiled app does not prove.
+
+### Changed
+
+- The release gate spawns **no shell on any platform** and no longer needs `npm` to be
+  resolvable: the "is this version published?" check is an HTTP request to the registry
+  (E-103). It also runs `node_modules/vitest/vitest.mjs` through `process.execPath` rather than
+  `npx`, which could not start on Windows and resolved a test runner the lockfile does not pin
+  (E-101, E-102).
+
+**Read this before upgrading:** `PROVEN` now requires that something actually checked the app's
+route table. On Express and FastAPI the oracle is opt-in, so those apps read `PARTIAL` until you
+run with `--probe`; convention-routed frameworks (Next, Nest, Medusa, Strapi) are checked for
+free and are unaffected. If your verdict got weaker on this upgrade, the app did not change —
+what SPARDA is willing to claim without measuring did.
+
+### Fixed
+
+- **`PROVEN` was reachable with a premise nobody had measured** (ADR-091, E-104). An oracle that
+  did not run and an oracle that ran and found nothing produced a byte-identical downstream
+  state: `available: false` was honest, and `premiseGaps: 0` — the number the verdict read —
+  could not tell the two apart. The premise now carries a `basis` (`measured` / `declared` for
+  OpenAPI, where the spec IS the route table / `unmeasured`), and `unmeasured` is a PARTIAL rung.
+  Never a gate failure: SPARDA does not demand what it could not measure.
+- **Four more headlines said "fine" over a measurement that never happened** (ADR-092, E-105):
+  `falsify` scored `1` with zero controls, `gate` returned `ok: true` while abstaining, and
+  `speculate`/`immunize` printed `✓ PROVEN` from a capsule whose premise nobody checked. In each
+  case the honest field was PRESENT and placed BESIDE the headline instead of inside it. The
+  headline now carries `null` — not `0`, not `false`, which are answers.
+- **And that fix was wired to nothing** (ADR-093, E-106). All four `buildCapsule` call sites
+  passed no basis, so the three-state `proven` was unreachable and `immunize` printed an
+  `UNMEASURED PREMISE` branch no input could produce — while its test, which constructed the
+  state by hand, passed. `immunize` and `genome` now call `premiseFor` at all (`genome` signs
+  its verdicts and merges them into a file strangers pull, and names each route it has no
+  antibody for); the structural rule that enforces hard rule 11 now recognises `buildCapsule`
+  as a grader; and only the POSITIVE claim is withheld — a real NOT-PROVEN needs no premise.
+- **Three commands reported a partial measurement as a complete one.** `sparda stitch` recorded
+  a service that failed to compile, gates CI on it and marks the join PARTIAL — a half join
+  finds no cross-service BOLA and used to print that as "no cross-service calls resolved".
+  `sparda heal --check` no longer claims "zero protection lost" when no pre-fix graph was
+  frozen, since the guard diff never ran. `sparda timeless replay` no longer reports "every tap
+  consumed, zero divergence" for a flight that recorded zero taps — nothing was virtualized, so
+  the match says today's environment agreed, not that the code is unchanged.
+
+## [0.70.1] - 2026-07-28
+
+### Fixed
+
+- **The VS Code extension shipped a stub to the Marketplace.** `extensions/vscode/` was
+  published as `zyx77550.sparda@0.70.0` carrying one command whose entire body was
+  `showInformationMessage('Audit command triggered! (Integration pending)')`. An outside
+  reviewer read the manifest, read the source, and correctly called it a placeholder. A
+  working extension already existed in `integrations/vscode/` — 135 tested lines, four
+  commands, real Problems-panel diagnostics — and the two had drifted into separate
+  directories with different publishers, so `npm run publish:vscode` shipped the wrong one.
+  The two are now one: the working code lives in `extensions/vscode/` under the published
+  identity, and `integrations/vscode/` is gone.
+- **A published extension can no longer advertise a command nothing implements.** Nothing
+  could have caught the stub — it parsed, the suite was green, and the release gate checks
+  the extension's VERSION, not whether it does anything. `tests/vscode-extension.test.js`
+  now requires the contributed commands and the registered handlers to be the same set,
+  requires the manifest's entry point to exist, and rejects a placeholder body outright.
+- **The extension's status bar cannot show a verdict it did not obtain.** A failed, missing
+  or cancelled CLI run reads `UNKNOWN` with its reason in the tooltip, never a calm bar and
+  never a stale one; a failed `apocalypse` leaves the Problems panel untouched rather than
+  clearing it, since wiping it would turn "we could not measure" into a clean bill of health
+  in the one place a developer trusts by habit. It also no longer blocks the editor
+  (`spawn`, cancellable, single-flight) and never picks up a bare global `sparda` on `PATH`
+  — the version that proves the code should be the version the project pinned.
+
+## [0.70.0] - 2026-07-27
+Generate-and-check closed as a loop (ADR-075) + the PROVEN-ENFORCED tier (ADR-076), a gate
+for the RELEASE rather than the commit (ADR-087), and the barrel fix that made a monorepo's
+DI graph visible (ADR-088). No new runtime dependency (still four).
+
+**Read this before upgrading:** the barrel fix changes VERDICTS on monorepos. An app whose
+services are injected from a workspace package was analysed without them — measured on a
+real one, 1479 of 2039 DI hops resolved to nothing, and it read PARTIAL with 0 findings
+while 80 of its 132 database writes were invisible. It now reads NOT_PROVEN with 4. If your
+verdict got worse on this upgrade, the app did not change; what SPARDA can see did.
 
 ### Added
 - **`sparda falsify` — the proof, challenged (Popper as a command).** Ablates every guard from
@@ -35,6 +162,96 @@ runtime dependency (still four).
   deterministically against the AST. Fabricated locations, unreachable-but-real checks
   (attribution tether), and path escapes are rejected; admitted discharges carry an auditable
   `generator+verified` provenance. Never changes the verdict.
+- **A DI hop into a workspace package now crosses the barrel** (E-097, ADR-088). A monorepo
+  package resolves to its entry file, that entry file is `export * from './…'` sixty times
+  with no class declaration, and the resolver only looked for classes DECLARED in the module
+  it landed on. Measured on a real monorepo: **1479 of 2039 constructor-DI hops resolved to
+  nothing** — every repository the app writes through. And an unresolved hop leaves no
+  trace, so a route whose behavior lives entirely behind the barrel resolved to zero
+  behavior and produced **no finding at all**, at coverage `unknown` rather than `blind`.
+  The app read PARTIAL with 0 findings while 80 of its 132 database writes were invisible;
+  it now reads NOT_PROVEN with 4. Classes get the barrel walk functions have had since the
+  `lib/auth/index.ts` era.
+- **A release gate, because a green suite licenses a commit and not a release** (ADR-087,
+  E-096). 0.69.0 was published from a commit that was not the head of what was being merged:
+  for four hours the package on npm analysed a NestJS app at a quarter of its size, while
+  every test passed at the commit that shipped. `prepublishOnly` now runs
+  `scripts/release-gate.mjs` — tree clean, on `main`, HEAD identical to `origin/main`,
+  version absent from the registry, `server.json` (twice) and `glama.json` agreeing with
+  `package.json`, a CHANGELOG heading for the version, a `v<version>` tag pointing at HEAD,
+  then suite, mutants and corpus. Runnable on demand as `npm run release:check`. No escape
+  hatch: it reads no `process.argv` and one environment variable that can only add a check.
+  What it cannot measure it names — `SKIPPED` for the corpus without clones, `UNVERIFIED`
+  for an unreachable registry — never a tick.
+
+## [0.69.1] - 2026-07-27
+
+Corrections shipped ahead of the next milestone: what 0.69.0 put in front of users was
+less honest than what the repository knew. No new runtime dependency (still four).
+
+### Fixed
+
+- **A NestJS app with house decorator brands was analysed at a quarter of its size**
+  (E-092, ADR-085). The file pre-filter matched a fixed decorator VOCABULARY, so a class
+  registered as `@MetadataResolver` / `@CoreResolver` / `@AdminResolver` — the norm in a
+  real codebase, not the exception — was never opened. And a file that is never opened
+  produces no route, no skipped entry and no unknown handler: the report showed a route
+  count and a coverage percentage computed over a fraction of the app, **with no signal
+  that anything was missing**. Brands are now matched by SUFFIX, exactly as controllers
+  already were. Measured on a 6090-file monorepo: 33 → 128 files parsed, 147 → 579 routes,
+  in 4.0 s.
+- **`@Post(['a', 'b'])` registered no route at its declared paths** (E-093, ADR-085).
+  Nest serves every element of the array; the reader saw an `ArrayExpression`, judged it
+  "not a literal" and fell back to the controller prefix, collapsing whole webhook
+  controllers onto a phantom `POST /` — findings were reported against a URL the app does
+  not serve. Now one route per element; an element that cannot be read is declared at high
+  risk while its readable siblings still route.
+- **One missing compensation path was reported once per effect node** (E-094, ADR-086). A
+  send resolved through a provider-strategy DI graph produced a finding per leaf: on a
+  real app, one route accounted for twelve of twenty-eight high findings. A finding is now
+  emitted per (route, rule) — the unit of a finding is the unit of its remediation. The
+  set of flagged routes, their severity and the CI gate are unchanged; every call is named
+  in the message and every node kept in the evidence.
+
+### Changed
+
+- `SOUNDNESS.md` gains discipline item 3c. "Fewer findings" is two different things, told
+  apart by the flagged SET and never by the count: a route that stops being flagged is a
+  false negative whatever the justification; duplicates of one problem on one route
+  collapsing is not. The proof obligation is written down.
+
+## [0.69.0] - 2026-07-27
+
+The premise verifier reaches every gate, and the registration invariant reaches every
+framework. No new runtime dependency (still four).
+
+### Added
+
+- **The premise check runs on every command that emits a verdict** (ADR-083). It had
+  shipped wired into `prove` alone, which is worse than not shipping it: `apocalypse` —
+  the CI gate — could still exit 0, and `badge` could still publish a green artifact, over
+  an app whose route table nobody had checked.
+- **A boot-free premise oracle** (ADR-082) for the frameworks that cannot be booted from a
+  static checkout. It derives the route table from what those frameworks actually route on
+  — the filesystem for Next and Medusa, the literal route tables for Strapi, the decorators
+  for Nest — so the premise is now checkable on six lowerings out of seven. Because it
+  executes nothing, it runs unasked.
+- **The registration invariant on all seven lowerings** (ADR-079 extended), with a sealing
+  certificate per lowering: each re-enumerates the declared surface with an independent
+  second implementation and demands the extractor account for every item.
+- **Composite decorator resolution** (ADR-084). `applyDecorators(UseGuards(X))` — NestJS's
+  official composition API — resolved to a FUNCTION, and guard proof only opened CLASSES,
+  so a guard that provably returns 401 was trusted by name instead of proven. On a real
+  app: 71 → 411 guards proven.
+
+### Fixed
+
+- A premise gap rendered as `0 findings` on the public badge (E-084).
+- `sparda review` graded the graph and never read the report, so the pull-request gate saw
+  no skipped surface at all — a PR that made a whole file unparseable reviewed exactly like
+  one that changed nothing (E-085).
+- A `SetMetadata` tag counted as protection it never provided — except where a global guard
+  proven to deny reads it, which is the dominant NestJS idiom (E-090).
 
 ## [0.68.0] - 2026-07-23
 Trust-layer hardening — PROVEN must mean proven. Teach SPARDA the auth idioms real apps

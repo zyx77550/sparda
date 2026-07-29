@@ -23,6 +23,20 @@ import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { checkGraph, verdictOf, verdictState } from '../src/ubg/apocalypse.js';
 import { surveyBlindspots } from '../src/ubg/blindspots.js';
+import { spawnSync } from 'node:child_process';
+
+const detectedPython = (() => {
+  for (const cmd of ['python3', 'python', 'py']) {
+    const args = cmd === 'py' ? ['-3', '--version'] : ['--version'];
+    try {
+      const res = spawnSync(cmd, args, { encoding: 'utf8', timeout: 1000 });
+      if (res.status === 0) return cmd;
+    } catch {}
+  }
+  return null;
+})();
+const hasPython = detectedPython !== null;
+const pythonCmd = detectedPython ?? 'python';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fx = (name) => path.join(here, 'fixtures', name);
@@ -155,11 +169,11 @@ describe('registration invariant — Next.js', () => {
   });
 });
 
-describe('registration invariant — FastAPI', () => {
+describe.skipIf(!hasPython)('registration invariant — FastAPI', () => {
   const dir = fx('ubg-fastapi-ghost');
 
   it('a decorator path that is not a literal is declared', () => {
-    const out = extractFastAPI(dir, 'main.py', 'python3');
+    const out = extractFastAPI(dir, 'main.py', pythonCmd);
     expectDeclared(out, { via: 'dynamic-decorator-path:delete', file: 'main.py' });
     // the declaration names the HANDLER — the only stable identity a route without a
     // readable URL still has

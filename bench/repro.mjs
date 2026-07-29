@@ -21,7 +21,7 @@ import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { checkGraph, verdictOf, verdictState } from '../src/ubg/apocalypse.js';
 import { surveyBlindspots } from '../src/ubg/blindspots.js';
-import { premiseFor, withPremiseGaps } from '../src/ubg/premise.js';
+import { premiseFor, withPremiseGaps, basisFrom } from '../src/ubg/premise.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +79,7 @@ async function measure(appDir) {
     coverage: blind.coverage.ratio,
     blindHigh: blind.byRisk.critical + blind.byRisk.high,
     premiseGaps: premise.available ? premise.gaps.length : 0,
+    premiseBasis: basisFrom(premise),
   });
   const ms = Math.round(performance.now() - t0);
   return {
