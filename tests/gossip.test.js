@@ -19,6 +19,7 @@ import { parseExpressProject } from '../src/parser/express.js';
 import { generateExpress } from '../src/generator/express.js';
 import { parseFastAPIProject } from '../src/parser/fastapi.js';
 import { generateFastAPI } from '../src/generator/fastapi.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const pythonCmd = (() => {
   for (const cmd of ['python3', 'python', 'py']) {
@@ -150,7 +151,7 @@ describe('Gossip CRDT — Express horizontal scale (Brief #2)', () => {
   it('a solo replica converges by merging a peer snapshot it never observed (receive/auth/bounded/idempotent/volatile)', async () => {
     const tmp = path.join(__dirname, '.tmp', 'gossip-express-recv');
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+    copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
     const port = await freePort();
     const { routes } = parseExpressProject(tmp, 'src/app.js');
@@ -251,7 +252,7 @@ describe('Gossip CRDT — Express horizontal scale (Brief #2)', () => {
     const peer = await startMockPeer();
     const tmp = path.join(__dirname, '.tmp', 'gossip-express-push');
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+    copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
     const port = await freePort();
     const { routes } = parseExpressProject(tmp, 'src/app.js');
@@ -333,7 +334,7 @@ describe.skipIf(!hasFastAPIRuntime)(
       const peer = await startMockPeer();
       const tmp = path.join(__dirname, '.tmp', 'gossip-fastapi');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp);
 
       const port = await freePort();
       const { routes, entryAppVars } = parseFastAPIProject(tmp, 'main.py', pythonCmd);

@@ -146,9 +146,13 @@ if (!log.length) ok(`CHANGELOG has a [${version}] entry`);
 // --- 5. a tag exists for it, and points at HEAD ------------------------------------
 const tag = `v${version}`;
 let at = null;
+let atObject = null;
 let remoteAt = null;
 try {
   at = run('git', ['rev-list', '-n', '1', tag], { stdio: ['ignore', 'pipe', 'ignore'] });
+  // An annotated tag is TWO objects. `rev-list` gave the commit; this gives the tag object, and
+  // origin may legitimately answer with either one (E-112).
+  atObject = run('git', ['rev-parse', tag], { stdio: ['ignore', 'pipe', 'ignore'] });
 } catch {
   /* no such tag — tagChecks says so */
 }
@@ -158,21 +162,30 @@ try {
 // the operator to look for something that was already there.
 let remoteReachable = true;
 try {
-  const lsRemote = run('git', ['ls-remote', '--tags', 'origin', tag], {
+  // `${tag}*`, not `${tag}` — filtering on the exact name DROPS the peeled `^{}` line, because
+  // `v1.2.3^{}` does not match the pattern `v1.2.3`. That single character is why every annotated
+  // tag read as "not on origin" (E-112). The glob is belt; `tagChecks` accepting either sha is
+  // braces, and the braces are what makes this independent of git's peeling behaviour.
+  const lsRemote = run('git', ['ls-remote', '--tags', 'origin', `${tag}*`], {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
-  // An ANNOTATED tag answers with two lines: the tag object, then the commit it wraps as
-  // `<sha> refs/tags/<tag>^{}`. `at` came from `rev-list`, which is already the commit — so the
-  // dereferenced line is the one to compare, and it must be preferred, not merely accepted.
-  const match =
-    lsRemote.match(/^([a-f0-9]+)\s+refs\/tags\/.*\^\{\}$/m) ||
-    lsRemote.match(/^([a-f0-9]+)\s+refs\/tags\//m);
-  if (match) remoteAt = match[1];
+  // The glob can also match a NEIGHBOUR (v0.71.2 and v0.71.20), so anchor on the exact ref name.
+  const lines = lsRemote.split('\n').map((l) => l.trim());
+  const exact = (suffix) =>
+    lines
+      .find(
+        (l) =>
+          l.endsWith(`\trefs/tags/${tag}${suffix}`) ||
+          l.endsWith(` refs/tags/${tag}${suffix}`),
+      )
+      ?.split(/\s+/)[0] ?? null;
+  remoteAt = exact('^{}') ?? exact('');
 } catch {
   remoteReachable = false;
 }
 const tagged = tagChecks(tag, {
   at,
+  atObject,
   head: run('git', ['rev-parse', 'HEAD']),
   remoteAt,
   remoteReachable,

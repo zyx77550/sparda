@@ -108,12 +108,20 @@ export async function verifyPremise(
   // "an app with no routes". Treating that as a clean bill of health would be the
   // worst possible reading — a broken oracle would silently CONFIRM every proof. So
   // an empty probe is "unavailable", never "verified".
+  //
+  // The reason, however, must be the TRUE one. This used to read "the app did not boot, or
+  // exposes none" for every silence, including the case where the app was running perfectly and
+  // the shim had simply never hooked express — a wrong diagnosis that pointed the user at their
+  // own code (E-109). `probeRoutes` now attaches which of the four states actually happened.
   if (!Array.isArray(probed) || probed.length === 0)
     return {
       available: false,
       gaps: [],
       probed: 0,
-      reason: 'probe returned no routes — the app did not boot, or exposes none',
+      reason:
+        probed?.diagnostic?.reason ??
+        'probe returned no routes — the app did not boot, or exposes none',
+      ...(probed?.diagnostic ? { probeState: probed.diagnostic.state } : {}),
     };
 
   const { gaps } = reconcile(entrypointsAsRoutes(graph), probed);

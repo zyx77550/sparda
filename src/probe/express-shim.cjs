@@ -34,6 +34,12 @@ function installShim() {
   const net = require('net');
   const Module = require('module');
 
+  // Did we ever get our hands on the express module? The probe used to report "the app did not
+  // boot" for this, which is a WRONG diagnosis — sending the user to debug their app when the
+  // app was fine and the SHIM never hooked (E-109). Reported to the parent so the reason it
+  // prints is the true one.
+  let patched = false;
+
   const IPC_PORT = parseInt(process.env.SPARDA_IPC_PORT, 10) || 0;
 
   // ── Transport: fork IPC or TCP fallback ────────────────────────────────────
@@ -73,6 +79,7 @@ function installShim() {
   }
 
   function sendDone() {
+    flush(); // the staged routes must go out BEFORE the parent is told there are no more
     if (typeof process.send === 'function') {
       try {
         process.send({ type: '__done__' });
@@ -96,9 +103,63 @@ function installShim() {
     idleTimer = setTimeout(sendDone, IDLE_MS);
   }
 
-  function record(method, path) {
-    sendMsg({ type: 'route', method, path });
+  // ── Routes are STAGED, not emitted — the mount point is not known yet ──────
+  //
+  // E-110. `usersRouter.get('/:id')` runs at import time; `app.use('/api/users', usersRouter)`
+  // runs later. Emitting at registration therefore reported `GET /:id`, and reconcile compared
+  // that against the compiler's (correct) `/api/users/:id` and called it a route the app serves
+  // and the compiler never saw. On demo-app: two FALSE premise gaps out of three.
+  //
+  // False gaps are in the SAFE direction for a verdict — they only make SPARDA refuse to claim
+  // PROVEN — which is exactly why this could sit unnoticed. They are in the WRONG direction for
+  // anything that consumes gaps as findings: every real Express app uses routers, so the most
+  // load-bearing signal the runtime oracle produces was also its noisiest.
+  //
+  // So: buffer each route with the OBJECT it was registered on, record the mount edges, and
+  // resolve full paths once the app is fully wired (at `listen`, or on idle).
+  const staged = [];
+  const mounts = []; // { parent, child, path }
+  let flushed = false;
+
+  function stage(owner, method, path) {
+    staged.push({ owner, method, path });
     resetIdle();
+  }
+
+  const joinPaths = (prefix, path) => {
+    const a = String(prefix || '').replace(/\/+$/, '');
+    const b = String(path || '');
+    if (b === '/' || b === '') return a || '/';
+    return a + (b.startsWith('/') ? b : '/' + b) || '/';
+  };
+
+  // Every full path this owner is reachable at. A router CAN be mounted more than once, and then
+  // its routes genuinely exist at several paths — so this returns a list, never a single answer.
+  function prefixesOf(owner, depth = 0) {
+    if (depth > 12) return ['']; // pathological nesting or a cycle — stop, do not hang
+    const edges = mounts.filter((m) => m.child === owner);
+    if (edges.length === 0) return ['']; // a root (the app itself, or an unmounted router)
+    const out = [];
+    for (const e of edges) {
+      for (const up of prefixesOf(e.parent, depth + 1)) out.push(joinPaths(up, e.path));
+    }
+    return out.length ? out : [''];
+  }
+
+  function flush() {
+    if (flushed) return;
+    flushed = true;
+    const seen = new Set();
+    for (const r of staged) {
+      for (const prefix of prefixesOf(r.owner)) {
+        const full = joinPaths(prefix, r.path);
+        const key = `${r.method} ${full}`;
+        if (seen.has(key)) continue; // the same route reached twice is one route
+        seen.add(key);
+        sendMsg({ type: 'route', method: r.method, path: full });
+      }
+    }
+    staged.length = 0;
   }
 
   // ── HTTP method list ───────────────────────────────────────────────────────
@@ -131,10 +192,33 @@ function installShim() {
         // Only record route registrations (path + at least one handler/middleware).
         if (typeof path === 'string' && rest.length > 0) {
           const verb = m === 'del' ? 'DELETE' : m.toUpperCase();
-          record(verb, path);
+          stage(this, verb, path);
         }
         return orig.call(this, path, ...rest);
       };
+    }
+
+    // `use` is what makes a path mean something. Recorded, never altered: we only need to know
+    // WHICH object was mounted WHERE, so a route registered on it can be reported at the address
+    // the framework actually serves it from.
+    if (typeof target.use === 'function' && !target.__sparda_use_wrapped__) {
+      const origUse = target.use;
+      target.use = function spardaUse(...args) {
+        const mountPath = typeof args[0] === 'string' ? args[0] : '/';
+        for (const h of args) {
+          // A mounted router is a function carrying a middleware `stack` — that is what tells it
+          // apart from a plain handler like `express.json()`.
+          if (typeof h === 'function' && Array.isArray(h.stack))
+            mounts.push({ parent: this, child: h, path: mountPath });
+        }
+        return origUse.apply(this, args);
+      };
+      try {
+        Object.defineProperty(target, '__sparda_use_wrapped__', {
+          value: true,
+          configurable: true,
+        });
+      } catch {}
     }
     try {
       Object.defineProperty(target, '__sparda_wrapped__', {
@@ -217,7 +301,10 @@ function installShim() {
   const originalLoad = Module._load;
   Module._load = function spardaLoad(request) {
     const result = originalLoad.apply(this, arguments);
-    if (request === 'express') patchExpress(result);
+    if (request === 'express') {
+      patched = true;
+      patchExpress(result);
+    }
     return result;
   };
 
@@ -231,9 +318,42 @@ function installShim() {
     );
     for (const p of expressPaths) {
       const cached = require.cache[p];
-      if (cached && cached.exports) patchExpress(cached.exports);
+      if (cached && cached.exports) {
+        patched = true;
+        patchExpress(cached.exports);
+      }
     }
   } catch {}
+
+  // ── ESM entries: the hook above CANNOT fire, so pull express in ourselves ──
+  //
+  // E-109. `Module._load` interception is a CJS-loader mechanism. On Node 22 an ESM
+  // `import express from 'express'` does NOT go through `Module._load` — measured, and it
+  // contradicts the comment this shim's ESM wrapper used to carry. So for every Express app
+  // written in ESM (the modern default: `.mjs`, or `.js` under `"type": "module"`) the shim
+  // installed itself and then intercepted nothing, forever. The probe reported a timeout, the
+  // premise stayed `unmeasured`, and an ESM Express app could never reach PROVEN.
+  //
+  // The fix does not need a loader hook. express is CJS, and a CJS module loaded through the
+  // ESM bridge comes from the SAME `require.cache`: so if we require it FIRST, the app's later
+  // `import` receives the already-patched instance. Verified — the marker survives the import.
+  //
+  // Resolved from the ENTRY FILE, never from this shim's own directory: SPARDA carries express
+  // as a devDependency, and patching SPARDA's copy while the app imports its own would hook a
+  // module nobody uses — the same instance-identity trap, one level down.
+  if (!patched) {
+    try {
+      const path = require('path');
+      const from = process.argv[1] || path.join(process.cwd(), 'index.js');
+      const appRequire = Module.createRequire(path.resolve(from));
+      appRequire('express'); // goes through Module._load → sets `patched`, runs patchExpress
+    } catch {
+      // no express resolvable from the app — `patched` stays false and the parent is told so,
+      // which is a different statement from "the app did not boot"
+    }
+  }
+
+  sendMsg({ type: '__shim__', patched });
 
   // ── Safety nets ────────────────────────────────────────────────────────────
 
@@ -247,5 +367,5 @@ function installShim() {
     setTimeout(() => process.exit(0), 200);
   });
 
-  module.exports = { record, sendDone };
+  module.exports = { stage, flush, sendDone };
 }

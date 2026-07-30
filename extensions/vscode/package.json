@@ -2,7 +2,7 @@
   "name": "sparda",
   "displayName": "SPARDA — prove AI-written code",
   "description": "The trust layer for AI-written code. AI writes, SPARDA proves. Deterministic, offline behavior proofs + a live gate for AI edits, right in the editor.",
-  "version": "0.71.1",
+  "version": "0.71.3",
   "icon": "logo.png",
   "publisher": "zyx77550",
   "license": "BUSL-1.1",

@@ -52,11 +52,27 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
     return [];
   }
 
+  // Which shim FLAG is used turns out not to matter, and that is worth stating because the
+  // obvious "fix" for E-109 was to detect `"type": "module"` here and switch to `--import`. It
+  // changes nothing measurable: `--require` preloads the CJS shim fine ahead of an ESM entry, and
+  // the shim's own eager `require('express')` is what actually closes the hole. A second
+  // mechanism that no test can distinguish is dead weight — E-106, one week old, is what happens
+  // when such a line is kept.
   const isEsm = ext === '.mjs';
   const shimFlag = isEsm ? ['--import', SHIM_ESM] : ['--require', SHIM_CJS];
 
   const routes = [];
   let child;
+
+  // WHY the probe saw nothing is a different fact from THAT it saw nothing, and the old code
+  // could only say the second (E-109). It reported every silence as "the app did not boot",
+  // which sent users to debug a healthy app while the real cause was the shim never hooking.
+  // `shimPatched` stays null until the child says; the child's stderr is KEPT rather than
+  // dropped on the floor, because it is the only place an app's own crash is written down.
+  let shimPatched = null;
+  let timedOut = false;
+  let exitCode = null;
+  let stderrTail = '';
 
   return new Promise((resolve_) => {
     let settled = false;
@@ -69,10 +85,23 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
       try {
         child && child.kill('SIGKILL');
       } catch {}
+      // Non-enumerable so `probeRoutes` keeps returning exactly an array of routes: every
+      // existing caller and assertion is untouched, and the reason travels with it.
+      Object.defineProperty(result, 'diagnostic', {
+        value: diagnose({
+          count: result.length,
+          shimPatched,
+          timedOut,
+          exitCode,
+          stderrTail,
+        }),
+        enumerable: false,
+      });
       resolve_(result);
     }
 
     killTimer = setTimeout(() => {
+      timedOut = true;
       process.stderr.write(
         '[sparda] --probe: timeout waiting for Express routes; using static floor.\n',
       );
@@ -95,10 +124,19 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
       return;
     }
 
-    child.stderr?.on('data', () => {});
+    // KEPT, capped. The target's own boot error ("cannot connect to postgres") is written
+    // nowhere else, and discarding it is what made a shim that hooked nothing look identical
+    // to an app that refused to start.
+    child.stderr?.on('data', (chunk) => {
+      if (stderrTail.length < 4000) stderrTail += String(chunk);
+    });
 
     child.on('message', (msg) => {
       if (!msg || typeof msg !== 'object') return;
+      if (msg.type === '__shim__') {
+        shimPatched = msg.patched === true;
+        return;
+      }
       if (msg.type === '__done__') {
         settle(routes);
         return;
@@ -121,8 +159,67 @@ async function probeExpress({ entryFile, projectRoot, timeoutMs }) {
       settle(routes);
     });
 
-    child.on('exit', () => settle(routes));
+    // `exit` gives the code; `close` is the one that means the stdio streams have been fully
+    // drained. Settling on `exit` races the last chunk of the child's stderr — under load the
+    // diagnostic came out without the very error it exists to carry.
+    child.on('exit', (code) => {
+      exitCode = code;
+    });
+    child.on('close', () => settle(routes));
   });
+}
+
+/**
+ * Why did the probe see what it saw? Four distinguishable states, and the point of naming them
+ * is that three of them used to print as the fourth (E-109):
+ *
+ *   observed        routes came back — nothing to explain
+ *   not-instrumented the shim never got hold of express. NOT a boot failure: the app may be
+ *                   running perfectly. This is the ESM case, and the one that hid for a release.
+ *   no-routes       express WAS instrumented and the app registered none before we stopped.
+ *   did-not-start   the child never reported in at all, or exited non-zero — the app itself.
+ *
+ * `reason` is the sentence a user acts on, so it must never assert the app is broken when what
+ * actually happened is that SPARDA could not look.
+ */
+export function diagnose({ count, shimPatched, timedOut, exitCode, stderrTail }) {
+  const tail = String(stderrTail || '')
+    .trim()
+    .split('\n')
+    .slice(-3)
+    .join(' | ')
+    .slice(0, 300);
+  if (count > 0)
+    return { state: 'observed', reason: `${count} route(s) observed at runtime` };
+  // A non-zero exit wins over everything below: whatever we managed to instrument, the app
+  // itself died, and that is the fact its author needs. (Our own timeout SIGKILLs the child,
+  // which leaves exitCode null — so this cannot swallow the timeout cases.)
+  if (exitCode != null && exitCode !== 0)
+    return {
+      state: 'did-not-start',
+      reason: `the app exited ${exitCode} before serving anything`,
+      stderrTail: tail,
+    };
+  if (shimPatched === false)
+    return {
+      state: 'not-instrumented',
+      reason:
+        'the probe never got hold of the express module, so nothing could be observed — the app may well be running fine (this is not a boot failure)',
+      stderrTail: tail,
+    };
+  if (shimPatched === true)
+    return {
+      state: 'no-routes',
+      reason: timedOut
+        ? 'express was instrumented but no route was registered before the timeout — the app may boot slowly or block on a dependency'
+        : 'express was instrumented and the app registered no routes',
+      stderrTail: tail,
+    };
+  return {
+    state: 'did-not-start',
+    reason: `the probe child never reported in${exitCode != null ? ` (exit ${exitCode})` : ''} — the app did not start`,
+    stderrTail: tail,
+  };
 }
 
 // ── FastAPI probe ─────────────────────────────────────────────────────────────

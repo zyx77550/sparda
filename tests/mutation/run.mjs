@@ -852,7 +852,7 @@ export const MUTANTS = [
   {
     desc: 'release-checks: stop verifying the tag is pushed to origin (a local-only tag passes again)',
     file: 'scripts/release-checks.mjs',
-    find: '  if (remoteAt !== at)',
+    find: '  if (!localShas.has(remoteAt))',
     repl: '  if (false)',
     test: 'tests/release-gate.test.js',
   },
@@ -869,6 +869,42 @@ export const MUTANTS = [
     find: '  if (!remoteReachable)',
     repl: '  if (false)',
     test: 'tests/release-gate.test.js',
+  },
+  // ── E-109: the runtime oracle was inert on every ESM Express app ───────────────────
+  {
+    desc: 'shim: stop pre-loading express for ESM entries (Module._load never fires on an import → premise stays unmeasured forever)',
+    file: 'src/probe/express-shim.cjs',
+    find: "      appRequire('express'); // goes through Module._load → sets `patched`, runs patchExpress",
+    repl: '      void appRequire;',
+    test: 'tests/probe.test.js',
+  },
+  {
+    desc: 'probe: blame the app again when it was SPARDA that could not look (wrong diagnosis, rule 13)',
+    file: 'src/probe/probe.js',
+    find: "      state: 'not-instrumented',",
+    repl: "      state: 'did-not-start',",
+    test: 'tests/probe.test.js',
+  },
+  {
+    desc: "probe: throw the target's own stderr away again (a boot failure with no stated cause)",
+    file: 'src/probe/probe.js',
+    find: '      if (stderrTail.length < 4000) stderrTail += String(chunk);',
+    repl: '      void chunk;',
+    test: 'tests/probe.test.js',
+  },
+  {
+    desc: 'shim: emit a route at registration instead of after mounting (a mounted router reports its bare declared path → false premise gaps, E-110)',
+    file: 'src/probe/express-shim.cjs',
+    find: '          stage(this, verb, path);',
+    repl: "          sendMsg({ type: 'route', method: verb, path });",
+    test: 'tests/probe.test.js',
+  },
+  {
+    desc: 'shim: stop recording where a router was MOUNTED (every sub-route loses its prefix)',
+    file: 'src/probe/express-shim.cjs',
+    find: '            mounts.push({ parent: this, child: h, path: mountPath });',
+    repl: '            void h;',
+    test: 'tests/probe.test.js',
   },
   // ── E-106: the ADR-092 fix existed and no call site reached it ─────────────────────
   {

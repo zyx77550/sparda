@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { reviewGraphs, runReview } from '../src/commands/review.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SEMANTICS = path.join(here, 'fixtures', 'ubg-semantics');
@@ -98,7 +99,7 @@ describe('runReview (git integration)', () => {
   function gitRepoFromFixture() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-review-it-'));
     tmps.push(dir);
-    fs.cpSync(SEMANTICS, dir, { recursive: true });
+    copyFixture(SEMANTICS, dir);
     const git = (...args) =>
       execFileSync('git', ['-C', dir, ...args], {
         stdio: 'pipe',

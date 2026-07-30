@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..');
@@ -72,7 +73,7 @@ describe('PR bot end-to-end (review → body → sticky comment over a mock GitH
   function riskyPr() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-bot-e2e-'));
     tmps.push(dir);
-    fs.cpSync(SEMANTICS, dir, { recursive: true });
+    copyFixture(SEMANTICS, dir);
     const git = (...a) =>
       spawnSync('git', ['-C', dir, ...a], {
         env: {

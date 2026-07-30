@@ -20,12 +20,14 @@ import { detectStack } from '../src/detect.js';
 import { parseNextProject } from '../src/parser/nextjs.js';
 import { generateNext } from '../src/generator/nextjs.js';
 import { runRemove } from '../src/commands/remove.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'nextjs-basic');
 
-function copyFixture() {
+// a fresh throwaway copy of the Next fixture, residue excluded (see helpers/copy-fixture.js)
+function freshFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-nextjs-'));
-  fs.cpSync(FIXTURE, dir, { recursive: true });
+  copyFixture(FIXTURE, dir);
   return dir;
 }
 
@@ -109,7 +111,7 @@ describe('parser — nextjs', () => {
 
 describe('generator — nextjs (file-based injection)', () => {
   it('writes the catch-all handler, the manifest, and touches nothing else', () => {
-    const dir = copyFixture();
+    const dir = freshFixture();
     const before = fileMap(dir);
     const { routes } = parseNextProject(dir, 'app');
     const result = generateNext({ cwd: dir, appDir: 'app', port: 3456, routes });
@@ -144,7 +146,7 @@ describe('generator — nextjs (file-based injection)', () => {
   });
 
   it('re-init carries over enabled overrides and the localKey', () => {
-    const dir = copyFixture();
+    const dir = freshFixture();
     const { routes } = parseNextProject(dir, 'app');
     const first = generateNext({ cwd: dir, appDir: 'app', port: 3456, routes });
     const m1 = JSON.parse(fs.readFileSync(path.join(dir, 'sparda.json'), 'utf8'));
@@ -164,7 +166,7 @@ describe('generator — nextjs (file-based injection)', () => {
 
 describe('generated handler — runs standalone (web-standard, no Next needed)', () => {
   async function initAndImport() {
-    const dir = copyFixture();
+    const dir = freshFixture();
     const { routes } = parseNextProject(dir, 'app');
     generateNext({ cwd: dir, appDir: 'app', port: 65531, routes }); // dead port: no host
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'sparda.json'), 'utf8'));
@@ -255,7 +257,7 @@ describe('generated handler — runs standalone (web-standard, no Next needed)',
   });
 
   it('two-phase commit: an enabled write is gated 202, confirm token is single-use', async () => {
-    const dir = copyFixture();
+    const dir = freshFixture();
     const { routes } = parseNextProject(dir, 'app');
     generateNext({ cwd: dir, appDir: 'app', port: 65532, routes });
     // opt the write in, regenerate so the handler embeds enabled:true
@@ -309,7 +311,7 @@ describe('generated handler — runs standalone (web-standard, no Next needed)',
 
 describe('remove — nextjs', () => {
   it('init → remove leaves a byte-identical tree (dirs pruned too)', async () => {
-    const dir = copyFixture();
+    const dir = freshFixture();
     const before = fileMap(dir);
     const { routes } = parseNextProject(dir, 'app');
     generateNext({ cwd: dir, appDir: 'app', port: 3456, routes });

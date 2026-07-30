@@ -119,6 +119,16 @@ And `CHANGELOG.md` needs a `## [<version>]` heading with real content — what c
 USER, not a list of commits. A release nobody wrote down is a release nobody can audit later
 (E-096, v0.69.0).
 
+**Write the entry for the version you are ABOUT to cut, never for the one you last cut.** The
+moment a tag is pushed, its entry is FROZEN: a later fix opens a NEW heading, even for one line.
+E-111 is this rule being broken — two fixes were appended to `## [0.71.1]` hours after `v0.71.1`
+had shipped, so the changelog promised a working ESM probe to everyone running a version that did
+not have it. **Re-check `npm view sparda-mcp version` at the moment you write the entry, not at
+the start of the session.** A precondition verified once is a memory, not a precondition.
+
+The gate cannot help you here: it checks that a heading for this version EXISTS, and no check can
+verify that a paragraph is true.
+
 **Commit the bump and the CHANGELOG. Push to `main`. The tag comes after — never before.**
 
 ---
@@ -283,6 +293,7 @@ Non-negotiable, and it is what makes the next session cheap:
 [ ] 13  verify: npm view sparda-mcp version   → the new one
 [ ] 14  copy server.json → _public_sync, cd there, mcp-publisher login + publish
 [ ] 15  rewrite HANDOFF.md, add docs/sessions/<today>.md, mirror to Obsidian
+[ ] 16  sync public repo: cd sparda-hq, git archive v<version> | tar -x -C ../sparda, then commit, tag, push
 ```
 
 ---

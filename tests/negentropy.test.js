@@ -13,6 +13,7 @@ import {
 import { parseNextProject } from '../src/parser/nextjs.js';
 import { generateNext } from '../src/generator/nextjs.js';
 import { runDoctor } from '../src/commands/doctor.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'nextjs-basic');
 
@@ -237,7 +238,7 @@ describe('renderNegentropy', () => {
 describe('doctor --app — integration on the nextjs fixture', () => {
   it('smells injected rot: an unsynced route and a stale tool', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-neg-int-'));
-    fs.cpSync(FIXTURE, dir, { recursive: true });
+    copyFixture(FIXTURE, dir);
     const { routes } = parseNextProject(dir, 'app');
     generateNext({ cwd: dir, appDir: 'app', port: 3456, routes });
 

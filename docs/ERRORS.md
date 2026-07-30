@@ -2256,3 +2256,163 @@ by the oracle, and conflating the two is what produced this entry.
   intent to durable storage before the risky action and heal from it on the next start. And when
   a tool can leave the repository in a wrong state, detecting that state belongs in the fast
   suite, not in the tool's own slow mode.
+## E-109 — the runtime oracle was inert on every ESM Express app
+
+- **Symptom:** `sparda prove --probe` on SPARDA's OWN bundled `demo-app` — 5 routes, Express,
+  serving traffic on `:3456` (verified with curl) — printed
+  `--probe: timeout waiting for Express routes; using static floor`, left
+  `premise.basis = unmeasured`, and reported the reason as *"the app did not boot, or exposes
+  none"*. The app had booted perfectly.
+- **Root cause, measured not reasoned.** The shim intercepts `require('express')` by patching
+  `Module._load`. On Node 22 an ESM `import express from 'express'` **never goes through
+  `Module._load`**. Minimal experiment: with a `Module._load` hook installed via `--import`, an
+  ESM import of express prints nothing; the same hook via `--require` with `require('express')`
+  fires immediately. So the shim installed itself and then intercepted nothing, forever.
+- **The confident comment was the bug.** `express-shim-esm.mjs` asserted the opposite in its own
+  header: *"most Express apps — even those using ES module syntax — still resolve 'express'
+  through the CJS loader … So patching Module._load … correctly intercepts all express requires
+  regardless of whether the entry is .mjs or .js with type:module."* False on Node 22 (it may
+  have held on an older Node — the ESM→CJS translation path changed; not verified). Exactly what
+  `BRIEF-FOR-A-BREAKER.md` says to expect: *the bug lives where the confident comment is.*
+- **Why it survived.** The only live-probe test (`tests/probe.test.js`) wrote its fixture with
+  `const express = require('express')`. **The ESM path had never been exercised once.** One
+  fixture, one module system, a whole capability untested.
+- **What it cost, in the product's own terms.** ESM is the modern default for Express, and
+  Express is not convention-routed — the runtime probe is its ONLY oracle. So since ADR-091, **an
+  ESM Express app could never reach `PROVEN`**, and the user was told to go debug their own app.
+- **Aggravating:** `probe.js` did `child.stderr?.on('data', () => {})`. The target's own boot
+  error is written nowhere else, so there was no way to find out why the probe saw nothing. That
+  turned a 2-minute diagnosis into 20.
+- **Fix:** ADR-097. express is CJS, so a CJS module reached through the ESM bridge comes from the
+  SAME `require.cache`: the shim now requires express ITSELF, resolved from the entry file's root,
+  before the app runs — the app's later `import` receives the already-patched instance (verified:
+  a marker set before the import is visible after it). Plus four named probe states, so
+  "SPARDA could not look" stops printing as "your app is broken".
+- **Found by:** the first smoke test of the lab that was being built ON this oracle. The lab
+  would have reported 20 × `did-not-boot` and someone would have concluded "real apps don't
+  boot". **The cheapest target found the defect the expensive run would have hidden.**
+- **Rule:** **a capability tested through one module system is tested for one module system.**
+  Where a mechanism depends on the loader (CJS vs ESM, `.js` vs `.mjs` vs `"type": "module"`),
+  the fixture matrix IS the test — one spelling proves nothing about the others.
+
+## E-110 — the probe reported a mounted router at the path it was DECLARED with
+
+- **Symptom:** on `demo-app`, `sparda prove --probe` reported **3 premise gaps**, of which two
+  were false: `GET /:id` and `POST /` for a router mounted at `/api/users`. The compiler had them
+  right — `/api/users/:id` and `/api/users`. Only `GET /v2/meta`, the deliberately dynamic path
+  the static parser refuses to guess, was a real gap.
+- **Cause:** the shim emitted a route the moment it was registered. `usersRouter.get('/:id')` runs
+  at import time; `app.use('/api/users', usersRouter)` runs later. **At registration the mount
+  point does not exist yet**, so no amount of care at that moment could have produced the right
+  path. Then `reconcile` diffed the bare path against the compiler's full path and, finding no
+  match, reported a route the app serves that the compiler never saw.
+- **Why it went unnoticed for so long.** A false gap is in the SAFE direction for a verdict — it
+  can only make SPARDA refuse to claim `PROVEN`, never grant it. Nothing in the product got worse
+  in a way a test would catch. It is only wrong for a consumer that reads gaps as FINDINGS, and
+  the first such consumer was about to be an overnight lab whose highest-priority rule is exactly
+  "a measured premise gap". Every real Express app mounts routers, so its best signal would also
+  have been its noisiest.
+- **Fix:** ADR-098. Routes are STAGED with the object they were registered on; `use` records mount
+  edges (`{parent, child, path}`); full paths are resolved once the app is wired, at `listen` or on
+  idle. A router mounted twice yields both paths — that is not a duplicate, the framework really
+  serves it at both. Measured: demo-app 3 gaps → **1**, and the one left is the true one.
+- **Two bugs of my own, in the same change, both caught by running it:**
+  1. renaming `record` → `stage` left `module.exports = { record, sendDone }` referencing a name
+     that no longer existed, so the shim threw at load and the probe silently observed zero
+     routes. The E-109 stderr fix is what surfaced it.
+  2. settling on the child's `exit` races the delivery of its last stderr chunk — the test passed
+     alone and failed in the full parallel suite. Settling on `close` (stdio drained) is
+     deterministic; verified by three consecutive full runs.
+- **Rule:** **a fact that is not known yet cannot be recorded correctly, only recorded early.**
+  When an observation depends on state established later, buffer it and resolve at the point the
+  state is complete. And a false positive in the safe direction is still a defect — it is simply
+  one whose bill is paid by a consumer you have not written yet.
+
+
+## E-111 — the CHANGELOG described fixes that were not in the version it named
+
+- **Symptom:** `## [0.71.1]` listed the two probe fixes (E-109, E-110). `v0.71.1` had already been
+  tagged at `29d8169` and published to npm; both fixes landed at `ab0fea0` and `5d53221`, AFTER
+  the tag. So anyone reading the changelog for the version they had installed was promised a
+  runtime oracle that works on ESM Express — which that version does not have.
+- **Cause, mine.** I checked "is this version published?" at the start of the work (npm answered
+  404, so 0.71.1 was the open entry) and appended to it hours later without re-checking. It was
+  published in between. **A precondition verified once is not a precondition; it is a memory.**
+- **Shape:** exactly v0.69.0's (E-096) — the published artefact and the written record diverge —
+  reached from the opposite direction. There the record was missing; here it over-promised. Both
+  leave a reader unable to know what they are running.
+- **Fix:** the three bullets moved to a `## [0.71.2]` entry, with a note in the entry saying they
+  were briefly listed under 0.71.1 and are not in it. Manifests bumped to 0.71.2. The correction
+  is stated rather than quietly rewritten, because a changelog that edits its own history is worth
+  less than one that admits a mistake.
+- **What the gate cannot catch, and why.** `changelogChecks` verifies a `## [<version>]` heading
+  EXISTS for the version being released. It cannot verify the heading is TRUE — that every bullet
+  under it is in those bytes. That is not a gap to close with a check: prose has no oracle. What
+  is enforceable, and is the rule below.
+- **Rule:** **write the CHANGELOG entry for the version you are about to cut, never for the one
+  you last cut.** The moment a tag is pushed, its entry is FROZEN — a later fix opens a new
+  heading, even for a one-line change. And re-read `npm view <pkg> version` at the moment you
+  write, not at the start of the session.
+
+## E-112 — the gate refused every ANNOTATED tag as "not on origin"
+
+- **Symptom:** `v0.71.2` was created with `git tag -a`, pushed, and visible on origin. The gate
+  answered `local v0.71.2 is not on origin — push it`. Every annotated tag would have failed the
+  same way, forever.
+- **Cause, and it is one character.** An annotated tag is TWO objects: the tag object, and the
+  commit it wraps. `git rev-list -n1 <tag>` gives the commit; `git rev-parse <tag>` gives the tag
+  object. What `ls-remote` answers with depends on how you ask:
+
+      git ls-remote --tags origin v0.71.2   → 10bc36e refs/tags/v0.71.2        ← tag object ONLY
+      git ls-remote --tags origin           → 10bc36e refs/tags/v0.71.2
+                                              90627b7 refs/tags/v0.71.2^{}     ← the commit
+
+  **Filtering by the exact ref name DROPS the peeled line**, because `v0.71.2^{}` does not match
+  the pattern `v0.71.2`. The gate asked the first way, got the tag object, and compared it to the
+  commit. `v0.71.1` had passed only because it happened to be a LIGHTWEIGHT tag, where the two
+  shas are identical — the check had never once been exercised on the shape the playbook tells
+  people to use (`git tag -a`).
+- **Diagnosis credit, and a correction.** The agent that hit it reported the conclusion correctly
+  ("the comparison always fails for annotated tags") but the mechanism wrongly ("ls-remote does
+  not return the `^{}` line") — and its own pasted evidence showed both lines, because it had run
+  the command WITHOUT the pattern. Right answer, wrong reason: the difference is the filter.
+- **Both proposed fixes were refused.** Adding `*` to the query treats the symptom. Re-creating
+  the tag as lightweight changes the ARTEFACT to fit a broken CHECK — backwards, and the playbook
+  says so in those words: if a check is wrong, fix the check. Annotated tags carry author, date
+  and message; they are the right thing to publish.
+- **Fix:** ADR-099. `tagChecks` takes `atObject` as well as `at` and accepts the remote sha if it
+  equals EITHER. That depends on no peeling behaviour at all, works for annotated and lightweight,
+  filtered or unfiltered, on any platform. The glob is kept as belt, with the ref name anchored so
+  `v0.71.2*` cannot match `v0.71.20`.
+- **Rule:** **a check on a git object must name WHICH object.** "The tag" is ambiguous for an
+  annotated tag, and a comparison between two different kinds of sha is not a comparison. When a
+  check has only ever run against one shape of its input, it has been tested for that shape only
+  (the same lesson as E-109, one domain over).
+
+## E-113 — two correct tests, one shared fixture, an intermittent ENOENT
+
+- **Symptom:** `tests/gossip.test.js` failed the release gate with `ENOENT` from `fs.cpSync` on
+  `express-demo/.sparda/backup/...`. It passed on re-run. It appeared on Windows during a
+  release, never in CI.
+- **Cause, deterministic once seen.** `tests/sparda.test.js` runs its injection round-trip IN the
+  shared fixture directory — deliberately, because it proves `remove` restores the entry file
+  byte-for-byte in a real tree — so `tests/fixtures/express-demo/.sparda/backup/` exists for the
+  length of that test and is then deleted. Its cleanup is correct. But `gossip.test.js` is a
+  DIFFERENT file, so vitest runs it in a different worker, in parallel, and it copies that same
+  fixture recursively. `cpSync` enumerates the tree and then reads each entry; a file that
+  vanishes between those two moments is an `ENOENT`. Machine speed decides who wins.
+- **Neither test is wrong.** That is what makes it worth an entry: there is no culprit to blame,
+  only a coupling to remove.
+- **Fix:** `tests/helpers/copy-fixture.js`. `.sparda/`, `node_modules/` and `.git/` are GENERATED
+  residue, never fixture input, so nothing that copies a fixture copies them — a `cpSync` filter
+  that returns false for a directory never enumerates its subtree at all, which is what makes it
+  immune to whatever another worker is doing in there. Applied to all ten copy sites across nine
+  files, so the CLASS is closed rather than the instance.
+- **Two self-inflicted follow-ons, both caught immediately:** `tests/nextjs.test.js` already had a
+  LOCAL zero-arg `copyFixture()`, so the mechanical rewrite made it call itself (renamed to
+  `freshFixture`); and moving a line in `release-checks.mjs` moved a mutant's target, which
+  `no-mutant-left-behind` reported in the fast suite instead of ten minutes into the mutation run.
+  **The guard from E-108 paid for itself here.**
+- **Rule:** **a flaky test is a coupling, not a probability.** Re-running until green hides which
+  two things share state. Ask what the test READS that something else WRITES — and fix it on the
+  reader, because that holds no matter who writes next.

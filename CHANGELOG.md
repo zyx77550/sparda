@@ -9,6 +9,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.71.3]
+
+### Fixed
+
+- **The release gate refused every ANNOTATED tag as "not on origin"** (ADR-099, E-112).
+  `git ls-remote --tags origin <tag>` returns only the TAG OBJECT — filtering by the exact ref name
+  drops the peeled `<sha> refs/tags/<tag>^{}` line — and the gate compared that to the COMMIT. So a
+  correctly created, correctly pushed `git tag -a` was reported missing. `v0.71.1` passed only
+  because it happened to be lightweight, where the two shas coincide: the check had never once run
+  on the tag shape the playbook tells people to use. It now accepts either sha, which depends on no
+  peeling behaviour at all.
+- **An intermittent `ENOENT` in the test suite, from two correct tests sharing one fixture**
+  (E-113). `tests/sparda.test.js` runs its injection round-trip inside
+  `tests/fixtures/express-demo` on purpose — it proves `remove` restores the entry byte-for-byte in
+  a real tree — while `tests/gossip.test.js`, in another vitest worker, copies that same fixture.
+  A `.sparda/backup/` file that appears and vanishes mid-copy is an `ENOENT`. Fixture copies now go
+  through one helper that never enumerates `.sparda/`, `node_modules/` or `.git/`, closing the
+  class across all ten copy sites rather than the one that happened to fail.
+
+> `v0.71.2` was tagged at `90627b7` and never published: the gate stopped it on the two defects
+> above, which is the gate doing its job. That tag is left in place rather than re-pointed — a tag
+> names bytes, and renaming which bytes it means is the failure this gate exists to prevent.
+
+## [0.71.2]
+
+### Fixed
+
+- **The runtime oracle was inert on every ESM Express app** (ADR-097, E-109). The probe hooks
+  `require('express')` through `Module._load`, and on Node 22 an ESM `import express from
+  'express'` never goes through it — so for Express apps written in ESM (the modern default) the
+  probe instrumented nothing, timed out, and reported *"the app did not boot"* about an app that
+  was serving traffic. Express has no convention oracle, so since 0.71.0 those apps could never
+  reach `PROVEN`. Found on SPARDA's own bundled `demo-app`. The shim now pre-loads express itself,
+  resolved from the entry file's root, so the app's `import` receives the already-patched
+  instance. `sparda prove --probe` on an ESM Express app now measures its premise.
+- **A mounted router is reported at the path it is SERVED from** (ADR-098, E-110). The probe
+  emitted each route when it was registered, and a router's mount point (`app.use('/api/users',
+  router)`) is established later — so `router.get('/:id')` was reported as `GET /:id` and diffed
+  against the compiler's correct `/api/users/:id`, producing premise gaps that did not exist. Two
+  of the three gaps on the bundled demo app were artifacts of this. Routes are now staged and
+  their full paths resolved once the app is wired; nested mounts compose, and a router mounted
+  twice correctly yields both paths.
+- **`--probe` says WHY it saw nothing.** Four states instead of one sentence: routes observed /
+  the probe could not instrument express / express was instrumented and no route appeared / the
+  app never started. And the target's own stderr is kept instead of discarded, so a boot failure
+  finally states its cause. Telling a user their healthy app "did not boot" is a wrong diagnosis,
+  not a missing detail.
+
+
+> These three shipped AFTER `v0.71.1` was tagged and published, so they are NOT in
+> `sparda-mcp@0.71.1` despite having briefly been listed under it — the exact artefact/record
+> divergence v0.69.0 died of (E-096). Corrected here rather than silently.
+
 ## [0.71.1]
 
 ### Fixed

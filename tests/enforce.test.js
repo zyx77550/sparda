@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 import {
   checkGraph,
   verdictOf,
@@ -36,7 +37,7 @@ let dir;
 beforeEach(() => {
   // enforce WRITES — every test runs on a throwaway copy, never the fixture itself
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparda-enforce-'));
-  fs.cpSync(FIXTURE, dir, { recursive: true });
+  copyFixture(FIXTURE, dir);
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 

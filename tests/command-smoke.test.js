@@ -210,13 +210,14 @@ describe('runImmunize (wrapper)', () => {
 });
 
 import { runGenome } from '../src/commands/genome.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 describe('runGenome (wrapper)', () => {
   // genome writes into the app dir (key + genome file + .gitignore), so run on a
   // throwaway COPY of the clean app — never the fixture itself.
   const tmpApps = [];
   const copyApp = () => {
     const dir = path.join(os.tmpdir(), `sparda-genome-${process.pid}-${Date.now()}`);
-    fs.cpSync(CLEAN_APP, dir, { recursive: true });
+    copyFixture(CLEAN_APP, dir);
     tmpApps.push(dir);
     return dir;
   };

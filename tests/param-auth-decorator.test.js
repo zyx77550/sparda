@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { compileUBG } from '../src/ubg/compile.js';
 import { canonicalizeGraph } from '../src/ubg/schema.js';
 import { checkGraph, verdictOf, diffGraphs } from '../src/ubg/apocalypse.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, 'fixtures', 'ubg-param-auth-decorator');
@@ -98,7 +99,7 @@ describe('principal-injection param decorators as asserted guards', () => {
     const fixGraph = canonicalizeGraph(compileUBG(FIX, { write: false }).graph);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'param-auth-vuln-'));
     try {
-      fs.cpSync(FIX, tmp, { recursive: true });
+      copyFixture(FIX, tmp);
       const rf = path.join(tmp, 'src', 'user.resolver.ts');
       const vulnSrc = fs
         .readFileSync(rf, 'utf8')

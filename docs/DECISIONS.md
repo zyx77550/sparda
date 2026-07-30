@@ -3578,3 +3578,109 @@ closes over the journal path.
 intent on durable storage before taking the risky action, and heal from that record on the next
 start. And when a tool can put the repository into a wrong state, the ordinary suite — not the
 tool's own slow mode — is where that state must be detected.
+
+## ADR-097 — Pre-load the module you need to patch; do not hope to intercept it
+
+**Status:** accepted · E-109
+
+**Context.** The runtime probe is the only oracle SPARDA has that is genuinely independent of its
+own parser: it boots the app and asks the framework what it really serves. For Express it worked
+by patching `Module._load` and waiting for `require('express')`. On Node 22 an ESM
+`import express from 'express'` never goes through `Module._load` — so for every Express app
+written in ESM, which is the modern default, the shim hooked nothing and the probe timed out.
+Since Express has no convention oracle, those apps could never reach `PROVEN`.
+
+**Decision — one mechanism, not two.**
+
+The shim REQUIRES express itself, resolved from the entry file's root, before the app runs.
+express is CommonJS, and a CJS module reached through the ESM bridge is the same object as one
+reached by `require` — same `require.cache` entry. So pre-loading it and patching it there means
+the app's later `import` receives the already-patched instance. No loader hook, no
+`module.register`, no second code path.
+
+Two details are load-bearing:
+
+- **Resolved from the ENTRY FILE, never from the shim's own directory.** SPARDA carries express as
+  a devDependency; patching SPARDA's copy while the app imports its own would instrument a module
+  nobody uses — the same instance-identity trap one level down.
+- **The obvious fix was rejected for being untestable.** Detecting `"type": "module"` and
+  switching to `--import` looks more correct, and changes nothing measurable: `--require`
+  preloads a CJS shim ahead of an ESM entry perfectly well. Its mutant SURVIVED, which is the
+  suite saying the line is not load-bearing — so the line is gone. A second mechanism no test can
+  distinguish is dead weight, and E-106 (one week old) is what keeping such a line costs.
+
+**Also decided: the probe says WHY it saw nothing.** Four named states — `observed`,
+`not-instrumented`, `no-routes`, `did-not-start` — where three used to print as the fourth. And
+the child's stderr is KEPT (capped) rather than discarded, because a target's boot failure is
+written nowhere else. Reporting "the app did not boot" over a healthy app is not a missing
+detail, it is a wrong diagnosis: it sends the user to debug their own code while the real cause
+is that SPARDA could not look. Rule 13, applied to a diagnostic rather than a verdict.
+
+**Rule.** **If you must patch a module, load it yourself.** Interception depends on which loader
+the consumer happens to use, and that is not a property you control or can see. Pre-loading is
+one line, has no loader-dependent behaviour, and fails loudly instead of silently.
+
+## ADR-098 — Observe at registration, resolve at wiring
+
+**Status:** accepted · E-110
+
+**Context.** The Express probe emitted a route the instant it was registered. For a route declared
+on a router, the mount point is established LATER (`app.use('/api/users', router)`), so the emitted
+path was the declared one — `/:id` rather than `/api/users/:id`. `reconcile` then diffed that
+against the compiler's correct full path and reported a premise gap that did not exist.
+
+**Decision.** Registration-time observation is kept — it is what catches routes whose path is a
+variable, built in a loop, or added after `listen`, which is the entire reason the runtime oracle
+exists. What changes is WHEN the path is decided:
+
+- each route is STAGED with the object it was registered on;
+- `use` is wrapped to record mount edges `{parent, child, path}` — a mounted router is recognised
+  by being a function carrying a middleware `stack`, which is what separates it from a plain
+  handler like `express.json()`;
+- full paths are resolved once, when the app is wired (at `listen`, or after the idle window),
+  by walking each owner up to a root.
+
+A router mounted at two places yields two full paths. That is correct, not a duplicate: the
+framework really serves it at both. Recursion is depth-capped so a cycle cannot hang the probe.
+
+**Why a false gap was worth a session.** It is in the SAFE direction for a verdict — it can only
+withhold `PROVEN`, never grant it — so nothing the suite watches got worse. That is precisely how
+it survived. But `premise.gaps` is not only a verdict input: it is the highest-value signal the
+runtime oracle produces, and the first consumer to read gaps as findings would have drowned in
+mount artifacts. **A false positive in the safe direction is still a defect; its bill is just paid
+by a consumer you have not written yet.**
+
+**Rule.** **A fact not yet established cannot be recorded correctly, only recorded early.** When an
+observation depends on state that arrives later, buffer the observation and resolve it at the point
+the state is complete.
+
+## ADR-099 — Name which git object you are comparing
+
+**Status:** accepted · E-112 · amends ADR-094/095
+
+**Context.** The gate verified a tag was pushed by comparing `git ls-remote --tags origin <tag>`
+against `git rev-list -n1 <tag>`. An annotated tag is two objects — the tag object and the commit
+it wraps — and `ls-remote`, when given the exact ref name as a pattern, returns only the tag
+object: the peeled `<sha> refs/tags/<tag>^{}` line does not match the pattern. So the gate compared
+a tag-object sha to a commit sha and refused every annotated tag while it sat on origin. `v0.71.1`
+passed only because it was created lightweight, where the two shas coincide.
+
+**Decision.** `tagChecks` receives BOTH shas the local tag legitimately is — `at` (the commit) and
+`atObject` (the tag object) — and accepts the remote sha if it matches either. This depends on no
+peeling behaviour, no output format, and no platform. `atObject` defaults to `at`, which is exactly
+correct for a lightweight tag.
+
+The query also uses `${tag}*` so the peeled line is present when git offers it, with the ref name
+anchored on read so the glob cannot match a neighbour (`v0.71.2` vs `v0.71.20`). That is belt;
+accepting either sha is braces, and only the braces are load-bearing.
+
+**Two fixes refused, and why.** Re-creating the tag as lightweight would change the ARTEFACT to
+suit a broken CHECK — the exact inversion `MASTER-PLAN-RELEASE.md` forbids ("if a check is wrong,
+fix the check"), and annotated tags are what should be published: they carry author, date and
+message. Adding `*` alone would have worked by accident while leaving the comparison depending on
+git's peeling.
+
+**Rule.** **A check on a git object must name which object.** "The tag" is ambiguous the moment a
+tag is annotated, and comparing two different kinds of sha is not a comparison. More generally: a
+check that has only ever run against one shape of its input has been tested for that shape only —
+the same lesson as E-109 (one module system), in a different domain.

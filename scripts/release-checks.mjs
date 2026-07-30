@@ -89,7 +89,23 @@ export const headingFor = (version) => new RegExp(`^## \\[${escapeRe(version)}\\
 // direction, but the wrong sentence, and the operator would go looking for a tag that is
 // already there. Both still BLOCK, because a release gate that cannot verify must not certify
 // (the same call `fetched:false` makes above); only the stated reason differs.
-export function tagChecks(tag, { at, head, remoteAt, remoteReachable = true }) {
+// `atObject` vs `at`, and why BOTH are needed (E-112). An ANNOTATED tag is two objects: the tag
+// object, and the commit it wraps. `git rev-list -n1 <tag>` gives the commit; `git rev-parse <tag>`
+// gives the tag object. What `ls-remote` answers with depends on how you asked:
+//
+//   git ls-remote --tags origin v0.71.2     → the TAG OBJECT only. The peeled `^{}` line is
+//                                             filtered out, because `v0.71.2^{}` does not match
+//                                             the pattern `v0.71.2`.
+//   git ls-remote --tags origin             → both lines, tag object AND peeled commit.
+//
+// The gate asked the first way and compared the answer to the COMMIT, so **every annotated tag
+// failed as "not on origin"** while sitting on origin. v0.71.1 passed only because it happened to
+// be created as a lightweight tag, where the two shas are the same.
+//
+// The fix does not depend on git's peeling behaviour at all: accept the remote sha if it is
+// EITHER of the two things the local tag legitimately is. `atObject` falls back to `at`, which is
+// exactly right for a lightweight tag.
+export function tagChecks(tag, { at, atObject, head, remoteAt, remoteReachable = true }) {
   if (!at) return [fail(`${tag} exists`, `create it: git tag -a ${tag} -m "${tag}"`)];
   if (at !== head)
     return [fail(`${tag} points at HEAD`, `${tag} → ${short(at)}, HEAD ${short(head)}`)];
@@ -100,11 +116,14 @@ export function tagChecks(tag, { at, head, remoteAt, remoteReachable = true }) {
         'UNVERIFIED — could not reach origin to ask. Not a pass, and not proof the tag is missing',
       ),
     ];
-  if (remoteAt !== at)
+  const localShas = new Set([at, atObject ?? at]);
+  if (!localShas.has(remoteAt))
     return [
       fail(
         `${tag} is pushed to origin`,
-        `local ${tag} is not on origin — push it: git push origin ${tag}`,
+        `origin has ${short(remoteAt) || '(nothing)'} for ${tag}; local is ${short(at)}${
+          atObject && atObject !== at ? ` (tag object ${short(atObject)})` : ''
+        } — push it: git push origin ${tag}`,
       ),
     ];
   return [];

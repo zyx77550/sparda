@@ -31,6 +31,7 @@ import {
   runComposite,
 } from '../src/server/crystallize.js';
 import { c, gradient, colorizeJson } from '../src/ui/style.js';
+import { copyFixture } from './helpers/copy-fixture.js';
 import { stripVTControlCharacters } from 'node:util';
 import { parse } from '@babel/parser';
 
@@ -584,7 +585,7 @@ describe('SPARDA Test Suite', () => {
     it('should stay idempotent and restore byte-for-byte on a CRLF entry file', () => {
       const tmp = path.join(__dirname, '.tmp', 'fastapi-crlf');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp);
       const entryAbs = path.join(tmp, 'main.py');
       fs.writeFileSync(
         entryAbs,
@@ -728,7 +729,7 @@ app.include_router(users.router)
     it('serves tools, enforces write-safety, quarantines after 3 consecutive 5xx and releases half-open', async () => {
       const tmp = path.join(__dirname, '.tmp', 'fastapi-runtime');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp);
 
       // add a route that always fails, to exercise the immune system
       fs.appendFileSync(
@@ -904,7 +905,7 @@ def boom():
     it('implements require_human policy and two-phase commit via /invoke/confirm', async () => {
       const tmp = path.join(__dirname, '.tmp', 'fastapi-confirm');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'fastapi-basic'), tmp);
 
       const port = await new Promise((resolve) => {
         const srv = net.createServer();
@@ -1040,7 +1041,7 @@ def boom():
     it('serves tools/stats/events and records invoke telemetry', async () => {
       const tmp = path.join(__dirname, '.tmp', 'router-runtime');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
       const port = await new Promise((resolve) => {
         const srv = net.createServer();
@@ -1167,7 +1168,7 @@ def boom():
     it('quarantines after 3 consecutive 5xx, releases half-open after cooldown, and flags latency anomalies', async () => {
       const tmp = path.join(__dirname, '.tmp', 'router-immune');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
       const port = await new Promise((resolve) => {
         const srv = net.createServer();
@@ -1291,7 +1292,7 @@ def boom():
     it('implements require_human policy and two-phase commit via /invoke/confirm', async () => {
       const tmp = path.join(__dirname, '.tmp', 'router-confirm');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
       const port = await new Promise((resolve) => {
         const srv = net.createServer();
@@ -1401,7 +1402,7 @@ def boom():
     it('preserves user-enabled write tools and semantic cache across re-init', () => {
       const tmp = path.join(__dirname, '.tmp', 'reinit');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
       try {
         const { routes } = parseExpressProject(tmp, 'src/app.js');
@@ -1491,7 +1492,7 @@ def boom():
       const { runSync } = await import('../src/commands/sync.js');
       const tmp = path.join(__dirname, '.tmp', 'sync');
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
 
       try {
         const { routes } = parseExpressProject(tmp, 'src/app.js');
@@ -1545,7 +1546,7 @@ def boom():
     const setup = (name, giContent) => {
       const tmp = path.join(__dirname, '.tmp', `gitignore-${name}`);
       fs.rmSync(tmp, { recursive: true, force: true });
-      fs.cpSync(path.join(FIXTURES_DIR, 'express-demo'), tmp, { recursive: true });
+      copyFixture(path.join(FIXTURES_DIR, 'express-demo'), tmp);
       const gi = path.join(tmp, '.gitignore');
       if (giContent === null) fs.rmSync(gi, { force: true });
       else fs.writeFileSync(gi, giContent);
